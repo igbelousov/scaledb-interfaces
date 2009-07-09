@@ -13,7 +13,6 @@
    along with this program; if not, write to the Free Software
    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA 
 */
-
 //////////////////////////////////////////////////////////////////////
 //
 //  File Name: sdb_mysql_client.h
@@ -28,11 +27,12 @@
 #ifndef _SDB_MYSQL_CLIENT_H
 #define _SDB_MYSQL_CLIENT_H
 
-#include "../../../cengine/engine_util/incl/data_print_out.h"  
-#include "../../../cengine/engine_util/incl/debug_class.h"  
-#include "../../../cengine/threads/debug/incl/debug_threads.h"
+#ifdef SDB_WINDOWS
+#include <Ws2tcpip.h>
+#endif
 
 #include "mysql.h"
+
 
 // it appears that this is required for making mysql client thread safe
 // see http://lists.mysql.com/internals/36147

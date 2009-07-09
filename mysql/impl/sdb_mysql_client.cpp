@@ -14,8 +14,8 @@
    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA 
 */
 
-
 #include "../incl/sdb_mysql_client.h"
+#include "../../scaledb/incl/SdbStorageAPI.h"
 
 SdbMysqlClient::SdbMysqlClient(char* host, char* user, char* password, char* socket, unsigned int port, unsigned char debugLevel) : 
 
@@ -42,11 +42,11 @@ int SdbMysqlClient::executeQuery(char* query, unsigned long length){
 
 #ifdef SDB_DEBUG
 	if (debugLevel_) {
-		DebugThreads::printStart();
-		DataPrintOut::printString("\nSdbMysqlClient::executeQuery called with:\n");
-		DataPrintOut::printString(query);
-		DataPrintOut::printNewLine(1);
-		DebugThreads::printEnd();
+		SDBDebugStart();
+		SDBDebugPrintString("\nSdbMysqlClient::executeQuery called with:\n");
+		SDBDebugPrintString(query);
+		SDBDebugPrintNewLine(1);
+		SDBDebugEnd();
 	}
 #endif
 
@@ -72,32 +72,34 @@ bool SdbMysqlClient::connect(){
 
 #ifdef SDB_DEBUG
 	if (debugLevel_) {
-		DebugThreads::printStart();
-		DataPrintOut::printString("\nSdbMysqlClient connecting to MYSQL with following params:\n");
-		DataPrintOut::printString("\n\thost = ");
-		DataPrintOut::printString(host_ ? host_ : (char*)"NULL");
-		DataPrintOut::printString("\n\tuser = ");
-		DataPrintOut::printString(user_ ? user_ : (char*)"NULL");
-		DataPrintOut::printString("\n\tpassword = ");
-		DataPrintOut::printString(password_ ? password_ : (char*)"NULL");
-		DataPrintOut::printString("\n\tsocket = ");
-		DataPrintOut::printString(socket_ ? socket_ : (char*)"NULL");
-		DataPrintOut::printString("\n\tport = ");
-		DataPrintOut::printInt(port_);
-		DataPrintOut::printNewLine(1);
-		DebugThreads::printEnd();
+		SDBDebugStart();
+		SDBDebugPrintString("\nSdbMysqlClient connecting to MYSQL with following params:\n");
+		SDBDebugPrintString("\n\thost = ");
+		SDBDebugPrintString(host_ ? host_ : (char*)"NULL");
+		SDBDebugPrintString("\n\tuser = ");
+		SDBDebugPrintString(user_ ? user_ : (char*)"NULL");
+		SDBDebugPrintString("\n\tpassword = ");
+		SDBDebugPrintString(password_ ? password_ : (char*)"NULL");
+		SDBDebugPrintString("\n\tsocket = ");
+		SDBDebugPrintString(socket_ ? socket_ : (char*)"NULL");
+		SDBDebugPrintString("\n\tport = ");
+		SDBDebugPrintInt(port_);
+		SDBDebugPrintNewLine(1);
+		SDBDebugEnd();
 	}
 #endif
 
 	if (!mysql_) {
 
+
 #ifdef SDB_DEBUG
 		if (debugLevel_) {
-			DebugThreads::printStart();
-			DataPrintOut::printString("\nmysql_init failed in SdbMysqlClient::connect\n");
-			DebugThreads::printEnd();
+			SDBDebugStart();
+			SDBDebugPrintString("\nmysql_init failed in SdbMysqlClient::connect\n");
+			SDBDebugEnd();
 		}
 #endif
+
 
 		return result;
 	}
@@ -115,15 +117,22 @@ bool SdbMysqlClient::connect(){
 	if (mysql_real_connect(mysql_, host_, user_, password_, NULL, port_, socket_, 0)) {
 		result = true;
 	}
+
 #ifdef SDB_DEBUG
 	if (debugLevel_) {
-		DebugThreads::printStart();
-		DataPrintOut::printString("\nmysql_real_connect returned: ");
-		DataPrintOut::printBool(result);
-		DataPrintOut::printNewLine(1);
-		DebugThreads::printEnd();
+		SDBDebugStart();
+		SDBDebugPrintString("\nmysql_real_connect returned: ");
+		if (result){
+			SDBDebugPrintString("true");
+		}
+		else{
+			SDBDebugPrintString("false");
+		}
+		SDBDebugPrintNewLine(1);
+		SDBDebugEnd();
 	}
 #endif
+
 
 	connected_ = result;
 
@@ -136,32 +145,35 @@ int SdbMysqlClient::sendQuery(char* query, unsigned long length) {
 
 	rc = mysql_real_query(mysql_, query, length);
 
+
+
 #ifdef SDB_DEBUG
 	if (debugLevel_) {
-		DebugThreads::printStart();
-		DataPrintOut::printString("\nmysql_real_query (");
-		DataPrintOut::printString(query);
-		DataPrintOut::printString(") returned: ");
-		DataPrintOut::printInt(rc);
+		SDBDebugStart();
+		SDBDebugPrintString("\nmysql_real_query (");
+		SDBDebugPrintString(query);
+		SDBDebugPrintString(") returned: ");
+		SDBDebugPrintInt(rc);
 		if (!rc) {
-			DataPrintOut::printString(" success");
+			SDBDebugPrintString(" success");
 		}
 		else {
 			// TODO: If other nodes take a long time (more than 20 seconds) to return the query result,  
 			// we may get packet_error (error number 1159) issued by the method cli_read_query_result in client.c file.  
-			DataPrintOut::printString(" failure: MySQL error number ");
+			SDBDebugPrintString(" failure: MySQL error number ");
 			unsigned int mysqlErrorNum = mysql_errno(mysql_);
-			DataPrintOut::printInt(mysqlErrorNum);
-			DataPrintOut::printString("; MySQL error message: ");
+			SDBDebugPrintInt(mysqlErrorNum);
+			SDBDebugPrintString("; MySQL error message: ");
 			const char* msg = mysql_error(mysql_);
 			if (msg) {
-				DataPrintOut::printString((char*)msg);
+				SDBDebugPrintString((char*)msg);
 			}
 		}
-		DataPrintOut::printNewLine(1);
-		DebugThreads::printEnd();
+		SDBDebugPrintNewLine(1);
+		SDBDebugEnd();
 	}
 #endif
+
 
 	// clear the state after the query
 	MYSQL_RES* resultSet = mysql_store_result(mysql_);

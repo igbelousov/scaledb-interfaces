@@ -82,7 +82,7 @@ int main(int argc, char** argv){
 	
 	// Create index over product id
 	char *keyFields[2];				// maintains an array of names of fields that make the key
-	keyFields[0] = "product id";	// first field in the key
+	keyFields[0] = (char*)"product id";	// first field in the key
 	keyFields[1] = 0;
 	
 
