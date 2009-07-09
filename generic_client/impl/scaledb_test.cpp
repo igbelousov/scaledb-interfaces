@@ -14,12 +14,22 @@
    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA 
 */
 
+/*
 
+	The following example creates a ScaleDB Engine instance, initializes a data table and demonstrates read and write 
+	operations to the table.
+
+	The demo below is using the generic, low level calls to a ScaleDB instance.
+
+	Note: ScaleDB is initialized with a ScaleDB configuration file. 
+
+*/
 
 #include "../../../interface/scaledb/incl/SdbStorageAPI.h"
 #include <stdio.h>
+#include <string.h>
 
-
+ 
 int main(int argc, char** argv){
 
 	// SETUP
