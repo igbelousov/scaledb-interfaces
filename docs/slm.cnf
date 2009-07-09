@@ -1,0 +1,43 @@
+###############################################################
+## SLM CONFIG FILE
+## Copyright Scaledb 2009
+###############################################################
+
+# port for SLM to listen for new connections
+# slm_port = 4010
+
+# check for heartbeat messages from nodes every X seconds
+# heart_beat_seconds = 60
+
+# if we have not gotten a heartbeat message in this amount of seconds it is a node failure
+# heart_beat_threshold = 60
+
+# this is the location of the node registry file
+# the entry is required to run slm, on linux it will default as shown below
+# the file does not have to exist when starting SLM
+# if doing a recovery of slm, the file should exist
+node_registry_file_name = /var/log/slm/node_registry.dat
+
+# enabling this option in debug or release mode will print out the last set of 
+# slm messages even if debug printing options are not turned on
+memory_debug = false
+
+###### DEBUGGING OPTIONS
+#debug_file = /home/dev/debuglogs/slm.debug
+debug_file = stdout
+
+# specifies the format of line headers on debug printout
+# 0: no header
+# 1: thread_id in header
+# 2: time in header (on linux seconds.microseconds since epoch)
+# options can be combined with logical OR
+debug_header_mode = 3
+
+#SLM_DEBUG_MODE_OPEN_CONNECTION 1
+#SLM_DEBUG_MODE_TCPIP           2
+#SLM_DEBUG_MODE_MESSAGES        3
+#SLM_DEBUG_MODE_LOCK_MANAGER    4
+#SLM_DEBUG_MODE_INTEREST_TABLE  5
+#..............0.0..0.....................
+#..............1.3..6.........................
+debug_string = 0000000000000000000000000

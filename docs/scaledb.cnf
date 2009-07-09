@@ -1,0 +1,92 @@
+##########   ScaleDB Storage Engine Parameters  ##########
+# A comment line begins with '#'.
+
+# The data directory name specifies the default directory where ScaleDB engine puts data. 
+# This data directory should be different from 'datadir' specified in my.ini configuration file.  
+# This is because ScaleDB storage engine can run on a cluster system whereas
+# MySQL server runs on a single node machine.
+data_directory = /data/scaledb/
+
+##########  Object Directory Parameters	##########
+# Object Directory Parameters are created to specify the full path name in a multi-database environment.
+# While all other parameters are name/value pairs.  The Object Directory parameters
+# have multiple names specified for a defined location.  Its format is: 
+#
+# db_directory DatabaseName = full_path_name
+#
+# where db_directory is a keyword.  
+# Also 'sdb_system' is the master database name used in ScaleDB engine.
+db_directory sdb_system = /data/scaledb/sdb_system/
+db_directory test = /data/scaledb/test/
+
+# The log directory specifies the directory where ScaleDB engine writes its log data.
+log_directory = /data/scaledb_logs/
+
+# This parameter specifies the number of (8KB) blocks maintained in the index cache.
+# The default value is 1000.
+buffer_size_index = 1024
+
+# This parameter specifies the number of (8KB) blocks maintained in the data cache.
+# The default value is 1000.
+buffer_size_data = 2048
+
+# When memory allocations are larger than we will keep on our free list, we will malloc memory 
+# directly, but at no point will these mallocs exceed the following threshold size.
+# This is used for returning large blobs during select statements
+# defaults value 2.5G
+#bytes_large_memory_allocations = 268435456
+
+# Control maximum number of tables and indices allowed to be created in the system 
+#max_tables  = 10000
+#max_indices = 10000
+
+# determine the nature of the IO
+# on linux system this is a mask where multiple flags can be combined
+# 1 will add the O_SYNC flag to file opens 
+# 2 will add the O_DIRECT flag to file opens
+# 4 will force a fsync call after every write
+data_io_flags = 2
+log_io_flags = 2
+
+# This parameter specifies the number of IO threads. Default number is 1
+io_threads = 1
+
+# This parameter sets the time for a dead lock
+# If the value is 0, dead lock is called. It is used for debug and testing only
+# DO NOT SET VALUE TO 0
+
+dead_lock_milliseconds = 2000		
+
+# This parameter specifies the maximum number of bytes saved in the base file
+# for a variable-length (VARCHAR or VARBINARY) column.  If a variable length column
+# has a length greater than this parameter value, then the entire column will be saved in overflow
+# file. The base data file contains contents up to max_column_length_in_base_file bytes.
+# We index the column contents in base data file.  The default value is 255.
+max_column_length_in_base_file = 800
+
+# -----------------------------------------------------------------
+# CLUSTER INFO
+# The following parameters are for running the cluster
+# -----------------------------------------------------------------
+
+# is the cluster enabled
+cluster = false
+
+# ip address where the slm server is running
+slm_ip = 192.168.0.1
+
+# port for SLM to listen for connections from node
+slm_port = 4010
+
+# port for connecting to mysql for DDL operations, leave option out if using default port
+cluster_port = 3306
+
+# user name for connecting to mysql for DDL operations
+cluster_user = root
+
+# password for connecting to mysql for DDL operations, leave option out if allowing connections without password
+#cluster_password = foobar
+
+# send a heartbeat message to the SLM server every X seconds
+heartbeat_seconds = 15
+
