@@ -15,11 +15,14 @@
 */
 
 
+
 #include "../../../interface/scaledb/incl/SdbStorageAPI.h"
 #include <stdio.h>
 
 
 int main(int argc, char** argv){
+
+	// SETUP
 
 	// test that the ini file is passed
 	if (argc < 2){
@@ -49,26 +52,139 @@ int main(int argc, char** argv){
 	printf("\nScaledb DBMS Test initialized successfully");
 	fflush(stdout);
 
+	// DDL
 
 	// Create a table in database test.
-	unsigned short tableId = SDBCreateTable(userId, dbId, (char*)"foo(3)");
+	unsigned short tableId = SDBCreateTable(userId, dbId, (char*)"Catalog");
 
-	unsigned short fieldId = SDBCreateField(userId, dbId, tableId, (char*)"id", ENGINE_TYPE_S_NUMBER, 0, 0, NULL, false, 0);
+	unsigned short fieldId;
 	
+	// create field - product id (4 bytes unsigned number)
+	fieldId = SDBCreateField(userId, dbId, tableId, (char*)"product id", ENGINE_TYPE_U_NUMBER, 4, 0, NULL, false, 0);
+
+	// create field product name (note: ENGINE_TYPE_STRING is space extended)
+
+	fieldId = SDBCreateField(userId, dbId, tableId, (char*)"product name", ENGINE_TYPE_STRING, 20, 0, NULL, false, 0);
+
+	// create field price (8 bytes unsigned number)
+	fieldId = SDBCreateField(userId, dbId, tableId, (char*)"price", ENGINE_TYPE_S_NUMBER, 8, 0, NULL, false, 0);
+
+	
+	// Create index over product id
+	char *keyFields[2];				// maintains an array of names of fields that make the key
+	keyFields[0] = "product id";	// first field in the key
+	keyFields[1] = 0;
+	
+
+	// note: productIdIndex is a unique index
+	unsigned short indexId = SDBCreateIndex(userId, dbId, tableId, (char*)"productIdIndex", keyFields, NULL, true, false, NULL, 0, 0);
+                       
+	
+	printf("\nTable Catalog created successfully");
+	fflush(stdout);
+
+
+
+	// open files of the new table to allow read + write
 	SDBOpenAllDBFiles(userId, dbId );
 
-	int x, retVal;
-	x = 49;
-	retVal = SDBPrepareNumberField(userId, dbId, tableId, 1, &x);
+	printf("\nTable Catalog is ready for read and write");
+	fflush(stdout);
+
+
+	// DML
+
+	// INSERT
+
+
+	unsigned int id;
+	char productName[21];
+	productName[20] =0;
+	unsigned long long price;
+
+	unsigned short retVal;
+
+	id = 1;
+	memcpy(productName, "TV                  ", 20);
+	price = 100;
+
+	// prepare id
+	retVal = SDBPrepareNumberField(userId, dbId, tableId, 1, (void *)&id);
+
+	// prepare product name
+	retVal = SDBPrepareStrField(userId, dbId, tableId, 2, productName, 20);
+
+	// prepare price
+	retVal = SDBPrepareNumberField(userId, dbId, tableId, 3, (void *)&price);
+
+	// Do the insert of 1 - TV - 100
 	retVal = SDBInsertRow(userId, dbId, tableId, NULL, 0, 0);
 
-	x = 50;
-	retVal = SDBPrepareNumberField(userId, dbId, tableId, 1, &x);
+	printf("\nRet value for insert is %u", retVal);
+	fflush(stdout);
+
+	//-->  Do the insert of 1 - TV - 100 AGAIN. 
+	// note: retVal should be 1 (duplicate key)
 	retVal = SDBInsertRow(userId, dbId, tableId, NULL, 0, 0);
-	
-	x = 51;
-	retVal = SDBPrepareNumberField(userId, dbId, tableId, 1, &x);
+
+	printf("\nRet value for insert is %u", retVal);
+	fflush(stdout);
+
+	id = 5;
+	memcpy(productName, "BOOK                ", 20);
+	price = 12;
+
+	// prepare id
+	retVal = SDBPrepareNumberField(userId, dbId, tableId, 1, (void *)&id);
+
+	// prepare product name
+	retVal = SDBPrepareStrField(userId, dbId, tableId, 2, productName, 20);
+
+	// prepare price
+	retVal = SDBPrepareNumberField(userId, dbId, tableId, 3, (void *)&price);
+
+	// Do the insert of 1 - TV - 100
 	retVal = SDBInsertRow(userId, dbId, tableId, NULL, 0, 0);
+
+	printf("\nRet value for insert is %u", retVal);
+	fflush(stdout);
+
+
+	// QUERY
+
+	// get a query manager. The query manager maintains the state of the query
+	unsigned short queryMgrId = SDBGetQueryManagerId(userId);
+
+	// delete old definitions maintained in the query manager
+	SDBResetQuery(queryMgrId);
+
+	// define a query to retrieve the data set 
+	retVal = SDBDefineQuery(queryMgrId, dbId, indexId, (char*)"product id", NULL);
+							  
+	// set the cursor by the query definitions
+	retVal = SDBPrepareQuery(queryMgrId, 0, 0, true) ;
+
+	void *field;
+
+	printf("\nID    Product Name          Price");
+	printf("\n----  --------------------  ------------");
+
+	while (!SDBNext(queryMgrId)){
+		// retrieve the rows
+
+		// get the product id
+		field = SDBQueryCursorGetFieldByTableId(queryMgrId, tableId, 1);
+		printf("\n%04u", *(unsigned int *)field);
+
+		// get the product name
+		field = SDBQueryCursorGetFieldByTableId(queryMgrId, tableId, 2);
+		memcpy(productName, field, 20);
+		printf("  %s", (char *)productName);
+
+		// get the product id
+		field = SDBQueryCursorGetFieldByTableId(queryMgrId, tableId, 3);
+		printf("  %08u", *(unsigned int *)field);
+	}
 
 	SDBCommit(userId);
 
