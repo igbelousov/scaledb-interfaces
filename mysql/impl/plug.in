@@ -1,0 +1,6 @@
+MYSQL_STORAGE_ENGINE(scaledb,,      [Scaledb Storage Engine],
+        [Transactional Tables using Scaledb], [max,max-no-ndb])
+MYSQL_PLUGIN_DIRECTORY(scaledb,     [storage/scaledb])
+MYSQL_PLUGIN_STATIC(scaledb,        [libscaledb.a])
+MYSQL_PLUGIN_DYNAMIC(scaledb,        [ha_scaledb.la])
+MYSQL_PLUGIN_DEPENDS_ON_MYSQL_INTERNALS(scaledb,[cengine/interface/mysql/impl/ha_handler.cc])
