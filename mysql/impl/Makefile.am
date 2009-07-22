@@ -49,7 +49,7 @@ libscaledb_a_CFLAGS =  $(AM_CFLAGS)
 # Dynamic load
 EXTRA_LTLIBRARIES = ha_scaledb.la
 pkgplugin_LTLIBRARIES = @plugin_scaledb_shared_target@
-ha_scaledb_la_LDFLAGS = -module -rpath $(pkgplugindir)
+ha_scaledb_la_LDFLAGS = -module -rpath $(pkgplugindir) -lscaledb -L.
 ha_scaledb_la_CXXFLAGS = $(AM_CFLAGS) -DMYSQL_DYNAMIC_PLUGIN
 ha_scaledb_la_CFLAGS =  $(AM_CFLAGS) -DMYSQL_DYNAMIC_PLUGIN
 ha_scaledb_la_SOURCES = $(libscaledb_a_SOURCES)
