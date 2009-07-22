@@ -1,0 +1,12 @@
+- obtain mysql source code
+- create a scaledb directory under the storage directory
+- put mysql/impl/Makefile.am (from google code) in storage/scaledb 
+- put mysql/impl/plug.in (from google code) in storage/scaledb 
+- put libscaledb.so (proprietary library) in storage/scaledb
+- create an interface directory inside storage/scaledb 
+- put the mysql directory (from google code) in storage/scaledb/interface
+- put the scaledb directory (from google code) in storage/scaledb/interface
+- remove the plugin.in and Makefile.am from storage/scaledb/interface/mysql/impl
+- build mysql
+- run mysql with LD_LIBRARY_PATH including path to libscaledb.so ((proprietary library)
+- at mysql prompt INSTALL PLUGIN scaledb SONAME 'ha_scaledb.so'
