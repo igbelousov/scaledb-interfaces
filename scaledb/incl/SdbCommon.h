@@ -100,6 +100,10 @@ typedef enum SdbKeySearchDirection {
 #define SDB_VIRTUAL_VIEW "sdb_view_"
 #define SDB_VIRTUAL_VIEW_PREFIX_BYTES  9
 
+// The first table id in a user database.  
+// Tables with id 1 to 7 are all our meta tables (or data dictionary tables.
+#define SDB_FIRST_USER_TABLE_ID 8
+
 // Reference locks
 #define REFERENCE_LOCK_EXCLUSIVE 3
 #define DEFAULT_REFERENCE_LOCK_LEVEL 2

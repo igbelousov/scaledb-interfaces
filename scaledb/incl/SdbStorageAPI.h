@@ -14,16 +14,18 @@
    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA 
 */
 
-//  File Name: SdbStorageAPI.h
-//
-//  Description: ScaleDB Storage API
-//
-//  Version: 1.0
-//
-//  Copyright: ScaleDB, Inc. 2007
-//
-//  History: 09/23/2009  Venu
-//
+/*
+  File Name: SdbStorageAPI.h
+
+  Description: ScaleDB Storage API
+
+  Version: 1.0
+
+  Copyright: ScaleDB, Inc. 2007
+
+  History: 09/23/2009  Venu
+
+*/
 
 #ifndef _SDB_STORAGE_API_H
 #define _SDB_STORAGE_API_H
@@ -422,16 +424,13 @@ unsigned char SDBSetupClusterNodes(unsigned int *dstArray);
 unsigned char SDBGetDebugLevel(void);
 void SDBDebugStart();
 void SDBDebugEnd();
-void SDBDebugPrintThrHeader(const char *str, bool flush=false);
-void SDBDebugPrintHeader(const char *str, bool flush=false);
+void SDBDebugPrintHeader(const char *str);
 void SDBDebugPrintString(const char *str);
-void SDBDebugPrintThrString(const char *msg, char *str);
 void SDBDebugPrintInt(int val);
 void SDBDebugPrint8ByteUnsignedLong(unsigned long long l);
 void SDBDebugPrintNewLine(int lines=1);
 void SDBDebugPrintHexByteArray(char data[], int position, int size);
 void SDBDebugFlush();
-void SDBDebugFlushNoThread();
 
 /*
 //////////////////////////////////////////////////////////////////////////////
