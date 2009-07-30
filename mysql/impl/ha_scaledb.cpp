@@ -200,7 +200,10 @@ void convertSeparatorLowerCase( char* toQuery, char* fromQuery) {
 static uchar* scaledb_get_key(SCALEDB_SHARE *share, size_t* length,
 							  my_bool not_used __attribute__((unused)))
 {
+	SDBDebugStart();
 	SDBDebugPrintHeader("MySQL Interface: executing scaledb_get_key(...) ");
+	SDBDebugFlush();
+	SDBDebugEnd();
 
 	*length=share->table_name_length;
 	return (uchar*) share->table_name;
@@ -302,9 +305,10 @@ static SCALEDB_SHARE *get_share(const char *table_name, TABLE *table)
 {
 
 	SDBDebugStart();
-	SDBDebugPrintString("MySQL Interface: executing get_share(table name: ");
+	SDBDebugPrintHeader("MySQL Interface: executing get_share(table name: ");
 	SDBDebugPrintString((char*) table_name);
 	SDBDebugPrintString(" )");
+	SDBDebugFlush();
 	SDBDebugEnd();
 
 	SCALEDB_SHARE *share;
@@ -355,8 +359,10 @@ the last reference to the share, then we free memory associated with it.
 */
 static int free_share(SCALEDB_SHARE *share)
 {
-
+	SDBDebugStart();
 	SDBDebugPrintHeader("MySQL Interface: executing free_share(...) ");
+	SDBDebugFlush();
+	SDBDebugEnd();
 
 	pthread_mutex_lock(&scaledb_mutex);
 	if (!--share->use_count)
@@ -380,11 +386,12 @@ static int scaledb_close_connection(handlerton *hton, THD* thd)
 	MysqlTxn* pMysqlTxn = (MysqlTxn *) *thd_ha_data(thd, hton);
 
 	SDBDebugStart();	
-	SDBDebugPrintString("MySQL Interface: executing scaledb_close_connection( ");
+	SDBDebugPrintHeader("MySQL Interface: executing scaledb_close_connection( ");
 	SDBDebugPrintString("hton=");
 	SDBDebugPrint8ByteUnsignedLong((unsigned long long )hton);
 	SDBDebugPrintString(") pMysqlTxn=");
 	SDBDebugPrint8ByteUnsignedLong((unsigned long long)pMysqlTxn);
+	SDBDebugFlush();
 	SDBDebugEnd();
 
 	if ( pMysqlTxn != NULL ) {
@@ -409,7 +416,10 @@ The actual user's savepoint name is saved at sv + savepoint_offset + 32.
 
 static int scaledb_savepoint_set(handlerton *hton, THD *thd, void *sv) {
 
+	SDBDebugStart();
 	SDBDebugPrintHeader("MySQL Interface: executing scaledb_savepoint_set(...) ");
+	SDBDebugFlush();
+	SDBDebugEnd();
 
 	DBUG_ENTER("scaledb_savepoint_set");
 	bool isActiveTran = false;
@@ -442,7 +452,10 @@ The user's savepoint name is saved at sv + savepoint_offset
 
 static int scaledb_savepoint_rollback(handlerton *hton, THD *thd, void *sv) {
 
+	SDBDebugStart();
 	SDBDebugPrintHeader("MySQL Interface: executing scaledb_savepoint_rollback(...) ");
+	SDBDebugFlush();
+	SDBDebugEnd();
 
 	DBUG_ENTER("scaledb_savepoint_rollback");
 	int errorNum = 0;
@@ -476,7 +489,10 @@ The user's savepoint name is saved at sv + savepoint_offset
 
 static int scaledb_savepoint_release(handlerton *hton, THD *thd, void *sv) {
 
+	SDBDebugStart();
 	SDBDebugPrintHeader("MySQL Interface: executing scaledb_savepoint_release(...) ");
+	SDBDebugFlush();
+	SDBDebugEnd();
 
 	DBUG_ENTER("scaledb_savepoint_release");
 	int errorNum = 0;
@@ -519,11 +535,12 @@ static int scaledb_commit(
 	DBUG_ENTER("scaledb_commit");
 
 	SDBDebugStart();
-	SDBDebugPrintString("MySQL Interface: executing scaledb_commit(");
+	SDBDebugPrintHeader("MySQL Interface: executing scaledb_commit(");
 	SDBDebugPrintString("hton=");
 	SDBDebugPrint8ByteUnsignedLong((uint64)hton);
 	SDBDebugPrintString(", all=");
 	SDBDebugPrintString(all ? "true" : "false");
+	SDBDebugFlush();
 	SDBDebugEnd();
 
 	MysqlTxn* userTxn = (MysqlTxn *) *thd_ha_data(thd, hton);
@@ -562,7 +579,10 @@ static int scaledb_rollback(
 {
 	DBUG_ENTER("scaledb_rollback");
 
+	SDBDebugStart();
 	SDBDebugPrintHeader("MySQL Interface: executing scaledb_rollback(...) ");
+	SDBDebugFlush();
+	SDBDebugEnd();
 
 	// all = 1; rollback complete transaction
 	// all = 0; rollback last statement 
@@ -596,7 +616,10 @@ static handler* scaledb_create_handler(handlerton *hton,
 									   TABLE_SHARE *table, 
 									   MEM_ROOT *mem_root)
 {
-	SDBDebugPrintHeader("MySQL Interface: executing scaledb_create_handler(...) ", true);
+	SDBDebugStart();
+	SDBDebugPrintHeader("MySQL Interface: executing scaledb_create_handler(...) ");
+	SDBDebugFlush();
+	SDBDebugEnd();
 	return new (mem_root) ha_scaledb(hton, table);
 }
 
@@ -631,7 +654,10 @@ char* fetchDatabaseName(char* pathName) {
 // In this method, we need to drop all the meta tables in the given database.
 static void scaledb_drop_database(handlerton* hton, char* path) {
 
-	SDBDebugPrintHeader("MySQL Interface: executing scaledb_drop_database(...) ", true);
+	SDBDebugStart();
+	SDBDebugPrintHeader("MySQL Interface: executing scaledb_drop_database(...) ");
+	SDBDebugFlush();
+	SDBDebugEnd();
 
 	int errorNum = 0;
 	THD* thd = current_thd;
@@ -642,7 +668,10 @@ static void scaledb_drop_database(handlerton* hton, char* path) {
 		// There are 2 ways to deal with this case: (1) do nothing and take an early exit.
 		// (2) We continue execution by using systemUserId_ in SdbEngine object.
 		// As of 12/05/2008, we use approach (1).
-		SDBDebugPrintHeader("nothing to delete in scaledb_drop_database\n", true);
+		SDBDebugStart();
+		SDBDebugPrintHeader("nothing to delete in scaledb_drop_database\n");
+		SDBDebugFlush();
+		SDBDebugEnd();
 		return;
 	}
 
@@ -689,7 +718,7 @@ void ha_scaledb::print_header_thread_info(const char *msg) {
 #ifdef SDB_DEBUG
 	if (mysqlInterfaceDebugLevel_) {
 		SDBDebugStart();			// synchronize threads printout	
-		SDBDebugPrintString("MySQL Interface: executing ha_scaledb::ha_scaledb(...) ");
+		SDBDebugPrintString(msg);
 		if (mysqlInterfaceDebugLevel_>1) outputHandleAndThd();
 		SDBDebugEnd();			// synchronize threads printout	
 	}
@@ -747,7 +776,7 @@ unsigned short ha_scaledb::initializeDbTableId(char* pDbName, char* pTblName, bo
 #ifdef SDB_DEBUG
 	if (mysqlInterfaceDebugLevel_) {
 		SDBDebugStart();			// synchronize threads printout	
-		SDBDebugPrintString("MySQL Interface: executing ha_scaledb::initializeDbTableId(pDbName=");
+		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::initializeDbTableId(pDbName=");
 		SDBDebugPrintString(pDbName);
 		SDBDebugPrintString(", pTblName=");
 		SDBDebugPrintString(pTblName);
@@ -790,7 +819,10 @@ unsigned short ha_scaledb::initializeDbTableId(char* pDbName, char* pTblName, bo
 // pass the value in configuration parameter max_column_length_in_base_file
 uint ha_scaledb::max_supported_key_part_length() const {
 
+	SDBDebugStart();
 	SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::max_supported_key_part_length() ");
+	SDBDebugFlush();
+	SDBDebugEnd();
 	return SDBGetMaxColumnLengthInBaseFile();
 }
 
@@ -834,7 +866,7 @@ int ha_scaledb::external_lock(
 #ifdef SDB_DEBUG
 	if (mysqlInterfaceDebugLevel_) {
 		SDBDebugStart();			// synchronize threads printout	
-		SDBDebugPrintString("MySQL Interface: executing ha_scaledb::external_lock(lock_type=");
+		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::external_lock(lock_type=");
 		switch (lock_type) {
 			case F_UNLCK:
 				SDBDebugPrintString("F_UNLCK");
@@ -1052,7 +1084,10 @@ int ha_scaledb::start_stmt(THD* thd, thr_lock_type lock_type) {
 
 const char **ha_scaledb::bas_ext() const
 {
+	SDBDebugStart();
 	SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::bas_ext() ");
+	SDBDebugFlush();
+	SDBDebugEnd();
 	return ha_scaledb_exts;
 }
 
@@ -1062,7 +1097,11 @@ int ha_scaledb::open(const char *name, int mode, uint test_if_locked) {
 	DBUG_ENTER("ha_scaledb::open");
 
 	print_header_thread_info("MySQL Interface: executing ha_scaledb::open");
-	SDBDebugPrintThrString("; name = ", (char *)name);
+	SDBDebugStart();
+	SDBDebugPrintHeader("ha_scaledb::open name = ");
+	SDBDebugPrintString((char *)name);
+	SDBDebugFlush();
+	SDBDebugEnd();
 
 	if (!(share = get_share(name, table)))
 		DBUG_RETURN(1);
@@ -1151,7 +1190,7 @@ MysqlTxn* ha_scaledb::placeSdbMysqlTxnInfo(THD* thd, bool isTransient) {
 #ifdef SDB_DEBUG
 	if (mysqlInterfaceDebugLevel_) {
 		SDBDebugStart();			// synchronize threads printout	
-		SDBDebugPrintString("MySQL Interface: executing ha_scaledb::placeSdbMysqlTxnInfo(thd=");
+		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::placeSdbMysqlTxnInfo(thd=");
 		SDBDebugPrint8ByteUnsignedLong((uint64)thd);
 		SDBDebugPrintString(", isTransient=");
 		if ( isTransient ) 
@@ -1173,7 +1212,7 @@ MysqlTxn* ha_scaledb::placeSdbMysqlTxnInfo(THD* thd, bool isTransient) {
 #ifdef SDB_DEBUG
 		if (ha_scaledb::mysqlInterfaceDebugLevel_) {
 			SDBDebugStart();			// synchronize threads printout	
-			SDBDebugPrintString("MySQL Interface: new MysqlTxn");
+			SDBDebugPrintHeader("MySQL Interface: new MysqlTxn");
 			SDBDebugPrintString(", thd=");
 			SDBDebugPrint8ByteUnsignedLong((uint64)thd);
 			SDBDebugPrintString(", pMysqlTxn=");
@@ -1326,7 +1365,7 @@ unsigned short ha_scaledb::placeMysqlRowInEngineBuffer(unsigned char* rowBuf1, u
 
 			default:
 
-				SDBDebugPrintString("These data types are not supported yet.");
+				SDBDebugPrintHeader("These data types are not supported yet.");
 				retCode = METAINFO_WRONG_FIELD_TYPE;
 				break;
 															   }
@@ -1351,7 +1390,7 @@ int ha_scaledb::write_row(unsigned char* buf)
 #ifdef SDB_DEBUG
 	if (mysqlInterfaceDebugLevel_) {
 		SDBDebugStart();			// synchronize threads printout	
-		SDBDebugPrintString("MySQL Interface: executing ha_scaledb::write_row(...) on table ");
+		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::write_row(...) on table ");
 		SDBDebugPrintString(table->s->table_name.str );
 		SDBDebugPrintString(" ");
 		//SDBDebugPrintString("id= ");
@@ -1386,7 +1425,7 @@ int ha_scaledb::write_row(unsigned char* buf)
 #ifdef __DEBUG_CLASS_CALLS  // can enable it to check memory leak
 	pSdbEngine->manager(sdbUserId_)->incrCounter();
 	if ( pSdbEngine->manager(sdbUserId_)->getCounter() % 100000 == 0 ) { // the number can be set to meet the need
-		SDBDebugPrintString("After inserting ");
+		SDBDebugPrintHeader("After inserting ");
 		SDBDebugPrintInt((int) pSdbEngine->manager(sdbUserId_)->getCounter() );
 		SDBDebugPrintString(" records: \n");
 		DebugClass::printClassCalls();
@@ -1400,7 +1439,7 @@ int ha_scaledb::write_row(unsigned char* buf)
 #ifdef SDB_DEBUG
 	if (mysqlInterfaceDebugLevel_) {
 		SDBDebugStart();			// synchronize threads printout	
-		SDBDebugPrintString("MySQL Interface: ha_scaledb::write_row(...) returning ");
+		SDBDebugPrintHeader("MySQL Interface: ha_scaledb::write_row(...) returning ");
 		SDBDebugPrintInt(errorNum);
 		SDBDebugEnd();			// synchronize threads printout	
 	}
@@ -1479,7 +1518,7 @@ int ha_scaledb::update_row(const unsigned char* old_row, unsigned char* new_row)
 #ifdef SDB_DEBUG
 	if (mysqlInterfaceDebugLevel_) {
 		SDBDebugStart();			// synchronize threads printout	
-		SDBDebugPrintString("MySQL Interface: executing ha_scaledb::update_row(...) on table ");
+		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::update_row(...) on table ");
 		SDBDebugPrintString( table->s->table_name.str );
 		SDBDebugPrintString(" ");
 		if (mysqlInterfaceDebugLevel_>1) outputHandleAndThd();
@@ -1514,7 +1553,7 @@ int ha_scaledb::update_row(const unsigned char* old_row, unsigned char* new_row)
 	if (mysqlInterfaceDebugLevel_) {
 		if (errorNum){
 			SDBDebugStart();			// synchronize threads printout	
-			SDBDebugPrintString("MySQL Interface: executing ha_scaledb::update_row mysqlErrorCode ");
+			SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::update_row mysqlErrorCode ");
 			SDBDebugPrintInt(errorNum);
 			SDBDebugPrintString(" and scaledbErrorCode ");
 			SDBDebugPrintInt(retValue);
@@ -1592,11 +1631,11 @@ int ha_scaledb::delete_row(const unsigned char* buf) {
 	if (mysqlInterfaceDebugLevel_) {
 		SDBDebugStart();			// synchronize threads printout	
 		if (errorNum){
-			SDBDebugPrintString("MySQL Interface: ha_scaledb::delete_row failed");
+			SDBDebugPrintHeader("MySQL Interface: ha_scaledb::delete_row failed");
 		}
 		else{
 			++deleteRowCount_;
-			SDBDebugPrintString("MySQL Interface: ha_scaledb::delete_row succeeded. deleteRowCount_=");
+			SDBDebugPrintHeader("MySQL Interface: ha_scaledb::delete_row succeeded. deleteRowCount_=");
 			SDBDebugPrintInt(deleteRowCount_);
 		}
 		SDBDebugEnd();			// synchronize threads printout	
@@ -1690,7 +1729,7 @@ int ha_scaledb::fetchRowByPosition(unsigned char* buf, unsigned int pos) {
 #ifdef SDB_DEBUG
 	if (mysqlInterfaceDebugLevel_) {
 		SDBDebugStart();			// synchronize threads printout	
-		SDBDebugPrintString("MySQL Interface: executing ha_scaledb::fetchRowByPosition from table: ");
+		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::fetchRowByPosition from table: ");
 		SDBDebugPrintString(table->s->table_name.str);
 		SDBDebugPrintString(", alias: ");
 		SDBDebugPrintString((char *)table->alias);
@@ -1724,7 +1763,7 @@ int ha_scaledb::fetchSingleRow(unsigned char* buf) {
 #ifdef SDB_DEBUG
 	if (mysqlInterfaceDebugLevel_) {
 		SDBDebugStart();			// synchronize threads printout	
-		SDBDebugPrintString("MySQL Interface: executing ha_scaledb::fetchSingleRow from table: ");
+		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::fetchSingleRow from table: ");
 		SDBDebugPrintString(table->s->table_name.str);
 		SDBDebugPrintString(", alias: ");
 		SDBDebugPrintString((char *)table->alias);
@@ -1764,7 +1803,7 @@ retryFetch:
 	if (mysqlInterfaceDebugLevel_ >= 5) {
 		if (!retValue){
 			SDBDebugStart();			// synchronize threads printout	
-			SDBDebugPrintString("MySQL Interface: ha_scaledb::fetchSingleRow is returning with the following row fetched:\n");
+			SDBDebugPrintHeader("MySQL Interface: ha_scaledb::fetchSingleRow is returning with the following row fetched:\n");
 			SDBDebugPrintHexByteArray((char*)buf, 0, table->s->reclength);
 			SDBDebugPrintNewLine();
 			SDBDebugEnd();			// synchronize threads printout	
@@ -2009,7 +2048,7 @@ void ha_scaledb::placeEngineFieldInMysqlBuffer(unsigned char* destBuff, char* pt
 
 		default:
 			SDBDebugStart();			// synchronize threads printout	
-			SDBDebugPrintString("These data types are not supported yet.");
+			SDBDebugPrintHeader("These data types are not supported yet.");
 			SDBDebugEnd();			// synchronize threads printout	
 			break;
 	}	// switch
@@ -2178,7 +2217,7 @@ void ha_scaledb::prepareIndexQueryManager(unsigned int indexNum, const uchar* ke
 #ifdef SDB_DEBUG
 		if (mysqlInterfaceDebugLevel_) {
 			SDBDebugStart();			// synchronize threads printout	
-			SDBDebugPrintString("MySQL Interface: designator: ");
+			SDBDebugPrintHeader("MySQL Interface: designator: ");
 			SDBDebugPrintString( designatorName );
 			SDBDebugPrintString(" table: ");
 			SDBDebugPrintString( table->s->table_name.str );
@@ -2186,7 +2225,7 @@ void ha_scaledb::prepareIndexQueryManager(unsigned int indexNum, const uchar* ke
 		}
 		if (mysqlInterfaceDebugLevel_ > 5) {
 			SDBDebugStart();			// synchronize threads printout	
-			SDBDebugPrintString(" QueryManagerId= ");
+			SDBDebugPrintHeader(" QueryManagerId= ");
 			SDBDebugPrintInt( sdbQueryMgrId_ );
 			SDBDebugPrintString(" \n");
 			//pQm_->showQueryDef();
@@ -2413,7 +2452,7 @@ int ha_scaledb::index_read(uchar* buf, const uchar* key, uint key_len, enum ha_r
 #ifdef SDB_DEBUG
 	if (mysqlInterfaceDebugLevel_) {
 		SDBDebugStart();			// synchronize threads printout	
-		SDBDebugPrintString("MySQL Interface: executing ha_scaledb::index_read(...) on table ");
+		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::index_read(...) on table ");
 		SDBDebugPrintString(table->s->table_name.str );
 		if (mysqlInterfaceDebugLevel_>1) outputHandleAndThd();
 		SDBDebugPrintString("MySQL Interface: Index read flag ");
@@ -2429,7 +2468,7 @@ int ha_scaledb::index_read(uchar* buf, const uchar* key, uint key_len, enum ha_r
 	}
 #endif
 
-	ha_statistic_increment(&SSV::ha_read_key_count);
+    	ha_statistic_increment(&SSV::ha_read_key_count);
 
 	int retValue = prepareIndexKeyQuery(key, key_len, find_flag);
 
@@ -2449,14 +2488,14 @@ int ha_scaledb::index_read(uchar* buf, const uchar* key, uint key_len, enum ha_r
 		SDBDebugStart();			// synchronize threads printout	
 
 		if (!retValue){
-			SDBDebugPrintString("ha_scaledb::index_read returned a valid row");
+			SDBDebugPrintHeader("ha_scaledb::index_read returned a valid row");
 		}
 		else {
-			SDBDebugPrintString("ha_scaledb::index_read returned code: ");
+			SDBDebugPrintHeader("ha_scaledb::index_read returned code: ");
 			SDBDebugPrintInt(retValue);
 		}
 
-		SDBDebugFlushNoThread();
+		SDBDebugFlush();
 		SDBDebugEnd();			// synchronize threads printout	
 	}
 #endif
@@ -2494,7 +2533,7 @@ int ha_scaledb::index_next(unsigned char* buf) {
 #ifdef SDB_DEBUG
 	if (mysqlInterfaceDebugLevel_) {
 		SDBDebugStart();			// synchronize threads printout	
-		SDBDebugPrintString("MySQL Interface: executing ha_scaledb::index_next(...) ");
+		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::index_next(...) ");
 		SDBDebugPrintString(" counter = ");
 		SDBDebugPrintInt(++readDebugCounter_);
 		if (mysqlInterfaceDebugLevel_>1) outputHandleAndThd();
@@ -2515,7 +2554,7 @@ int ha_scaledb::index_next(unsigned char* buf) {
 #ifdef SDB_DEBUG
 	if (mysqlInterfaceDebugLevel_  && errorNum) {
 		SDBDebugStart();			
-		SDBDebugPrintString("MySQL Interface: ha_scaledb::index_next returned errorNum ");
+		SDBDebugPrintHeader("MySQL Interface: ha_scaledb::index_next returned errorNum ");
 		SDBDebugPrintInt(errorNum);
 		SDBDebugEnd();	
 	}
@@ -2529,7 +2568,7 @@ int ha_scaledb::index_next_same(uchar* buf, const uchar* key, uint keylen) {
 #ifdef SDB_DEBUG
 	if (mysqlInterfaceDebugLevel_) {
 		SDBDebugStart();			// synchronize threads printout	
-		SDBDebugPrintString("MySQL Interface: executing ha_scaledb::index_next_same(...) ");
+		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::index_next_same(...) ");
 		if (mysqlInterfaceDebugLevel_>1) outputHandleAndThd();
 		SDBDebugEnd();			// synchronize threads printout	
 	}
@@ -2554,7 +2593,7 @@ int ha_scaledb::index_first(uchar* buf) {
 #ifdef SDB_DEBUG
 	if (mysqlInterfaceDebugLevel_) {
 		SDBDebugStart();			// synchronize threads printout	
-		SDBDebugPrintString("MySQL Interface: executing ha_scaledb::index_first(...) ");
+		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::index_first(...) ");
 		if (mysqlInterfaceDebugLevel_>1) outputHandleAndThd();
 		SDBDebugEnd();			// synchronize threads printout	
 	}
@@ -2580,7 +2619,7 @@ int ha_scaledb::index_last(uchar * buf) {
 #ifdef SDB_DEBUG
 	if (mysqlInterfaceDebugLevel_) {
 		SDBDebugStart();			// synchronize threads printout	
-		SDBDebugPrintString("MySQL Interface: executing ha_scaledb::index_last(...) ");
+		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::index_last(...) ");
 		if (mysqlInterfaceDebugLevel_>1) outputHandleAndThd();
 		SDBDebugEnd();			// synchronize threads printout	
 	}
@@ -2609,7 +2648,7 @@ int ha_scaledb::index_prev(uchar * buf) {
 #ifdef SDB_DEBUG
 	if (mysqlInterfaceDebugLevel_) {
 		SDBDebugStart();			// synchronize threads printout	
-		SDBDebugPrintString("MySQL Interface: executing ha_scaledb::index_prev(...) ");
+		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::index_prev(...) ");
 		if (mysqlInterfaceDebugLevel_>1) outputHandleAndThd();
 		SDBDebugEnd();			// synchronize threads printout	
 	}
@@ -2634,7 +2673,7 @@ int ha_scaledb::rnd_init(bool scan) {
 #ifdef SDB_DEBUG
 	if (mysqlInterfaceDebugLevel_) {
 		SDBDebugStart();			// synchronize threads printout	
-		SDBDebugPrintString("MySQL Interface: executing ha_scaledb::rnd_init(...) ");
+		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::rnd_init(...) ");
 		if (mysqlInterfaceDebugLevel_>1) outputHandleAndThd();
 		SDBDebugPrintString(", table: ");
 		SDBDebugPrintString( table->s->table_name.str );
@@ -2685,11 +2724,11 @@ int ha_scaledb::rnd_init(bool scan) {
 				if ( deleteAllRows_ )
 					tableLockLevel = REFERENCE_LOCK_EXCLUSIVE;
 				else	// delete records based on a condition defined on a non-index column
-					tableLockLevel = REFERENCE_READ_ONLY;
+					tableLockLevel = DEFAULT_REFERENCE_LOCK_LEVEL;
 				break;
 
 			default:
-				tableLockLevel = REFERENCE_READ_ONLY;
+				tableLockLevel = DEFAULT_REFERENCE_LOCK_LEVEL;
 				break;
 			}
 
@@ -2711,7 +2750,7 @@ int ha_scaledb::rnd_end() {
 #ifdef SDB_DEBUG
 	if (mysqlInterfaceDebugLevel_) {
 		SDBDebugStart();			// synchronize threads printout	
-		SDBDebugPrintString("MySQL Interface: executing ha_scaledb::rnd_end(...) ");
+		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::rnd_end(...) ");
 		SDBDebugPrintString(", table: ");
 		SDBDebugPrintString(table->s->table_name.str );
 		if (mysqlInterfaceDebugLevel_>1) outputHandleAndThd();
@@ -2731,7 +2770,7 @@ int ha_scaledb::rnd_next(uchar* buf) {
 #ifdef SDB_DEBUG
 	if (mysqlInterfaceDebugLevel_) {
 		SDBDebugStart();			// synchronize threads printout	
-		SDBDebugPrintString("MySQL Interface: executing ha_scaledb::rnd_next(...), index: ");
+		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::rnd_next(...), index: ");
 		SDBDebugPrintInt(active_index);
 		SDBDebugPrintString(", table: ");
 		SDBDebugPrintString(table->s->table_name.str );
@@ -2783,6 +2822,7 @@ int ha_scaledb::rnd_next(uchar* buf) {
 				errorNum = convertToMysqlErrorCode(retValue);
 				table->status = STATUS_NOT_FOUND;
 			}
+            pSdbMysqlTxn_->setScanType(sdbQueryMgrId_, true);
 
 		} else {	// use index
 			errorNum = index_first(buf);
@@ -2813,7 +2853,7 @@ void ha_scaledb::position(const uchar* record)
 #ifdef SDB_DEBUG
 	if (mysqlInterfaceDebugLevel_) {
 		SDBDebugStart();			// synchronize threads printout	
-		SDBDebugPrintString("MySQL Interface: executing ha_scaledb::position(...) on table ");
+		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::position(...) on table ");
 		SDBDebugPrintString( table->s->table_name.str );
 		SDBDebugPrintString(" ");
 		if (mysqlInterfaceDebugLevel_>1) outputHandleAndThd();
@@ -2822,7 +2862,7 @@ void ha_scaledb::position(const uchar* record)
 #endif
 
 	unsigned long long rowPos;
-	if (table->key_info && active_index != MAX_KEY) {
+    if (table->key_info && pSdbMysqlTxn_->isSequentialScan(sdbQueryMgrId_) == false) {
 		// get the index cursor row position
 		rowPos = (unsigned long long)SDBQueryCursorGetIndexCursorRowPosition(sdbQueryMgrId_);
 	}
@@ -2834,7 +2874,7 @@ void ha_scaledb::position(const uchar* record)
 #ifdef SDB_DEBUG
 	if (mysqlInterfaceDebugLevel_) {
 		SDBDebugStart();			// synchronize threads printout	
-		SDBDebugPrintString("position row id: ");
+		SDBDebugPrintHeader("position row id: ");
 		SDBDebugPrint8ByteUnsignedLong(rowPos);
 		SDBDebugEnd();			// synchronize threads printout	
 	}
@@ -2854,7 +2894,7 @@ int ha_scaledb::rnd_pos(uchar * buf, uchar *pos)
 #ifdef SDB_DEBUG
 	if (mysqlInterfaceDebugLevel_) {
 		SDBDebugStart();			// synchronize threads printout	
-		SDBDebugPrintString("MySQL Interface: executing ha_scaledb::rnd_pos(...) ");
+		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::rnd_pos(...) ");
 		if (mysqlInterfaceDebugLevel_>1) outputHandleAndThd();
 		SDBDebugEnd();			// synchronize threads printout	
 	}
@@ -2874,6 +2914,7 @@ int ha_scaledb::rnd_pos(uchar * buf, uchar *pos)
 		SDBResetQuery(sdbQueryMgrId_);  // remove the previously defined query
 		retValue = (int) SDBPrepareSequentialScan(sdbQueryMgrId_, sdbDbId_, table->s->table_name.str, ((THD*)ha_thd())->query_id);
 		beginningOfScan_ = false;
+        pSdbMysqlTxn_->setScanType(sdbQueryMgrId_, true);
 	}
 
 	if (retValue == 0) {
@@ -2888,7 +2929,7 @@ int ha_scaledb::rnd_pos(uchar * buf, uchar *pos)
 #ifdef SDB_DEBUG
 		if (mysqlInterfaceDebugLevel_) {
 			SDBDebugStart();			// synchronize threads printout	
-			SDBDebugPrintString("rnd_pos row id to be fetched: ");
+			SDBDebugPrintHeader("rnd_pos row id to be fetched: ");
 			SDBDebugPrint8ByteUnsignedLong(rowPos);
 			SDBDebugEnd();			// synchronize threads printout	
 		}
@@ -2908,7 +2949,7 @@ int ha_scaledb::info(uint flag)
 #ifdef SDB_DEBUG
 	if (mysqlInterfaceDebugLevel_) {
 		SDBDebugStart();			// synchronize threads printout	
-		SDBDebugPrintString("MySQL Interface: executing ha_scaledb::info(...) ");
+		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::info(...) ");
 		if (mysqlInterfaceDebugLevel_>1) outputHandleAndThd();
 		SDBDebugEnd();			// synchronize threads printout	
 	}
@@ -3008,7 +3049,7 @@ THR_LOCK_DATA **ha_scaledb::store_lock(THD *thd,
 
 	if (mysqlInterfaceDebugLevel_) {
 		SDBDebugStart();			// synchronize threads printout	
-		SDBDebugPrintString("MySQL Interface: executing ha_scaledb::store_lock(thd=");
+		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::store_lock(thd=");
 		SDBDebugPrint8ByteUnsignedLong((uint64)thd);
 		SDBDebugPrintString(")");
 		if (mysqlInterfaceDebugLevel_>1) {
@@ -3088,11 +3129,11 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 #ifdef SDB_DEBUG
 	if (mysqlInterfaceDebugLevel_) {
 		SDBDebugStart();			// synchronize threads printout	
-		SDBDebugPrintString("MySQL Interface: executing ha_scaledb::create(name= ");
+		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::create(name= ");
 		SDBDebugPrintString( (char*) name );
 		SDBDebugPrintString(" )");
 		if (mysqlInterfaceDebugLevel_>1) outputHandleAndThd();
-		SDBDebugFlushNoThread();
+		SDBDebugFlush();
 		SDBDebugEnd();			// synchronize threads printout	
 	}
 #endif
@@ -3105,26 +3146,26 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 	////////////////////////////////////////////////////////////////////
 	// core dump prevention code
 	if (!table_arg){
-		SDBDebugPrintString("table_arg is NULL");
-		SDBDebugFlushNoThread();
+		SDBDebugPrintHeader("table_arg is NULL");
+		SDBDebugFlush();
 		DBUG_RETURN(HA_ERR_UNKNOWN_CHARSET);		
 	}
 
 	if (!table_arg->s){
 		SDBDebugPrintString("table_arg->s is NULL");
-		SDBDebugFlushNoThread();
+		SDBDebugFlush();
 		DBUG_RETURN(HA_ERR_UNKNOWN_CHARSET);		
 	}
 
 	if (!table_arg->s->db.str){
 		SDBDebugPrintString("table_arg->s->db.str is NULL");
-		SDBDebugFlushNoThread();
+		SDBDebugFlush();
 		DBUG_RETURN(HA_ERR_UNKNOWN_CHARSET);		
 	}
 
 	if (!table_arg->s->table_name.str){
 		SDBDebugPrintString("table_arg->s->table_name.str is NULL");
-		SDBDebugFlushNoThread();
+		SDBDebugFlush();
 		DBUG_RETURN(HA_ERR_UNKNOWN_CHARSET);		
 	}
 
@@ -3192,6 +3233,7 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 	// make the entire CREATE TABLE statement a transaction.  The transaction finishes after it performs
 	// createTable, createField, createIndex.
 	//	pSdbEngine->startTransaction(sdbUserId_);  <-- Not needed because metadata is locked
+	SDBLockMetaInfo(sdbUserId_);
 
 	sdbTableNumber_ = SDBCreateTable(sdbUserId_, sdbDbId_, pTableName, tblFsName, virtualTableFlag_, ddlFlag);
 	if ( sdbTableNumber_ == 0 ) {	// createTable fails, need to rollback
@@ -3258,7 +3300,7 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 		SDBPrintMemoryInfo(); 
 		SDBDebugEnd();			// synchronize threads printout	
 	}
-    #endif
+#endif
 
 	// commit the entire CREATE TABLE statement transaction
 	// release lock on MetaInfo
@@ -3275,19 +3317,18 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 			char* passedDDL = NULL;
 
 			// if this is the first user table in the database, we need to issue CREATE DATABASE stmt to other nodes
-			// TODO: to be enabled after I told everyone to drop test database directory
-			//if (sdbTableNumber_ == SDB_FIRST_USER_TABLE_ID) {
-			//	char* ddlCreateDB = SDBUtilAppendString("CREATE DATABASE ", dbFsName);
-			//	passedDDL = SDBUtilAppendString(ddlCreateDB, SCALEDB_HINT_PASS_DDL);
-			//	RELEASE_MEMORY(ddlCreateDB);
-			//	createDatabaseReady = sqlStmt(sdbDbId_, passedDDL, true);
-			//	RELEASE_MEMORY(passedDDL);
-			//}
+			if (sdbTableNumber_ == SDB_FIRST_USER_TABLE_ID) {
+				char* ddlCreateDB = SDBUtilAppendString("CREATE DATABASE IF NOT EXISTS ", dbFsName);
+				passedDDL = SDBUtilAppendString(ddlCreateDB, SCALEDB_HINT_PASS_DDL);
+				RELEASE_MEMORY(ddlCreateDB);
+				createDatabaseReady = sqlStmt(sdbDbId_, passedDDL, true);	// need to ignore DB name for CREATE DATABASE stmt
+				RELEASE_MEMORY(passedDDL);
+			}
 
 			if ( createDatabaseReady ) {
 				// Now we pass the CREATE TABLE statement to other nodes
 				passedDDL = SDBUtilAppendString(thd->query, SCALEDB_HINT_PASS_DDL);
-				bool createTableReady = sqlStmt(sdbDbId_, passedDDL);
+				bool createTableReady = sqlStmt(sdbDbId_, passedDDL);	// need to specify DB name for CREATE TABLE stmt
 				RELEASE_MEMORY(passedDDL);
 				if ( createTableReady == false )
 					retCode = CREATE_TABLE_FAILED_IN_CLUSTER;
@@ -3568,7 +3609,7 @@ int ha_scaledb::create_fks(THD* thd, TABLE *table_arg, char* tblName, SdbDynamic
 			pKeyI->setParentColumnNames( pColumnNames );
 
 			// save the info about this foreign key for use when creating the associated designator
-			if (keyNum >= 0){
+	    		if (keyNum >= 0){
                 SDBArrayPutPtr(fkInfoArray, keyNum+1, pKeyI);
 				//fkInfoArray->useLocation(keyNum+1);
 				//fkInfoArray->putPtrInArray(keyNum+1, pKeyI);
@@ -3686,7 +3727,7 @@ int ha_scaledb::delete_table(const char* name)
 #ifdef SDB_DEBUG
 	if (mysqlInterfaceDebugLevel_) {
 		SDBDebugStart();			// synchronize threads printout	
-		SDBDebugPrintString("MySQL Interface: executing ha_scaledb::delete_table(name=");
+		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::delete_table(name=");
 		SDBDebugPrintString( (char *)name );
 		SDBDebugPrintString(") ");
 		if (mysqlInterfaceDebugLevel_>1) outputHandleAndThd();
@@ -3806,7 +3847,7 @@ int ha_scaledb::rename_table(const char* fromTable, const char* toTable) {
 #ifdef SDB_DEBUG
 	if (mysqlInterfaceDebugLevel_) {
 		SDBDebugStart();			// synchronize threads printout	
-		SDBDebugPrintString("MySQL Interface: executing ha_scaledb::rename_table(fromTable=");
+		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::rename_table(fromTable=");
 		SDBDebugPrintString( (char *)fromTable );
 		SDBDebugPrintString(", toTable=");
 		SDBDebugPrintString( (char *)toTable );
@@ -3946,8 +3987,8 @@ int ha_scaledb::rename_table(const char* fromTable, const char* toTable) {
 // this function will issue the DDL statement to all other nodes on the cluster
 //
 // Pass DDL SQL statement and its related DbId
-// When bIgnoreDB is set to false, we should pass this statement "use databasename;" before the user DDL statement.
-// When bIgnoreDB is set to true, then there is no need to pass "use databasename;" 
+// When bIgnoreDB is set to false, we should pass databasename when we set up a mysql connection.
+// When bIgnoreDB is set to true, then we pass NULL for db name in setting up a mysql connection. 
 // return true for success and false for failure
 // -------------------------------------------------------
 bool ha_scaledb::sqlStmt(unsigned short dbmsId, char* sqlStmt, bool bIgnoreDB) {
@@ -3955,7 +3996,7 @@ bool ha_scaledb::sqlStmt(unsigned short dbmsId, char* sqlStmt, bool bIgnoreDB) {
 #ifdef SDB_DEBUG
 	if (mysqlInterfaceDebugLevel_) {
 		SDBDebugStart();			// synchronize threads printout	
-		SDBDebugPrintString("MySQL Interface: executing ha_scaledb::sqlStmt(...) ");
+		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::sqlStmt(...) ");
 		SDBDebugEnd();			// synchronize threads printout	
 	}
 #endif
@@ -3969,15 +4010,9 @@ bool ha_scaledb::sqlStmt(unsigned short dbmsId, char* sqlStmt, bool bIgnoreDB) {
 
 	bool overallRc = true;
 	int queryLength = SDBUtilGetStrLength(sqlStmt);
-	char* useQuery = NULL;
-	int useQueryLength = 0;
-
-	if (!bIgnoreDB) {
-		char* dbName = SDBGetDatabaseNameByNumber(dbmsId);
-		char* useString = "use ";
-		useQuery = SDBUtilAppendString(useString, dbName);
-		useQueryLength = SDBUtilGetStrLength(useQuery);
-	}
+	char* pDbName = NULL;
+	if (bIgnoreDB == false) 
+		pDbName = SDBGetDatabaseNameByNumber(dbmsId);
 
 	// loop through all non-primary nodes and execute the sqlStmt
 	for (unsigned char i = 0; i < numberOfNodes; ++i){
@@ -3995,14 +4030,11 @@ bool ha_scaledb::sqlStmt(unsigned short dbmsId, char* sqlStmt, bool bIgnoreDB) {
 #endif
 
 		// set up MySQL client connection
-     	SdbMysqlClient* pSdbMysqlClient = new SdbMysqlClient(ip, user, password, socket, port, debugSetting);
+     	SdbMysqlClient* pSdbMysqlClient = new SdbMysqlClient(ip, user, password, pDbName, socket, port, debugSetting);
 
 		// Execute the statement on MySQL server on a non-primary node
 		int rc = 0;
-		if (useQuery)	// use statement is optional
-			rc = pSdbMysqlClient->executeQuery(useQuery, useQueryLength);
-		if (!rc)
-			rc = pSdbMysqlClient->executeQuery(sqlStmt, queryLength);
+		rc = pSdbMysqlClient->executeQuery(sqlStmt, queryLength);
 		if (rc && overallRc){ // there was an error code, 0 is success, so lets set the overall function to failure
 			overallRc = false;
 		}
@@ -4010,13 +4042,10 @@ bool ha_scaledb::sqlStmt(unsigned short dbmsId, char* sqlStmt, bool bIgnoreDB) {
 		delete pSdbMysqlClient;		// remove the client connection
     }
 
-    if (!bIgnoreDB) {
-        RELEASE_MEMORY(useQuery);
-    }
-
 	if (!overallRc){
 		SDBTerminate(0, "cluster ddl failed");
 	}
+
 	return overallRc;
 }
 
@@ -4027,7 +4056,7 @@ bool ha_scaledb::check_if_incompatible_data(HA_CREATE_INFO*	info, uint table_cha
 #ifdef SDB_DEBUG
 	if (mysqlInterfaceDebugLevel_) {
 		SDBDebugStart();			// synchronize threads printout	
-		SDBDebugPrintString("MySQL Interface: executing ha_scaledb::check_if_incompatible_data(...) ");
+		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::check_if_incompatible_data(...) ");
 		if (mysqlInterfaceDebugLevel_>1) outputHandleAndThd();
 		SDBDebugEnd();			// synchronize threads printout	
 	}
@@ -4055,7 +4084,7 @@ int ha_scaledb::analyze(THD* thd, HA_CHECK_OPT*	check_opt)
 #ifdef SDB_DEBUG
 	if (mysqlInterfaceDebugLevel_) {
 		SDBDebugStart();			// synchronize threads printout	
-		SDBDebugPrintString("MySQL Interface: executing ha_scaledb::analyze(...) ");
+		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::analyze(...) ");
 		SDBDebugEnd();			// synchronize threads printout	
 	}
 #endif
@@ -4069,7 +4098,7 @@ int ha_scaledb::index_init(uint	keynr, bool sorted)
 #ifdef SDB_DEBUG
 	if (mysqlInterfaceDebugLevel_) {
 		SDBDebugStart();			// synchronize threads printout	
-		SDBDebugPrintString("MySQL Interface: executing ha_scaledb::index_init(...)");
+		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::index_init(...)");
 		if (mysqlInterfaceDebugLevel_>1) outputHandleAndThd();
 		SDBDebugEnd();			// synchronize threads printout	
 	}
@@ -4109,7 +4138,7 @@ int ha_scaledb::index_end(void)
 #ifdef SDB_DEBUG
 	if (mysqlInterfaceDebugLevel_) {
 		SDBDebugStart();			// synchronize threads printout	
-		SDBDebugPrintString("MySQL Interface: executing ha_scaledb::index_end()");
+		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::index_end()");
 		SDBDebugPrintString(" counter = ");
 		SDBDebugPrintInt(readDebugCounter_);
 		if (mysqlInterfaceDebugLevel_>1) outputHandleAndThd();
@@ -4127,7 +4156,7 @@ int ha_scaledb::index_read_last(uchar * buf, const uchar * key, uint key_len)
 #ifdef SDB_DEBUG
 	if (mysqlInterfaceDebugLevel_) {
 		SDBDebugStart();			// synchronize threads printout	
-		SDBDebugPrintString("MySQL Interface: executing ha_scaledb::index_read_last(...) ");
+		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::index_read_last(...) ");
 		SDBDebugEnd();			// synchronize threads printout	
 	}
 #endif
@@ -4183,7 +4212,7 @@ int ha_scaledb::extra( enum ha_extra_function operation )
 #ifdef SDB_DEBUG
 	if (mysqlInterfaceDebugLevel_) {
 		SDBDebugStart();			// synchronize threads printout	
-		SDBDebugPrintString("MySQL Interface: executing ha_scaledb::extra(...) ");
+		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::extra(...) ");
 		if (mysqlInterfaceDebugLevel_>1) outputHandleAndThd();
 		SDBDebugEnd();			// synchronize threads printout	
 	}
@@ -4212,7 +4241,7 @@ bool ha_scaledb::get_error_message(int error, String *buf){
 #ifdef SDB_DEBUG
 	if (mysqlInterfaceDebugLevel_) {
 		SDBDebugStart();			// synchronize threads printout	
-		SDBDebugPrintString("MySQL Interface: executing ha_scaledb::get_error_message(...) ");
+		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::get_error_message(...) ");
 		if (mysqlInterfaceDebugLevel_>1) outputHandleAndThd();
 		SDBDebugEnd();			// synchronize threads printout	
 	}
@@ -4282,7 +4311,7 @@ ha_rows ha_scaledb::records() {
 #ifdef SDB_DEBUG
 	if (mysqlInterfaceDebugLevel_) {
 		SDBDebugStart();			// synchronize threads printout	
-		SDBDebugPrintString("MySQL Interface: executing ha_scaledb::records() ");
+		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::records() ");
 		if (mysqlInterfaceDebugLevel_>1) outputHandleAndThd();
 		SDBDebugEnd();			// synchronize threads printout	
 	}
@@ -4306,7 +4335,7 @@ ha_rows ha_scaledb::records() {
 #ifdef SDB_DEBUG
 	if (mysqlInterfaceDebugLevel_ > 3) {
 		SDBDebugStart();			// synchronize threads printout	
-		SDBDebugPrintString("total count from table: ");
+		SDBDebugPrintHeader("total count from table: ");
 		SDBDebugPrintString(table->s->table_name.str);
 		SDBDebugPrintString(": ");
 		SDBDebugPrint8ByteUnsignedLong((uint64)totalRows);
@@ -4325,7 +4354,7 @@ ha_rows ha_scaledb::estimate_rows_upper_bound() {
 #ifdef SDB_DEBUG
 	if (mysqlInterfaceDebugLevel_) {
 		SDBDebugStart();			// synchronize threads printout	
-		SDBDebugPrintString("MySQL Interface: executing ha_scaledb::estimate_rows_upper_bound() ");
+		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::estimate_rows_upper_bound() ");
 		if (mysqlInterfaceDebugLevel_>1) outputHandleAndThd();
 		SDBDebugEnd();			// synchronize threads printout	
 	}
@@ -4340,7 +4369,7 @@ double ha_scaledb::scan_time() {
 #ifdef SDB_DEBUG
 	if (mysqlInterfaceDebugLevel_) {
 		SDBDebugStart();			// synchronize threads printout	
-		SDBDebugPrintString("MySQL Interface: executing ha_scaledb::scan_time() ");
+		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::scan_time() ");
 		if (mysqlInterfaceDebugLevel_>1) outputHandleAndThd();
 		SDBDebugEnd();			// synchronize threads printout	
 	}
@@ -4362,7 +4391,7 @@ double ha_scaledb::read_time(uint inx, uint ranges, ha_rows rows) {
 #ifdef SDB_DEBUG
 	if (mysqlInterfaceDebugLevel_) {
 		SDBDebugStart();			// synchronize threads printout	
-		SDBDebugPrintString("MySQL Interface: executing ha_scaledb::read_time(...) ");
+		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::read_time(...) ");
 		if (mysqlInterfaceDebugLevel_>1) outputHandleAndThd();
 		SDBDebugEnd();			// synchronize threads printout	
 	}
@@ -4388,7 +4417,7 @@ int ha_scaledb::disable_indexes(uint mode)
 #ifdef SDB_DEBUG
 	if (mysqlInterfaceDebugLevel_) {
 		SDBDebugStart();			// synchronize threads printout	
-		SDBDebugPrintString("MySQL Interface: executing ha_scaledb::disable_indexes(...) ");
+		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::disable_indexes(...) ");
 		if (mysqlInterfaceDebugLevel_>1) outputHandleAndThd();
 		SDBDebugEnd();			// synchronize threads printout	
 	}
@@ -4411,7 +4440,7 @@ int ha_scaledb::enable_indexes(uint mode)
 #ifdef SDB_DEBUG
 	if (mysqlInterfaceDebugLevel_) {
 		SDBDebugStart();			// synchronize threads printout	
-		SDBDebugPrintString("MySQL Interface: executing ha_scaledb::enable_indexes(...) ");
+		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::enable_indexes(...) ");
 		if (mysqlInterfaceDebugLevel_>1) outputHandleAndThd();
 		SDBDebugEnd();			// synchronize threads printout	
 	}
@@ -4427,7 +4456,7 @@ ha_rows ha_scaledb::records_in_range(uint inx, key_range* min_key, key_range* ma
 #ifdef SDB_DEBUG
 	if (mysqlInterfaceDebugLevel_) {
 		SDBDebugStart();			// synchronize threads printout	
-		SDBDebugPrintString("MySQL Interface: executing ha_scaledb::records_in_range(...) ");
+		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::records_in_range(...) ");
 		if (mysqlInterfaceDebugLevel_>1) outputHandleAndThd();
 		SDBDebugEnd();			// synchronize threads printout	
 	}
@@ -4629,7 +4658,7 @@ ha_rows ha_scaledb::records_in_range(uint inx, key_range* min_key, key_range* ma
 #ifdef SDB_DEBUG
 	if (mysqlInterfaceDebugLevel_ > 3) {
 		SDBDebugStart();			// synchronize threads printout	
-		SDBDebugPrintString("total range count estimate from table: ");
+		SDBDebugPrintHeader("total range count estimate from table: ");
 		SDBDebugPrintString(table->s->table_name.str);
 		SDBDebugPrintString(": ");
 		SDBDebugPrint8ByteUnsignedLong((uint64)rangeRows);

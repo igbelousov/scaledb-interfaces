@@ -42,7 +42,7 @@ class SdbMysqlClient {
 
 public:
 
-	SdbMysqlClient(char* host, char* user, char* password, char* socket, unsigned int port, unsigned char debugLevel);
+	SdbMysqlClient(char* host, char* user, char* password, char* dbName, char* socket, unsigned int port, unsigned char debugLevel);
 	~SdbMysqlClient();
 	
 	int executeQuery(char* query, unsigned long length);
@@ -56,6 +56,7 @@ private:
 	char *host_;
 	char *user_;
 	char *password_;
+	char* dbName_;
 	char* socket_;
 	unsigned int port_;
 

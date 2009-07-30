@@ -17,12 +17,12 @@
 #include "../incl/sdb_mysql_client.h"
 #include "../../scaledb/incl/SdbStorageAPI.h"
 
-SdbMysqlClient::SdbMysqlClient(char* host, char* user, char* password, char* socket, unsigned int port, unsigned char debugLevel) : 
-
-	mysql_(0), host_(host), user_(user), password_(password), socket_(socket), port_(port), connected_(false), debugLevel_(debugLevel) {
+SdbMysqlClient::SdbMysqlClient(char* host, char* user, char* password, char* dbName, char* socket, 
+							   unsigned int port, unsigned char debugLevel) : 
+	mysql_(0), host_(host), user_(user), password_(password), dbName_(dbName), socket_(socket), 
+							port_(port), connected_(false), debugLevel_(debugLevel) {
 
 	mysql_ = mysql_init(NULL);
-
 	mysql_->reconnect= 1;
 }
 
@@ -74,15 +74,17 @@ bool SdbMysqlClient::connect(){
 	if (debugLevel_) {
 		SDBDebugStart();
 		SDBDebugPrintString("\nSdbMysqlClient connecting to MYSQL with following params:\n");
-		SDBDebugPrintString("\n\thost = ");
+		SDBDebugPrintString("\thost = ");
 		SDBDebugPrintString(host_ ? host_ : (char*)"NULL");
-		SDBDebugPrintString("\n\tuser = ");
+		SDBDebugPrintString("\tuser = ");
 		SDBDebugPrintString(user_ ? user_ : (char*)"NULL");
-		SDBDebugPrintString("\n\tpassword = ");
+		SDBDebugPrintString("\tpassword = ");
 		SDBDebugPrintString(password_ ? password_ : (char*)"NULL");
-		SDBDebugPrintString("\n\tsocket = ");
+		SDBDebugPrintString("\tdatabaseName = ");
+		SDBDebugPrintString(dbName_ ? dbName_ : (char*)"NULL");
+		SDBDebugPrintString("\tsocket = ");
 		SDBDebugPrintString(socket_ ? socket_ : (char*)"NULL");
-		SDBDebugPrintString("\n\tport = ");
+		SDBDebugPrintString("\tport = ");
 		SDBDebugPrintInt(port_);
 		SDBDebugPrintNewLine(1);
 		SDBDebugEnd();
@@ -114,7 +116,7 @@ bool SdbMysqlClient::connect(){
 	//	unsigned int port, const char *unix_socket, unsigned long client_flag)
 	// Note that do NOT use client flag CLIENT_MULTI_STATEMENTS because we need to know exactly
 	// which statement fails.  The multi-statement executions cause confusion.
-	if (mysql_real_connect(mysql_, host_, user_, password_, NULL, port_, socket_, 0)) {
+	if (mysql_real_connect(mysql_, host_, user_, password_, dbName_, port_, socket_, 0)) {
 		result = true;
 	}
 
@@ -142,10 +144,11 @@ bool SdbMysqlClient::connect(){
 int SdbMysqlClient::sendQuery(char* query, unsigned long length) {
 
 	int rc = 1;
-
 	rc = mysql_real_query(mysql_, query, length);
 
-
+	unsigned int mysqlErrorNum = 0;
+	if (rc)		// if there is an error, we fetch MySQL error number. 
+		mysqlErrorNum = mysql_errno(mysql_);
 
 #ifdef SDB_DEBUG
 	if (debugLevel_) {
@@ -161,7 +164,6 @@ int SdbMysqlClient::sendQuery(char* query, unsigned long length) {
 			// TODO: If other nodes take a long time (more than 20 seconds) to return the query result,  
 			// we may get packet_error (error number 1159) issued by the method cli_read_query_result in client.c file.  
 			SDBDebugPrintString(" failure: MySQL error number ");
-			unsigned int mysqlErrorNum = mysql_errno(mysql_);
 			SDBDebugPrintInt(mysqlErrorNum);
 			SDBDebugPrintString("; MySQL error message: ");
 			const char* msg = mysql_error(mysql_);
@@ -174,12 +176,18 @@ int SdbMysqlClient::sendQuery(char* query, unsigned long length) {
 	}
 #endif
 
-
 	// clear the state after the query
 	MYSQL_RES* resultSet = mysql_store_result(mysql_);
 	if (resultSet) {
 		mysql_free_result(resultSet);
 	}
+
+	// If it is error 1007: Can't create database '%s'; database exists,
+	// then we ignore this error because a user database test is often created during installation.
+	// Further a user may create database and a user table using another engine before he uses ScaleDB engine.
+	// No need to check this because we change to use "CREATE DATABASE IF NOT EXISTS dbName"
+	//if ( (rc) && (mysqlErrorNum == 1007) )
+	//	rc = 0;
 
 	return rc;
 }

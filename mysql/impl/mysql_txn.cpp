@@ -56,6 +56,7 @@ MysqlTxn::MysqlTxn() {  //constructor
 		queryMgrArray_[i].pKey_ = NULL;
 		queryMgrArray_[i].keyLength_ = 0;
 		queryMgrArray_[i].queryMgrId_ = 0;
+        queryMgrArray_[i].scanSequential_ = false;
 	}
 
     // use a vector to save all lock table names
@@ -94,11 +95,11 @@ void MysqlTxn::addQueryManagerId(bool isRealIndex, char* pDesignatorName, char* 
     queryMgrArray_[QueryManagerIdCount_].tableAliasName_ = pTabAlias;
 	queryMgrArray_[QueryManagerIdCount_].pKey_ = pKey;
 	queryMgrArray_[QueryManagerIdCount_].keyLength_ = aKenLength;
+    queryMgrArray_[QueryManagerIdCount_].scanSequential_ = false;
 
 	++QueryManagerIdCount_ ;
 	
 }
-
 
 unsigned short MysqlTxn::findQueryManagerId(char* aDesignatorName, char *aTabAlias, char* aKey, unsigned int aKenLength, bool virtualTableFlag) {
 	for (int i=0; i < QueryManagerIdCount_; ++i) {
@@ -133,6 +134,7 @@ void MysqlTxn::freeAllQueryManagerIds() {
 		queryMgrArray_[i].pKey_ = NULL;
 		queryMgrArray_[i].keyLength_ = 0;
 		queryMgrArray_[i].queryMgrId_ = 0;
+        queryMgrArray_[i].scanSequential_ = false;
 	}
 	QueryManagerIdCount_ = 0;
 }
@@ -145,6 +147,23 @@ char* MysqlTxn::getDesignatorNameByQueryMrgId(unsigned short aQueryMgrId) {
 	}
 
 	return NULL;	// not found
+}
+
+void MysqlTxn::setScanType(unsigned short queryMgrId, bool sequentialScan/*=false*/) {
+	for (int i=0; i < QueryManagerIdCount_; ++i) {
+		if ( queryMgrArray_[i].queryMgrId_ == queryMgrId ) {
+	        queryMgrArray_[i].scanSequential_ = sequentialScan;
+		}
+	}
+}
+
+bool MysqlTxn::isSequentialScan(unsigned short queryMgrId) {
+	for (int i=0; i < QueryManagerIdCount_; ++i) {
+		if ( queryMgrArray_[i].queryMgrId_ == queryMgrId ) {
+	        return queryMgrArray_[i].scanSequential_;
+		}
+	}
+    return false;
 }
 
 
@@ -206,7 +225,7 @@ int MysqlTxn::removeLockTableName(char* pLockTableName) {
 
 			// remove this table from the LockTables array
 			RELEASE_MEMORY( pCurrTableName );
-			SDBArrayPutNull(pLockTablesArray_, i);	// need to set pointer to NULL as we already deleted the object
+			SDBArrayPutNull(pLockTablesArray_, i);  	// need to set pointer to NULL as we already deleted the object
 			SDBArrayRemove(pLockTablesArray_, i);
 
 			if (numberOfLockTables_ > 0) {

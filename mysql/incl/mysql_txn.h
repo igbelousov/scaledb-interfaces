@@ -50,6 +50,7 @@ struct QueryManagerInfo {
     char* tableAliasName_; // table alias name, used for multiple designators on same real tables
 	char* pKey_;   // points to the key value used in index_next_same
 	unsigned int keyLength_;
+    bool scanSequential_;
 };
 
 // Compiler usually takes 16 bytes for this structure
@@ -103,6 +104,9 @@ public:
 	void releaseAllLockTables();
 	// get the net number of lock tables
 	unsigned int getNumberOfLockTables() { return SDBArrayGetNumberOfNetElements(pLockTablesArray_); }
+
+    void setScanType(unsigned short queryMgrId, bool sequentialScan=false);
+    bool isSequentialScan(unsigned short queryMgrId);
 
 	int lockCount_;   // number of table locks used in a statement
 	int numberOfLockTables_;		// number of tables specified in LOCK TABLES statement
