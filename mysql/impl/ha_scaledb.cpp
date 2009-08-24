@@ -718,6 +718,7 @@ void ha_scaledb::print_header_thread_info(const char *msg) {
 #ifdef SDB_DEBUG
 	if (mysqlInterfaceDebugLevel_) {
 		SDBDebugStart();			// synchronize threads printout	
+		SDBDebugPrintString("\n");
 		SDBDebugPrintString(msg);
 		if (mysqlInterfaceDebugLevel_>1) outputHandleAndThd();
 		SDBDebugEnd();			// synchronize threads printout	
@@ -1246,48 +1247,48 @@ unsigned short ha_scaledb::placeMysqlRowInEngineBuffer(unsigned char* rowBuf1, u
 													   bool checkAutoIncField, bool &needToUpdateAutoIncrement) {
 
 
-														   unsigned short retCode = 0;
-														   if ( (sdbTableNumber_ == 0) && (!virtualTableFlag_) ) 
-															   retCode = initializeDbTableId();
+	unsigned short retCode = 0;
+	if ( (sdbTableNumber_ == 0) && (!virtualTableFlag_) ) 
+		retCode = initializeDbTableId();
 
-														   if ( (sdbTableNumber_ == 0) && (!virtualTableFlag_) ) 
-															   SDBTerminate(IDENTIFIER_INTERFACE + ERRORNUM_INTERFACE_MYSQL + 4,  // ERROR - 16010004
-															   "Table definition is out of sync between MySQL and ScaleDB engine.\0" );
+	if ( (sdbTableNumber_ == 0) && (!virtualTableFlag_) ) 
+		SDBTerminate(IDENTIFIER_INTERFACE + ERRORNUM_INTERFACE_MYSQL + 4,  // ERROR - 16010004
+		"Table definition is out of sync between MySQL and ScaleDB engine.\0" );
 
-														   needToUpdateAutoIncrement = false;
-														   enum_field_types fieldType;
-														   unsigned short fieldId;
+	needToUpdateAutoIncrement = false;
+	enum_field_types fieldType;
+	unsigned short fieldId;
 
-														   SDBResetRow(sdbUserId_, sdbDbId_, sdbTableNumber_, groupType);
+	SDBResetRow(sdbUserId_, sdbDbId_, sdbTableNumber_, groupType);
 
-														   Field*	pField;
-														   unsigned char* pFieldValue;
-														   unsigned int realVarLength;
-														   unsigned char mysqlVarLengthBytes;
-														   unsigned char* pBlobFieldValue;	// point to BLOB or TEXT value
-														   Field* pAutoIncrField = table->found_next_number_field;	// points to auto_increment field
+	Field*	pField;
+	unsigned char* pFieldValue;
+	unsigned int realVarLength;
+	unsigned char mysqlVarLengthBytes;
+	unsigned char* pBlobFieldValue;	// point to BLOB or TEXT value
+	Field* pAutoIncrField = table->found_next_number_field;	// points to auto_increment field
 
-														   for (unsigned short i=0; i < table->s->fields; ++i) {
-															   bool useNextAutoIncrValue = false;
-															   bool setNull = false;
+	for (unsigned short i=0; i < table->s->fields; ++i) {
+		bool useNextAutoIncrValue = false;
+		bool setNull = false;
 
-															   pField = table->field[i];
+		pField = table->field[i];
 
-															   fieldId = i + 1;  // field ID should start with 1 in ScaleDB engine; it starts with 0 in MySQL
-															   pFieldValue = rowBuf1 + (pField->ptr - rowBuf2);
-															   // note that table->field[i]->ptr points to the column in the rowBuf2 (or new_row) 
+		fieldId = i + 1;  // field ID should start with 1 in ScaleDB engine; it starts with 0 in MySQL
+		pFieldValue = rowBuf1 + (pField->ptr - rowBuf2);
+		// note that table->field[i]->ptr points to the column in the rowBuf2 (or new_row) 
 
-															   if ( pField->null_bit ) {	// This field is nullable
-																   unsigned int nullByteOffset = (unsigned int)((char *)pField->null_ptr - (char *)table->record[0]);
-																   if (rowBuf1[nullByteOffset] & pField->null_bit) {
-																	   pFieldValue = NULL;
-																	   setNull = true;
-																   }
-															   }
+		if ( pField->null_bit ) {	// This field is nullable
+			unsigned int nullByteOffset = (unsigned int)((char *)pField->null_ptr - (char *)table->record[0]);
+			if (rowBuf1[nullByteOffset] & pField->null_bit) {
+				pFieldValue = NULL;
+				setNull = true;
+			}
+		}
 
-															   fieldType = pField->type();
+		fieldType = pField->type();
 
-															   switch (fieldType){
+		switch (fieldType) {
 
 			case MYSQL_TYPE_SHORT:
 			case MYSQL_TYPE_INT24:
@@ -1368,13 +1369,14 @@ unsigned short ha_scaledb::placeMysqlRowInEngineBuffer(unsigned char* rowBuf1, u
 				SDBDebugPrintHeader("These data types are not supported yet.");
 				retCode = METAINFO_WRONG_FIELD_TYPE;
 				break;
-															   }
+		}	// switch (fieldType)
 
-															   if (retCode > 0)
-																   break; 
-														   }
-														   return retCode;
+		if (retCode > 0)
+			break; 
+	}
+	return retCode;
 }
+
 
 /* 
 write_row() inserts a row.  
@@ -1403,6 +1405,25 @@ int ha_scaledb::write_row(unsigned char* buf)
 
 	int errorNum = 0;
 	ha_statistic_increment(&SSV::ha_write_count);
+
+	THD* thd = ha_thd();
+	unsigned int sqlCommand = thd_sql_command(thd);
+
+	// Need to organize in such a way that we do NOT slow down the regular INSERT statements,
+	// which account for more than 99% of the method calls.  Bug 839 is a corner case.
+	if (sqlCommand == SQLCOM_CREATE_TABLE) {
+		unsigned short ddlFlag = 0;
+		// use this flag to decide if this node is a secondary node
+
+		if (SDBNodeIsCluster() == true)
+			if ( strstr(thd->query, SCALEDB_HINT_PASS_DDL) != NULL )
+				ddlFlag |= SDBFLAG_DDL_SECOND_NODE;
+
+		if (ddlFlag & SDBFLAG_DDL_SECOND_NODE) 
+			// Take an early exit if this is a CREATE TABLE statement.  
+			// Bug 839: example statement: create table t100 engine=scaledb select 'a';
+			DBUG_RETURN(errorNum);
+	}
 
 	/* If we have a timestamp column, update it to the current time */
 	if (table->timestamp_field_type & TIMESTAMP_AUTO_SET_ON_INSERT)
@@ -2152,10 +2173,10 @@ void ha_scaledb::prepareIndexOrSequentialQueryManager()
 		char* pTableFsName = SDBGetTableFileSystemNameByTableNumber(sdbDbId_, sdbTableNumber_);
 		char* designatorName = SDBUtilFindDesignatorName(pTableFsName, "sequential", active_index);
 
-		sdbQueryMgrId_ = pSdbMysqlTxn_->findQueryManagerId(designatorName, (char *)table->alias, NULL, 0);
+		sdbQueryMgrId_ = pSdbMysqlTxn_->findQueryManagerId(designatorName, (void*) this, NULL, 0);
 		if ( !sdbQueryMgrId_ ) {  // need to get a new one and save sdbQueryMgrId_ into MysqlTxn object
 			sdbQueryMgrId_ = SDBGetQueryManagerId(sdbUserId_);
-			pSdbMysqlTxn_->addQueryManagerId(false, designatorName, (char *)table->alias, NULL, 0, sdbQueryMgrId_);  // save sdbQueryMgrId_
+			pSdbMysqlTxn_->addQueryManagerId(false, designatorName, (void*) this, NULL, 0, sdbQueryMgrId_);  // save sdbQueryMgrId_
 		}
 		RELEASE_MEMORY( designatorName );
 		sdbDesignatorName_ = pSdbMysqlTxn_->getDesignatorNameByQueryMrgId(sdbQueryMgrId_);	// point to name string on heap
@@ -2190,10 +2211,10 @@ void ha_scaledb::prepareFirstKeyQueryManager()
 		active_index = (unsigned int) SDBGetIndexExternalId(sdbDbId_, designator);   
 	}
 
-	sdbQueryMgrId_ = pSdbMysqlTxn_->findQueryManagerId(pDesignatorName, (char *)table->alias, (char*)NULL, 0, virtualTableFlag_);
+	sdbQueryMgrId_ = pSdbMysqlTxn_->findQueryManagerId(pDesignatorName, (void*) this, (char*)NULL, 0, virtualTableFlag_);
 	if ( !sdbQueryMgrId_ ) {  // need to get a new one and save sdbQueryMgrId_ into MysqlTxn object
 		sdbQueryMgrId_ = SDBGetQueryManagerId(sdbUserId_);
-		pSdbMysqlTxn_->addQueryManagerId(true, pDesignatorName, (char *)table->alias, (char*) NULL, 0, sdbQueryMgrId_);
+		pSdbMysqlTxn_->addQueryManagerId(true, pDesignatorName, (void*) this, (char*) NULL, 0, sdbQueryMgrId_);
 	}
 	SDBSetActiveQueryManager(sdbQueryMgrId_); // cache the object for performance
 	sdbDesignatorName_ = pSdbMysqlTxn_->getDesignatorNameByQueryMrgId(sdbQueryMgrId_);
@@ -2208,10 +2229,10 @@ void ha_scaledb::prepareIndexQueryManager(unsigned int indexNum, const uchar* ke
 		char* pTableFsName = SDBGetTableFileSystemNameByTableNumber(sdbDbId_, sdbTableNumber_);
 		char* designatorName = SDBUtilFindDesignatorName(pTableFsName, pKey->name, indexNum);
 
-		sdbQueryMgrId_ = pSdbMysqlTxn_->findQueryManagerId(designatorName, (char *)NULL, (char*) key, key_len, virtualTableFlag_);
+		sdbQueryMgrId_ = pSdbMysqlTxn_->findQueryManagerId(designatorName, (void*) this, (char*) key, key_len, virtualTableFlag_);
 		if ( !sdbQueryMgrId_ ) {  // need to get a new one and save sdbQueryMgrId_ into MysqlTxn object
 			sdbQueryMgrId_ = SDBGetQueryManagerId(sdbUserId_);
-			pSdbMysqlTxn_->addQueryManagerId(true, designatorName, (char *)NULL, (char*) key, key_len, sdbQueryMgrId_);  // save sdbQueryMgrId_
+			pSdbMysqlTxn_->addQueryManagerId(true, designatorName, (void*) this, (char*) key, key_len, sdbQueryMgrId_);  // save sdbQueryMgrId_
 		}
 
 #ifdef SDB_DEBUG
@@ -2453,9 +2474,17 @@ int ha_scaledb::index_read(uchar* buf, const uchar* key, uint key_len, enum ha_r
 	if (mysqlInterfaceDebugLevel_) {
 		SDBDebugStart();			// synchronize threads printout	
 		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::index_read(...) on table ");
-		SDBDebugPrintString(table->s->table_name.str );
-		if (mysqlInterfaceDebugLevel_>1) outputHandleAndThd();
-		SDBDebugPrintString("MySQL Interface: Index read flag ");
+		SDBDebugPrintString(", table: ");
+		SDBDebugPrintString( table->s->table_name.str );
+		SDBDebugPrintString(", alias: ");
+		SDBDebugPrintString( table->alias );
+		SDBDebugPrintString(", handler=");
+		SDBDebugPrintPointer(this);
+		SDBDebugPrintString(", thread=");
+		SDBDebugPrintPointer(ha_thd());
+		SDBDebugPrintString(", Query Manager ID #");
+		SDBDebugPrintInt(sdbQueryMgrId_);
+		SDBDebugPrintString(", Index read flag ");
 		SDBDebugPrintString(mysql_key_flag_strings[find_flag]);
 		SDBDebugPrintString(", key_len ");
 		SDBDebugPrintInt(key_len);
@@ -2534,9 +2563,18 @@ int ha_scaledb::index_next(unsigned char* buf) {
 	if (mysqlInterfaceDebugLevel_) {
 		SDBDebugStart();			// synchronize threads printout	
 		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::index_next(...) ");
+		SDBDebugPrintString(", table: ");
+		SDBDebugPrintString( table->s->table_name.str );
+		SDBDebugPrintString(", alias: ");
+		SDBDebugPrintString( table->alias );
+		SDBDebugPrintString(", handler=");
+		SDBDebugPrintPointer(this);
+		SDBDebugPrintString(", thread=");
+		SDBDebugPrintPointer(ha_thd());
+		SDBDebugPrintString(", Query Manager ID #");
+		SDBDebugPrintInt(sdbQueryMgrId_);
 		SDBDebugPrintString(" counter = ");
 		SDBDebugPrintInt(++readDebugCounter_);
-		if (mysqlInterfaceDebugLevel_>1) outputHandleAndThd();
 		SDBDebugEnd();			// synchronize threads printout	
 	}
 #endif
@@ -2569,7 +2607,16 @@ int ha_scaledb::index_next_same(uchar* buf, const uchar* key, uint keylen) {
 	if (mysqlInterfaceDebugLevel_) {
 		SDBDebugStart();			// synchronize threads printout	
 		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::index_next_same(...) ");
-		if (mysqlInterfaceDebugLevel_>1) outputHandleAndThd();
+		SDBDebugPrintString(", table: ");
+		SDBDebugPrintString( table->s->table_name.str );
+		SDBDebugPrintString(", alias: ");
+		SDBDebugPrintString( table->alias );
+		SDBDebugPrintString(", handler=");
+		SDBDebugPrintPointer(this);
+		SDBDebugPrintString(", thread=");
+		SDBDebugPrintPointer(ha_thd());
+		SDBDebugPrintString(", Query Manager ID #");
+		SDBDebugPrintInt(sdbQueryMgrId_);
 		SDBDebugEnd();			// synchronize threads printout	
 	}
 #endif
@@ -2674,11 +2721,14 @@ int ha_scaledb::rnd_init(bool scan) {
 	if (mysqlInterfaceDebugLevel_) {
 		SDBDebugStart();			// synchronize threads printout	
 		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::rnd_init(...) ");
-		if (mysqlInterfaceDebugLevel_>1) outputHandleAndThd();
 		SDBDebugPrintString(", table: ");
 		SDBDebugPrintString( table->s->table_name.str );
+		SDBDebugPrintString(", alias: ");
+		SDBDebugPrintString( table->alias );
 		SDBDebugPrintString(", handler=");
-		SDBDebugPrint8ByteUnsignedLong((uint64)this);
+		SDBDebugPrintPointer(this);
+		SDBDebugPrintString(", thread=");
+		SDBDebugPrintPointer(ha_thd());
 		SDBDebugEnd();			// synchronize threads printout
 	}
 #endif
@@ -2753,7 +2803,12 @@ int ha_scaledb::rnd_end() {
 		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::rnd_end(...) ");
 		SDBDebugPrintString(", table: ");
 		SDBDebugPrintString(table->s->table_name.str );
-		if (mysqlInterfaceDebugLevel_>1) outputHandleAndThd();
+		SDBDebugPrintString(", alias: ");
+		SDBDebugPrintString( table->alias );
+		SDBDebugPrintString(", thread=");
+		SDBDebugPrintPointer(ha_thd());
+		SDBDebugPrintString(", handler=");
+		SDBDebugPrintPointer(this);
 		SDBDebugEnd();			// synchronize threads printout	
 	}
 #endif
@@ -2772,11 +2827,16 @@ int ha_scaledb::rnd_next(uchar* buf) {
 		SDBDebugStart();			// synchronize threads printout	
 		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::rnd_next(...), index: ");
 		SDBDebugPrintInt(active_index);
-		SDBDebugPrintString(", table: ");
-		SDBDebugPrintString(table->s->table_name.str );
 		SDBDebugPrintString(", Query Manager ID #");
 		SDBDebugPrintInt(sdbQueryMgrId_);
-		if (mysqlInterfaceDebugLevel_>1) outputHandleAndThd();
+		SDBDebugPrintString(", table: ");
+		SDBDebugPrintString( table->s->table_name.str );
+		SDBDebugPrintString(", alias: ");
+		SDBDebugPrintString( table->alias );
+		SDBDebugPrintString(", handler=");
+		SDBDebugPrintPointer(this);
+		SDBDebugPrintString(", thread=");
+		SDBDebugPrintPointer(ha_thd());
 		SDBDebugEnd();			// synchronize threads printout	
 	}
 #endif
@@ -2802,10 +2862,10 @@ int ha_scaledb::rnd_next(uchar* buf) {
 			char* pTableFsName = SDBGetTableFileSystemNameByTableNumber(sdbDbId_, sdbTableNumber_);
 			char* designatorName = SDBUtilFindDesignatorName(pTableFsName, "sequential", active_index);
 
-			sdbQueryMgrId_ = pSdbMysqlTxn_->findQueryManagerId(designatorName, (char *)table->alias, NULL, 0);
+			sdbQueryMgrId_ = pSdbMysqlTxn_->findQueryManagerId(designatorName, (void*) this, NULL, 0);
 			if ( !sdbQueryMgrId_ ) {  // need to get a new one and save sdbQueryMgrId_ into MysqlTxn object
 				sdbQueryMgrId_ = SDBGetQueryManagerId(sdbUserId_);
-				pSdbMysqlTxn_->addQueryManagerId(false, designatorName, (char *)table->alias, NULL, 0, sdbQueryMgrId_);  // save sdbQueryMgrId_
+				pSdbMysqlTxn_->addQueryManagerId(false, designatorName, (void*) this, NULL, 0, sdbQueryMgrId_);  // save sdbQueryMgrId_
 			}
 			RELEASE_MEMORY( designatorName );
 			SDBSetActiveQueryManager(sdbQueryMgrId_); // cache the object for performance
@@ -2841,6 +2901,16 @@ int ha_scaledb::rnd_next(uchar* buf) {
 		else
 			errorNum = fetchSingleRow(buf);
 	}
+
+#ifdef SDB_DEBUG
+	if (mysqlInterfaceDebugLevel_) {
+		SDBDebugStart();			// synchronize threads printout	
+		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::rnd_next(...) returns : ");
+		SDBDebugPrintInt(errorNum);
+		SDBDebugEnd();			// synchronize threads printout	
+	}
+#endif
+
 
 	DBUG_RETURN(errorNum);
 }
@@ -4111,13 +4181,13 @@ int ha_scaledb::index_init(uint	keynr, bool sorted)
 	char* designatorName = SDBUtilFindDesignatorName(pTableFsName, pKey->name, keynr);
 	virtualTableFlag_ = SDBGetUtilCompareStrings(table->s->table_name.str, SDB_VIRTUAL_VIEW, true, SDB_VIRTUAL_VIEW_PREFIX_BYTES);
 
-	unsigned short queryMgrId1 = pSdbMysqlTxn_->findQueryManagerId(designatorName, (char *)NULL, (char*) NULL, 0);
-	unsigned short queryMgrId2 = pSdbMysqlTxn_->findQueryManagerId(designatorName, (char *)table->alias, (char*) NULL, 0);
+	unsigned short queryMgrId1 = pSdbMysqlTxn_->findQueryManagerId(designatorName, (void*) this, (char*) NULL, 0);
+	unsigned short queryMgrId2 = pSdbMysqlTxn_->findQueryManagerId(designatorName, (void*) this, (char*) NULL, 0);
 
 	if ( queryMgrId1 && !queryMgrId2 ) {  
 		// need to get a new one and save sdbQueryMgrId_ into MysqlTxn object
 		sdbQueryMgrId_ = pSdbEngine->getQueryManager(sdbUserId_);
-		pSdbMysqlTxn_->addQueryManagerId( this->pMetaInfo_, true, designatorName, (char *)table->alias, (char*) NULL, 0, sdbQueryMgrId_); 
+		pSdbMysqlTxn_->addQueryManagerId( this->pMetaInfo_, true, designatorName, (void*) this, (char*) NULL, 0, sdbQueryMgrId_); 
 	}
 	else {
 		sdbQueryMgrId_ = queryMgrId2;
@@ -4139,9 +4209,18 @@ int ha_scaledb::index_end(void)
 	if (mysqlInterfaceDebugLevel_) {
 		SDBDebugStart();			// synchronize threads printout	
 		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::index_end()");
+		SDBDebugPrintString(", table: ");
+		SDBDebugPrintString( table->s->table_name.str );
+		SDBDebugPrintString(", alias: ");
+		SDBDebugPrintString( table->alias );
+		SDBDebugPrintString(", handler=");
+		SDBDebugPrintPointer(this);
+		SDBDebugPrintString(", thread=");
+		SDBDebugPrintPointer(ha_thd());
+		SDBDebugPrintString(", Query Manager ID #");
+		SDBDebugPrintInt(sdbQueryMgrId_);
 		SDBDebugPrintString(" counter = ");
 		SDBDebugPrintInt(readDebugCounter_);
-		if (mysqlInterfaceDebugLevel_>1) outputHandleAndThd();
 		SDBDebugEnd();			// synchronize threads printout	
 	}
 #endif
@@ -4303,7 +4382,6 @@ bool ha_scaledb::get_error_message(int error, String *buf){
 
 // returns total records in the current table
 // this is needed for select count(*) without full table scan
-// TODO: venu, Moshe has better idea to get the total count without scanning
 ha_rows ha_scaledb::records() {
 
 	DBUG_ENTER("ha_scaledb::records");
@@ -4312,7 +4390,14 @@ ha_rows ha_scaledb::records() {
 	if (mysqlInterfaceDebugLevel_) {
 		SDBDebugStart();			// synchronize threads printout	
 		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::records() ");
-		if (mysqlInterfaceDebugLevel_>1) outputHandleAndThd();
+		SDBDebugPrintString(", table: ");
+		SDBDebugPrintString( table->s->table_name.str );
+		SDBDebugPrintString(", alias: ");
+		SDBDebugPrintString( table->alias );
+		SDBDebugPrintString(", handler=");
+		SDBDebugPrintPointer(this);
+		SDBDebugPrintString(", thread=");
+		SDBDebugPrintPointer(ha_thd());
 		SDBDebugEnd();			// synchronize threads printout	
 	}
 #endif

@@ -198,6 +198,8 @@ int main(int argc, char** argv){
 
 	SDBCommit(userId);
 
+	printf("\nTest program completed... starting shutdown of Scaledb Engine");
+
 	SDBGlobalEnd();
 
 	return 0;

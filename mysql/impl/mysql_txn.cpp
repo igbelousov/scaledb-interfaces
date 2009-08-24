@@ -52,7 +52,7 @@ MysqlTxn::MysqlTxn() {  //constructor
 	QueryManagerIdCount_ = 0;
 	for (int i=0; i < METAINFO_MAX_QUERY_MANAGER_ID; ++i) {
 		queryMgrArray_[i].designatorName_ = NULL;
-        queryMgrArray_[i].tableAliasName_ = NULL;
+        queryMgrArray_[i].pHandler_ = NULL;
 		queryMgrArray_[i].pKey_ = NULL;
 		queryMgrArray_[i].keyLength_ = 0;
 		queryMgrArray_[i].queryMgrId_ = 0;
@@ -61,28 +61,20 @@ MysqlTxn::MysqlTxn() {  //constructor
 
     // use a vector to save all lock table names
 	pLockTablesArray_ = SDBArrayInit(IDENTIFIER_INTERFACE + ERRORNUM_INTERFACE_MYSQL_TXN + 1, 10, sizeof (void *));
-
-	//pScratchTableName_ = NULL;
 }
+
 
 MysqlTxn::~MysqlTxn() {   // destructor
 	// memory released in method freeAllQueryManagerIds()
 	SDBArrayFreeWithMembers(pLockTablesArray_);
 
-	//if (pScratchTableName_)
-	//	RELEASE_MEMORY(pScratchTableName_);
 }
 
 
-// allocate memory and save a copy of scratch table name
-//void MysqlTxn::addScratchTableName(char* pScratchTableName) {
-//	if (pScratchTableName_)		// throw away the previous one
-//		RELEASE_MEMORY(pScratchTableName_);
-//
-//	pScratchTableName_ = SDBUtilCompareStrings(pScratchTableName);
-//}
-
-void MysqlTxn::addQueryManagerId(bool isRealIndex, char* pDesignatorName, char* pTabAlias, char* pKey, 
+// save the query manager id for a given designator in a given table handler.
+// Note that the table handler can determine the table name, table alias name.
+// Using table handler can uniquely define the right table object currently being used by MySQL query processor.
+void MysqlTxn::addQueryManagerId(bool isRealIndex, char* pDesignatorName, void* pHandler, char* pKey, 
 								 unsigned int aKenLength, unsigned short aQueryMgrId) {
 	//queryMgrArray_[QueryManagerIdCount_].pMetaInfo_ = pMetaInfo;
 	queryMgrArray_[QueryManagerIdCount_].queryMgrId_ = aQueryMgrId;
@@ -92,7 +84,7 @@ void MysqlTxn::addQueryManagerId(bool isRealIndex, char* pDesignatorName, char* 
 	else
 		queryMgrArray_[QueryManagerIdCount_].designatorId_ = 0;
 
-    queryMgrArray_[QueryManagerIdCount_].tableAliasName_ = pTabAlias;
+    queryMgrArray_[QueryManagerIdCount_].pHandler_ = pHandler;
 	queryMgrArray_[QueryManagerIdCount_].pKey_ = pKey;
 	queryMgrArray_[QueryManagerIdCount_].keyLength_ = aKenLength;
     queryMgrArray_[QueryManagerIdCount_].scanSequential_ = false;
@@ -101,19 +93,15 @@ void MysqlTxn::addQueryManagerId(bool isRealIndex, char* pDesignatorName, char* 
 	
 }
 
-unsigned short MysqlTxn::findQueryManagerId(char* aDesignatorName, char *aTabAlias, char* aKey, unsigned int aKenLength, bool virtualTableFlag) {
+
+// Find the query manager id based on the designator name for a given table handler
+unsigned short MysqlTxn::findQueryManagerId(char* aDesignatorName, void* pHandler, char* aKey, 
+											unsigned int aKenLength, bool virtualTableFlag) {
 	for (int i=0; i < QueryManagerIdCount_; ++i) {
-		if ( SDBUtilCompareStrings(aDesignatorName, queryMgrArray_[i].designatorName_, true) ) {
 
-			if (virtualTableFlag == false) {
-				if (!aTabAlias && queryMgrArray_[i].tableAliasName_) {
-					continue;
-				}
-
-				if (aTabAlias && !SDBUtilCompareStrings(aTabAlias, queryMgrArray_[i].tableAliasName_, false)) {
-					continue;
-				}
-			}
+		// We found the query manger id if both the table handler object and designator match. 
+		if ( (queryMgrArray_[i].pHandler_ == pHandler) &&
+				SDBUtilCompareStrings(aDesignatorName, queryMgrArray_[i].designatorName_, true) ) {
 
 			queryMgrArray_[i].pKey_ = (char*) aKey;    // update its key value
 			queryMgrArray_[i].keyLength_ = aKenLength;
@@ -130,7 +118,7 @@ void MysqlTxn::freeAllQueryManagerIds() {
 		SDBCloseQueryManager(queryMgrArray_[i].queryMgrId_  );
 
 		RELEASE_MEMORY( queryMgrArray_[i].designatorName_ );
-        queryMgrArray_[i].tableAliasName_ = NULL;
+        queryMgrArray_[i].pHandler_ = NULL;
 		queryMgrArray_[i].pKey_ = NULL;
 		queryMgrArray_[i].keyLength_ = 0;
 		queryMgrArray_[i].queryMgrId_ = 0;

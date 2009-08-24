@@ -430,6 +430,7 @@ void SDBDebugPrintInt(int val);
 void SDBDebugPrint8ByteUnsignedLong(unsigned long long l);
 void SDBDebugPrintNewLine(int lines=1);
 void SDBDebugPrintHexByteArray(char data[], int position, int size);
+void SDBDebugPrintPointer(void *ptr);
 void SDBDebugFlush();
 
 /*

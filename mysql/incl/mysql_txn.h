@@ -18,7 +18,7 @@
 //  File Name: mysql_txn.h
 //
 //  Description: This class contains MySQL thread_id, ScaleDB user id, and lock count information.
-//    A MysqlTxn object is instantiated when a user first executes query.
+//    A MysqlTxn object is instantiated when a user executes the very first query in his connection.
 //    A MysqlTxn object is freed when a user logs off (or close connection).
 //
 //  Version: 1.0
@@ -43,12 +43,16 @@ This is because we have STL header files which must be declared before C header 
 #define INITIAL_LOCK_TABLES_IN_VECTOR  10
 #define MAX_BLOB_COLUMNS 64
 
+
+// need this structure to handle two cases:
+// - multiple indexes referenced in same table without alias
+// - same table referenced multiple times with alias
 struct QueryManagerInfo {  	
 	unsigned short queryMgrId_;
 	unsigned short designatorId_;
 	char* designatorName_;  
-    char* tableAliasName_; // table alias name, used for multiple designators on same real tables
-	char* pKey_;   // points to the key value used in index_next_same
+	void* pHandler_;	// pointer to handler object which is currently being used
+	char* pKey_;		// points to the key value used in index_next_same
 	unsigned int keyLength_;
     bool scanSequential_;
 };
@@ -80,10 +84,13 @@ public:
 	bool getActiveTxn() { return (activeTxn_>0 ? true : false); }	// go around compiler bug
 	void setActiveTrn(bool aBool)  { activeTxn_ = (aBool) ? 1 : 0; }
 
-	void addQueryManagerId(bool isRealIndex, char* pDesignatorName, char* pTabAlias, char* pKey, 
+	// save the query manager id for a given designator in a given table handler
+	void addQueryManagerId(bool isRealIndex, char* pDesignatorName, void* pHandler, char* pKey, 
 			unsigned int aKenLength, unsigned short aQueryMgrId);
-	unsigned short findQueryManagerId(char* aDesignatorName, char *aTabAlias, char* aKey, unsigned int aKenLength,
-										bool virtualTableFlag = false);
+	// Find the query manager id based on the designator name for a given table handler
+	unsigned short findQueryManagerId(char* aDesignatorName, void* pHandler, char* aKey, 
+			unsigned int aKenLength, bool virtualTableFlag = false);
+
 	void freeAllQueryManagerIds();
 	char* getDesignatorNameByQueryMrgId(unsigned short aQueryMgrId);
 	unsigned short getDesignatorIdByQueryMrgId(unsigned short aQueryMgrId);
