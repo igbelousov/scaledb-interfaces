@@ -26,7 +26,7 @@ INCLUDES =              -I$(top_builddir)/include \
 
 LDADD =					
 WRAPLIBS =
-DEFS = -DMYSQL_SERVER -D_LIB -DSDB_LINUX -DSDB_LINUX_NEW -DSDB_MYSQL -DSDB_DEBUG @DEFS@
+DEFS = -DMYSQL_SERVER -D_LIB -DSDB_LINUX -DSDB_LINUX_NEW -DSDB_MYSQL @DEFS@
 
 noinst_HEADERS= interface/mysql/incl/sdb_mysql_client.h \
 			interface/mysql/incl/mysql_txn.h \
