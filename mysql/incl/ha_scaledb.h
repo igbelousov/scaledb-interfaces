@@ -129,8 +129,7 @@ private:
 	void outputHandleAndThd();
 
 	// initialize DB id and Table id.  Returns non-zero if there is an error
-	unsigned short initializeDbTableId(char* pDbName=NULL, char* pTblName=NULL, 
-										bool isFileName=false, bool allowTableClosed=false);
+	unsigned short initializeDbTableId(char* pDbName=NULL, char* pTblName=NULL, bool isFileName=false);
 
 
 public:

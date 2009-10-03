@@ -286,7 +286,6 @@ void SDBSetAutoIncrBaseValue(unsigned short dbId, unsigned short tableId, unsign
 
 unsigned short SDBStartTransaction(unsigned int userId);
 unsigned short SDBCommit(unsigned int userId);
-unsigned short SDBSyncToDisk(unsigned int userId);
 
 long SDBGetTransactionIdForUser(unsigned userId);
 bool SDBIsUserInTransaction(unsigned int userId);
