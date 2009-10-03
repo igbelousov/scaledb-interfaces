@@ -135,6 +135,7 @@ unsigned short SDBGetDatabaseNumberByName(unsigned short userId, char *databaseN
 char* SDBGetDatabaseNameByNumber(unsigned short databaseId);
 bool SDBGetDatabaseStatusByNumber(unsigned short databaseId);
 unsigned short SDBOpenAllDBFiles(unsigned short userId, unsigned short dbId);
+// SDBLockMetaInfo is cluster-wide lock per database.
 unsigned short SDBLockMetaInfo(unsigned short userId, unsigned short dbId=SDB_MASTER_DBID);
 unsigned short SDBLockAndOpenDatabaseMetaInfo(unsigned short userId, char *databaseName);
 unsigned short SDBLockAndRemoveDatabaseMetaInfo(unsigned short userId, unsigned short dbId, unsigned short ddlFlag, char *databaseName);
@@ -151,6 +152,7 @@ char* SDBGetSystemParamString(const char *param);
 unsigned int SDBGetNewUserId(unsigned short userType = SDB_USER_TYPE_DEFAULT);
 void SDBRemoveUserById(unsigned int userId);
 void SDBShowUserActivity(unsigned int userId);
+void SDBShowUserLockStatus(unsigned int userId);
 
 /*
 //////////////////////////////////////////////////////////////////////////////
@@ -284,6 +286,7 @@ void SDBSetAutoIncrBaseValue(unsigned short dbId, unsigned short tableId, unsign
 
 unsigned short SDBStartTransaction(unsigned int userId);
 unsigned short SDBCommit(unsigned int userId);
+unsigned short SDBSyncToDisk(unsigned int userId);
 
 long SDBGetTransactionIdForUser(unsigned userId);
 bool SDBIsUserInTransaction(unsigned int userId);

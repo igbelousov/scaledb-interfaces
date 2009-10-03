@@ -85,19 +85,17 @@ private:
   	//MetaInfo* pMetaInfo_;			// MetaInfo pointer 
 	unsigned int sdbUserId_;			// user id assigned by ScaleDB storage engine
 	unsigned short sdbQueryMgrId_;	// current query Manager ID
-	//QueryManager* pQm_;				// current query Manager ID
 	MysqlTxn* pSdbMysqlTxn_;		// pointer to MysqlTxn object
 	bool virtualTableFlag_;			// flag to show if it is a virtual table
 	//	String fieldBuf;			// the buffer to hold a field of a response record
 	char* sdbDesignatorName_;		// current designator name
 	unsigned short sdbDesignatorId_;	// current designator id
 	unsigned int sdbRowIdInScan_;		// RowId used in sequential table scan
-    unsigned int extraChecks;		// Extra information from handler
+    unsigned int extraChecks_;		// Extra information from handler
 	unsigned int readDebugCounter_; // counter for debugging
 	bool releaseLocksAfterRead_;    // flag to indicate whether we hold the locks after reading data
-#ifdef SDB_DEBUG
 	unsigned int deleteRowCount_;
-#endif
+	unsigned short ddlFlag_ ;		// flag to indicate if it is a non-primary node in cluster
 
 	unsigned short getOffsetByDesignator(unsigned short designator);
 	// This method packs a MySQL row into ScaleDB engine row buffer 
@@ -131,7 +129,8 @@ private:
 	void outputHandleAndThd();
 
 	// initialize DB id and Table id.  Returns non-zero if there is an error
-	unsigned short initializeDbTableId(char* pDbName=NULL, char* pTblName=NULL, bool isFileName=false);
+	unsigned short initializeDbTableId(char* pDbName=NULL, char* pTblName=NULL, 
+										bool isFileName=false, bool allowTableClosed=false);
 
 
 public:
@@ -141,7 +140,6 @@ public:
 	//static SDBengine* pSdbEngine;  // only one pSdbEngine pointer
 	
 
-#ifdef SDB_DEBUG
 	static unsigned char mysqlInterfaceDebugLevel_;		// defines the debug level for Interface component
 	// You need to set up debug level in parameter 'debug_string' in scaledb.ini
 	// Any positive debug level means all printouts from level 1 up to the specified level.
@@ -151,11 +149,10 @@ public:
 	//          and MySQL user thread id plus handle which are useful in multi-user testing
 	// level 3: print out file access statistics and user activities of a session
 	// level 4: print out memory usage
-	// level 5: for debugging commit operation
+	// level 5: for debugging commit operation and user lock status
 	// level 6: print out query search, index traversal, and its path
 
 	int debugCounter_;
-#endif
 
     const char *table_type() const { return "ScaleDB"; }
 	const char *index_type(uint inx) { return "BTREE"; }
