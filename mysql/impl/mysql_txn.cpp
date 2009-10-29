@@ -47,7 +47,7 @@ MysqlTxn::MysqlTxn() {  //constructor
     lockCount_ = 0;
 	numberOfLockTables_ = 0;
     lastStmtSavePointId_ = 0;
-
+	ddlFlag_ = 0;
 
 	QueryManagerIdCount_ = 0;
 	for (int i=0; i < METAINFO_MAX_QUERY_MANAGER_ID; ++i) {

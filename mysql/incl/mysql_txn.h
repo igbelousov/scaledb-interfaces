@@ -84,6 +84,10 @@ public:
 	bool getActiveTxn() { return (activeTxn_>0 ? true : false); }	// go around compiler bug
 	void setActiveTrn(bool aBool)  { activeTxn_ = (aBool) ? 1 : 0; }
 
+	unsigned short getDdlFlag() { return ddlFlag_; }
+	void setDdlFlag(unsigned short ddlFlag)  { ddlFlag_ = ddlFlag; }
+	void setOrOpDdlFlag(unsigned short value)  { ddlFlag_ = ddlFlag_ | value ; }	//apply logical OR operation
+
 	// save the query manager id for a given designator in a given table handler
 	void addQueryManagerId(bool isRealIndex, char* pDesignatorName, void* pHandler, char* pKey, 
 			unsigned int aKenLength, unsigned short aQueryMgrId);
@@ -125,10 +129,15 @@ private:
 	unsigned int scaleDbUserId_;	// The UserId is actually a session id.
     unsigned int scaleDbTxnId_;
 	unsigned short scaledbDbId_;	// current DbId used by ScaleDB
-//	bool  activeTxn_;				// whether or not it is within a transaction at the moment
-	unsigned int  activeTxn_;			// need to use integer rather than bool due to a compiler bug??
+
+	unsigned int  activeTxn_;		// whether or not it is within a transaction at the moment	
+									// need to use integer rather than bool due to a compiler bug??
 	SdbDynamicArray* pLockTablesArray_;	// pointer to vector holding all lock table names
     uint64  lastStmtSavePointId_;   // last stmt save point id
+
+	// flag to indicate if it is a non-primary node in cluster.
+	// We cannot put this flag in a table handler because ALTER TABLE and CREATE TABLE ... SELECT both use multiple handlers.
+	unsigned short ddlFlag_ ;		// This flag has multiple bit values.  Need to deal bits individually.
 
 	QueryManagerInfo queryMgrArray_[METAINFO_MAX_QUERY_MANAGER_ID];
 };

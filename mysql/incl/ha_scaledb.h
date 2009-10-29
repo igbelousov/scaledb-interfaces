@@ -47,6 +47,7 @@
 #define SCALEDB_HINT_CLOSEFILE	" /*SCALEDBHINT: CLOSEFILE*/"
 #define SCALEDB_HINT_OPENFILE	" /*SCALEDBHINT: OPENFILE*/"
 #define MYSQL_TEMP_TABLE_PREFIX "#sql"
+#define MYSQL_ENGINE_EQUAL_SCALEDB " engine=scaledb "	// 16 bytes
 
 /*
   Version for file format.
@@ -95,7 +96,6 @@ private:
 	unsigned int readDebugCounter_; // counter for debugging
 	bool releaseLocksAfterRead_;    // flag to indicate whether we hold the locks after reading data
 	unsigned int deleteRowCount_;
-	unsigned short ddlFlag_ ;		// flag to indicate if it is a non-primary node in cluster
 
 	unsigned short getOffsetByDesignator(unsigned short designator);
 	// This method packs a MySQL row into ScaleDB engine row buffer 
@@ -129,7 +129,8 @@ private:
 	void outputHandleAndThd();
 
 	// initialize DB id and Table id.  Returns non-zero if there is an error
-	unsigned short initializeDbTableId(char* pDbName=NULL, char* pTblName=NULL, bool isFileName=false);
+	unsigned short initializeDbTableId(char* pDbName=NULL, char* pTblName=NULL, 
+										bool isFileName=false, bool allowTableClosed=false);
 
 
 public:
@@ -260,7 +261,7 @@ public:
 	int create(const char* name, TABLE *form, HA_CREATE_INFO *create_info);  ///< required
 	int add_columns_to_table(THD* thd, TABLE *table_arg, unsigned short ddlFlag);
 	int add_indexes_to_table(THD* thd, TABLE *table_arg, char* tblName, unsigned short ddlFlag, SdbDynamicArray* fkInfoArray);
-	int create_fks(THD* thd, TABLE *table_arg, char* tblName, SdbDynamicArray* fkInfoArray);
+	int create_fks(THD* thd, TABLE *table_arg, char* tblName, SdbDynamicArray* fkInfoArray, char* pCreateTableStmt);
 
 	// delete a user table.
 	int delete_table(const char* name);

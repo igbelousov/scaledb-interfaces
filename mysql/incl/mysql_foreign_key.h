@@ -38,6 +38,9 @@ public:
 	MysqlForeignKey();   
 	~MysqlForeignKey();
 
+	// This utility function can get next MySQL token.
+	// Make it static so that it can be called without instantiating the object.
+	static char* getNextToken(char* token, char* cstr);
 	void setForeignKeyName(char* pForeignKeyName_);
     unsigned short setKeyNumber(KEY* keyInfo, unsigned short numOfKeys, char* pColumnNames);
     unsigned short getForeignKeyNameLength() { return ((unsigned short) strlen( pForeignKeyName_ )); }
