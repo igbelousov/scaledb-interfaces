@@ -17,7 +17,9 @@
 //
 //  File Name: mysql_txn.h
 //
-//  Description: This class contains MySQL thread_id, ScaleDB user id, and lock count information.
+//  Description: This class contains information pertaining to a user thread such as
+//    MySQL thread_id, ScaleDB user id, and lock count information.  It is a place holder for information
+//    to be used between multiple MySQL interface method calls.
 //    A MysqlTxn object is instantiated when a user executes the very first query in his connection.
 //    A MysqlTxn object is freed when a user logs off (or close connection).
 //
@@ -50,7 +52,7 @@ This is because we have STL header files which must be declared before C header 
 struct QueryManagerInfo {  	
 	unsigned short queryMgrId_;
 	unsigned short designatorId_;
-	char* designatorName_;  
+	char* pDesignatorName_;  
 	void* pHandler_;	// pointer to handler object which is currently being used
 	char* pKey_;		// points to the key value used in index_next_same
 	unsigned int keyLength_;
@@ -119,6 +121,10 @@ public:
     void setScanType(unsigned short queryMgrId, bool sequentialScan=false);
     bool isSequentialScan(unsigned short queryMgrId);
 
+	void addAlterTableName(char* pAlterTableName) { pAlterTableName_= SDBUtilDuplicateString(pAlterTableName); };
+	void removeAlterTableName();
+	char* getAlterTableName() { return pAlterTableName_; }
+
 	int lockCount_;   // number of table locks used in a statement
 	int numberOfLockTables_;		// number of tables specified in LOCK TABLES statement
 	unsigned long  txnIsolationLevel_;	// transaciton isolation level
@@ -138,6 +144,8 @@ private:
 	// flag to indicate if it is a non-primary node in cluster.
 	// We cannot put this flag in a table handler because ALTER TABLE and CREATE TABLE ... SELECT both use multiple handlers.
 	unsigned short ddlFlag_ ;		// This flag has multiple bit values.  Need to deal bits individually.
+
+	char* pAlterTableName_;			// table name used in ALTER TABLE, CREATE/DROP INDEX statement
 
 	QueryManagerInfo queryMgrArray_[METAINFO_MAX_QUERY_MANAGER_ID];
 };

@@ -163,6 +163,7 @@ void SDBShowUserLockStatus(unsigned int userId);
 */
 
 void SDBOpenFile(unsigned short dbId, unsigned short tableId);
+// When we close a table, we also remove table information from metadata cache
 void SDBCloseFile(unsigned short dbId, unsigned short tableId);
 
 // Initialize Database Table
@@ -417,7 +418,8 @@ void SDBQueryCursorSetFlags(unsigned short queryMgrId, unsigned short indexId, b
 */
 bool SDBNodeIsCluster(void);
 unsigned char SDBGetTotalNodesInCluster(void);
-unsigned char SDBSetupClusterNodes(unsigned int *dstArray);
+unsigned char SDBSetupClusterNodes(unsigned int *dstArray, 
+                                   unsigned int *portArray);
 /*
 //////////////////////////////////////////////////////////////////////////////
 //

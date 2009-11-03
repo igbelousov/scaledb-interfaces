@@ -992,12 +992,20 @@ int ha_scaledb::external_lock(
 		if (sqlCommand==SQLCOM_CREATE_TABLE || sqlCommand==SQLCOM_ALTER_TABLE 
 			|| sqlCommand==SQLCOM_CREATE_INDEX || sqlCommand==SQLCOM_DROP_INDEX) {
 			if ( thd->query && strstr(thd->query, SCALEDB_HINT_PASS_DDL) != NULL ) { // must be last comparison as it is expensive
+				// this is secondary node
 				if (lock_type != F_UNLCK)
 					// set up ddlFlag_ for subsequent use between the pair of external_lock method calls.
 					pSdbMysqlTxn_->setOrOpDdlFlag( (unsigned short)SDBFLAG_DDL_SECOND_NODE );
 				else
 					pSdbMysqlTxn_->setDdlFlag(0);	// reset the flag as MySQL may reuse this handler object
 				DBUG_RETURN(0);
+			} else {	
+				// this is primary node
+				if ( (sqlCommand==SQLCOM_ALTER_TABLE || sqlCommand==SQLCOM_CREATE_INDEX || sqlCommand==SQLCOM_DROP_INDEX) 
+					&& (lock_type != F_UNLCK) && (strstr(table->s->table_name.str, MYSQL_TEMP_TABLE_PREFIX)==NULL) ) {
+					// We can find the alter-table name in the first external_lock on the regular table name
+						pSdbMysqlTxn_->addAlterTableName(table->s->table_name.str);
+				}
 			}
 		}
 	}
@@ -1221,9 +1229,9 @@ int ha_scaledb::open(const char *name, int mode, uint test_if_locked) {
 	placeSdbMysqlTxnInfo( thd );	
 
 	unsigned int sqlCommand = thd_sql_command(thd);
-	bool IsAlterTableStmt = false;
+	bool isAlterTableStmt = false;
 	if (sqlCommand==SQLCOM_ALTER_TABLE || sqlCommand==SQLCOM_CREATE_INDEX || sqlCommand==SQLCOM_DROP_INDEX)
-		IsAlterTableStmt = true;
+		isAlterTableStmt = true;
 	bool openTempFile = false;
 	if (strstr(tblFsName, MYSQL_TEMP_TABLE_PREFIX))
 		openTempFile = true;
@@ -1236,7 +1244,7 @@ int ha_scaledb::open(const char *name, int mode, uint test_if_locked) {
 			// For ALTER TABLE, secondary node should NOT open temp table file.
 			// For CREATE TABLE t2 SELECT 1, 'aa'; secondary node should exit early as well.
 			// For CREATE TABLE t2 SELECT * FROM t1, secondary node should continue because we need to open the select-from table.
-			if ( (IsAlterTableStmt && openTempFile) ||
+			if ( (isAlterTableStmt && openTempFile) ||
 				( (sqlCommand==SQLCOM_CREATE_TABLE) && (pSdbMysqlTxn_->getDdlFlag() & SDBFLAG_DDL_SECOND_NODE) ) )
 				DBUG_RETURN(errorNum);
 		}
@@ -1262,7 +1270,7 @@ int ha_scaledb::open(const char *name, int mode, uint test_if_locked) {
 		// For ALTER TABLE, primary node performs lockMetaInfo in ::create, not before that point.
 		// Secondary node should NOT impose lockMetaInfo because primary node already did.
 		if ( bIsPrimaryNode ) {
-			if ( IsAlterTableStmt == false )
+			if ( isAlterTableStmt == false )
 				retCode = SDBLockMetaInfo(sdbUserId_);
 			if (retCode)
 				DBUG_RETURN( convertToMysqlErrorCode(retCode) );
@@ -1275,7 +1283,7 @@ int ha_scaledb::open(const char *name, int mode, uint test_if_locked) {
 
 		pSdbMysqlTxn_->setScaledbDbId(sdbDbId_);
 		// For ALTER TABLE, primary node commits in ::delete_table only at the very end of processing.
-		if ( bIsPrimaryNode && (IsAlterTableStmt == false) ) 
+		if ( bIsPrimaryNode && (isAlterTableStmt == false) ) 
 			SDBCommit(sdbUserId_);
 
 		SDBOpenAllDBFiles(sdbUserId_, sdbDbId_ );
@@ -1294,8 +1302,8 @@ int ha_scaledb::open(const char *name, int mode, uint test_if_locked) {
 				// For non-ALTER TABLE statement, the primary node should commit
 				// For ALTER TABLE, primary node should commit if we open the table to be altered as it is not part of the implicit txn.
 				// For ALTER TABLE, primary node should not commit if we open the temp table since it will commit in delete_table.
-				if ( (IsAlterTableStmt == false) || 
-					((IsAlterTableStmt) && (openTempFile == false)) )
+				if ( (isAlterTableStmt == false) || 
+					((isAlterTableStmt) && (openTempFile == false)) )
 					SDBCommit(sdbUserId_);
 			}
 		}
@@ -1320,18 +1328,32 @@ int ha_scaledb::open(const char *name, int mode, uint test_if_locked) {
 
 
 // The close() method can be called when thd is either defined or undefined.
+// When we close a table, we also remove table information from metadata cache
 int ha_scaledb::close(void) {
 	DBUG_ENTER("ha_scaledb::close");
 	print_header_thread_info("MySQL Interface: executing ha_scaledb::close(...) ");
 
-	// TODO: to be enabled later
-	//THD* thd = ha_thd();
-	//placeSdbMysqlTxnInfo( thd );
+	THD* thd = ha_thd();
+	placeSdbMysqlTxnInfo( thd );
 
-	//if ( sdbTableNumber_ )
-	//	SDBCloseFile(sdbDbId_, sdbTableNumber_);
-	//else
-	//	SDBCloseTable(sdbUserId_, sdbDbId_, table->s->table_name.str);
+	unsigned int sqlCommand = thd_sql_command(thd);
+	bool isAlterTableStmt = false;
+	if (sqlCommand==SQLCOM_ALTER_TABLE || sqlCommand==SQLCOM_CREATE_INDEX || sqlCommand==SQLCOM_DROP_INDEX)
+		isAlterTableStmt = true;
+
+	// For ALTER TABLE, CREATE/DROP INDEX, secondary node should not close table because the temp table
+	// was never created and the table-to-be-altered is already closed in FLUSH TABLE statement.
+	// For CREATE TABLE ... SELECT statement, secondary node should exit early because the new table
+	// has not been committed by primary node.
+	if ( SDBNodeIsCluster() && (strstr(thd->query, SCALEDB_HINT_PASS_DDL) != NULL) ) {
+		if ( (isAlterTableStmt) || (sqlCommand==SQLCOM_CREATE_TABLE) )
+			DBUG_RETURN(free_share(share));
+	}
+
+	// MySQL may call this method multiple times on same table if a table is referenced more than
+	// one time in a previous SQL statement.  Example: INSERT INTO tbug261 SELECT  a + 1 , b FROM tbug261;
+	// Need call SDBCloseTable insead of SDBCloseFile so that ScaleDB engine tolerates multiple calls of this method.
+	SDBCloseTable(sdbUserId_, sdbDbId_, table->s->table_name.str);
 
 	DBUG_RETURN(free_share(share));
 }
@@ -3480,21 +3502,9 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 			DBUG_RETURN( convertToMysqlErrorCode(retCode) );
 	}
 
-
 	sdbDbId_ = SDBOpenDatabase(sdbUserId_, pDbName, dbFsName, ddlFlag);
 	pSdbMysqlTxn_->setScaledbDbId( sdbDbId_ );
 
-	//unsigned int sqlCommand = thd_sql_command(thd);
-	//if (ddlFlag & SDBFLAG_DDL_SECOND_NODE) {
-	//	// For a CREATE TABLE statement on a non-primary node, we need to open table files for subsequent operations.  
-	//	// For ALTER TABLE statement on a non-primary node, we need to exit without creating the temporary table.
-	//	if (sqlCommand == SQLCOM_CREATE_TABLE) {
-	//		sdbTableNumber_ = SDBOpenTable(sdbUserId_, sdbDbId_, tblFsName);
-	//		if ( sdbTableNumber_ == 0 )
-	//			SDBTerminate(0, "failed to open table on a non-primary node");
-	//	}
-	//	DBUG_RETURN(errorNum);
-	//}
 
 	virtualTableFlag_ = SDBTableIsVirtual(tblFsName);
 	if ( virtualTableFlag_ ) {
@@ -3510,11 +3520,8 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 	// make the entire CREATE TABLE statement a transaction.  The transaction finishes after it performs
 	// createTable, createField, createIndex.
 
-	// On a cluster system, primary node needs to send ALTER TABLE statement to secondary nodes here
-	// in order to close the table files of the table to be altered.  The DDL is sent only once.
-	// For CREATE TABLE ... SELECT, primary node also sends DDL to secondary nodes here in order to
-	// avoid lock conflicts on metatables.
-	// For a regular CREATE TABLE statement, the DDL is sent at the end of ::create method.
+	// On a cluster system, primary node needs to send FLUSH TABLE statement to secondary nodes here
+	// in order to close the table files of the table to be altered.  The DDL is sent after primary node finishes processing.
 	bool bCreateTableSelect = false;
 	char* pCreateTableStmt = (char*) GET_MEMORY( thd->query_length + 1 );
 	// convert LF to space, remove extra space, convert to lower case letters 
@@ -3539,34 +3546,15 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 			}
 		}
 
-		// For ALTER TABLE and CREATE TABLE ... SELECT, we replicate query to other nodes here
-		if ( (sqlCommand==SQLCOM_ALTER_TABLE || sqlCommand==SQLCOM_CREATE_INDEX || sqlCommand==SQLCOM_DROP_INDEX)
-			|| (bCreateTableSelect) ) {
+		// For ALTER TABLE, CREATE/DROP INDEX statements, primary node issues FLUSH TABLE statement so that
+		// all other nodes can close the table to be altered.
+		if (sqlCommand==SQLCOM_ALTER_TABLE || sqlCommand==SQLCOM_CREATE_INDEX || sqlCommand==SQLCOM_DROP_INDEX) {
+			char* pFlushTableStmt = SDBUtilAppendString("flush table ", pSdbMysqlTxn_->getAlterTableName());
+			bool bFlushTableReady = sendStmtToOtherNodes(sdbDbId_, pFlushTableStmt, false);
+			pSdbMysqlTxn_->removeAlterTableName();
+			RELEASE_MEMORY(pFlushTableStmt);
 
-			bool bNewTableReady = true;
-			if ( (sqlCommand==SQLCOM_CREATE_TABLE) && (hasEngineEqualScaledb(pCreateTableStmt) == false) ) {	
-				// CREATE TABLE ... SELECT statement has no table option "engine=scaledb".  We need to insert it.
-				// If this approach does not work well, we should prepend "SET SESSION STORAGE_ENGINE = SCALEDB;"
-				// and turn on CLIENT_MULTI_STATEMENTS.  See http://dev.mysql.com/doc/refman/5.1/en/c-api-multiple-queries.html
-				char* pCreateTableTemp = (char*) GET_MEMORY( strlen(pCreateTableStmt) + 17 );
-				size_t sizeOfFrontPortion = (size_t) (pSelect-pCreateTableStmt);
-				size_t sizeOfBackPortion = strlen(pCreateTableStmt) - sizeOfFrontPortion;
-				strncpy(pCreateTableTemp, pCreateTableStmt, sizeOfFrontPortion);
-				strncpy(pCreateTableTemp+sizeOfFrontPortion, MYSQL_ENGINE_EQUAL_SCALEDB, 16);
-				strncpy(pCreateTableTemp+sizeOfFrontPortion+16, pSelect, sizeOfBackPortion+1); // also copy '\0'
-				bNewTableReady = sendStmtToOtherNodes(sdbDbId_, pCreateTableTemp, false);
-				RELEASE_MEMORY( pCreateTableTemp );
-			}
-			else	// ALTER TABLE statement, or CREATE TABLE ... SELECT statement has table option "engine=scaledb"
-				bNewTableReady = sendStmtToOtherNodes(sdbDbId_, pCreateTableStmt, false);
-
-
-			// exit early if ALTER TABLE fails in the secondary nodes.
-			if (bNewTableReady)
-				retCode = SUCCESS;
-			else
-				retCode = ALTER_TABLE_FAILED_IN_CLUSTER;
-			if (retCode) {
+			if (!bFlushTableReady) {
 				SDBCommit(sdbUserId_);
 				RELEASE_MEMORY( pCreateTableStmt );
 				DBUG_RETURN( convertToMysqlErrorCode(retCode) );
@@ -3585,8 +3573,9 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 	// Second we add column information to metadata memory
 	errorNum = add_columns_to_table(thd, table_arg, ddlFlag);
 	if (errorNum){
-		SDBRollBack(sdbUserId_); 	 
-		SDBDeleteTable(sdbUserId_, sdbDbId_, pTableName, SDBFLAG_DDL_SECOND_NODE);
+		SDBRollBack(sdbUserId_);	// rollback new table record in transaction
+		//SDBDeleteTable(sdbUserId_, sdbDbId_, pTableName, ddlFlag);
+		SDBDeleteTableById(sdbDbId_, sdbTableNumber_);
 		RELEASE_MEMORY( pCreateTableStmt );
 		DBUG_RETURN(errorNum);
 	}
@@ -3600,16 +3589,18 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 		// create the foreign key metadata
 		errorNum = create_fks(thd, table_arg, pTableName, fkInfoArray, pCreateTableStmt);
 		if (errorNum){
-			SDBRollBack(sdbUserId_); 	 
-			SDBDeleteTable(sdbUserId_, sdbDbId_, pTableName, SDBFLAG_DDL_SECOND_NODE);
+			SDBRollBack(sdbUserId_);	// rollback new table record in transaction
+			//SDBDeleteTable(sdbUserId_, sdbDbId_, pTableName, ddlFlag);
+			SDBDeleteTableById(sdbDbId_, sdbTableNumber_);
 			RELEASE_MEMORY( pCreateTableStmt );
 			DBUG_RETURN(errorNum);
 		}
 
 		errorNum = add_indexes_to_table(thd, table_arg, pTableName, ddlFlag, fkInfoArray);
 		if (errorNum){
-			SDBRollBack(sdbUserId_); 	 
-			SDBDeleteTable(sdbUserId_, sdbDbId_, pTableName, SDBFLAG_DDL_SECOND_NODE);
+			SDBRollBack(sdbUserId_);	// rollback new table record in transaction
+			//SDBDeleteTable(sdbUserId_, sdbDbId_, pTableName, ddlFlag);
+			SDBDeleteTableById(sdbDbId_, sdbTableNumber_);
 			RELEASE_MEMORY( pCreateTableStmt );
 			DBUG_RETURN(errorNum);
 		}
@@ -3627,11 +3618,9 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 	if ( create_info->auto_increment_value != 0)
 		SDBSetAutoIncrBaseValue( sdbDbId_, sdbTableNumber_, create_info->auto_increment_value );
 
-	// now we open all user files within Database sdbDbId_ including the index files.
-	// Need to pass directory path to open files.
-	// The primary node creates the file.  The secondary node will just open the file.
-
-	SDBOpenAllDBFiles(sdbUserId_, sdbDbId_ );
+	// we do NOT open all user files within Database sdbDbId_ .
+	// MySQL query parser will call ::open() method on a need base.
+	//SDBOpenAllDBFiles(sdbUserId_, sdbDbId_ );
 
 #ifdef SDB_DEBUG_LIGHT
 	if (mysqlInterfaceDebugLevel_ > 1) 
@@ -3657,7 +3646,7 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 	// We also need to make sure that the scaledb hint is not found in the user query.
 
 	if ((SDBNodeIsCluster() == true) && (errorNum == 0))
-		if ((sqlCommand == SQLCOM_CREATE_TABLE) && (!(ddlFlag & SDBFLAG_DDL_SECOND_NODE)) && (bCreateTableSelect==false) ) {
+		if ((sqlCommand == SQLCOM_CREATE_TABLE) && (!(ddlFlag & SDBFLAG_DDL_SECOND_NODE)) ) {
 			bool createDatabaseReady = true;
 
 			// if this is the first user table in the database, we need to issue CREATE DATABASE stmt to other nodes.
@@ -3671,13 +3660,32 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 			if ( createDatabaseReady ) {
 				// Now we pass the CREATE TABLE statement to other nodes
 				bool createTableReady = true;
-				if (hasEngineEqualScaledb(pCreateTableStmt) == false) {
-					char* ddlWithEngine = SDBUtilAppendString(thd->query, MYSQL_ENGINE_EQUAL_SCALEDB);
-					createTableReady = sendStmtToOtherNodes(sdbDbId_, ddlWithEngine, false);
-					RELEASE_MEMORY(ddlWithEngine);
-				}
-				else
+				if ( hasEngineEqualScaledb(pCreateTableStmt) ) {
+					// scaledb engine is explicitly specified in DDL
 					createTableReady = sendStmtToOtherNodes(sdbDbId_, thd->query, false); // need to specify DB name for CREATE TABLE stmt
+				}
+				else {
+					// scaledb engine is NOT specified in DDL
+					if (bCreateTableSelect) {
+						// CREATE TABLE ... SELECT statement has no table option "engine=scaledb".  We need to insert it in the middle.
+						// If this approach does not work well, we should prepend "SET SESSION STORAGE_ENGINE = SCALEDB;"
+						// and turn on CLIENT_MULTI_STATEMENTS.  See http://dev.mysql.com/doc/refman/5.1/en/c-api-multiple-queries.html
+						char* pCreateTableTemp = (char*) GET_MEMORY( strlen(pCreateTableStmt) + 17 );
+						size_t sizeOfFrontPortion = (size_t) (pSelect-pCreateTableStmt);
+						size_t sizeOfBackPortion = strlen(pCreateTableStmt) - sizeOfFrontPortion;
+						strncpy(pCreateTableTemp, pCreateTableStmt, sizeOfFrontPortion);
+						strncpy(pCreateTableTemp+sizeOfFrontPortion, MYSQL_ENGINE_EQUAL_SCALEDB, 16);
+						strncpy(pCreateTableTemp+sizeOfFrontPortion+16, pSelect, sizeOfBackPortion+1); // also copy '\0'
+						createTableReady = sendStmtToOtherNodes(sdbDbId_, pCreateTableTemp, false);
+						RELEASE_MEMORY( pCreateTableTemp );
+					}
+					else {
+						// This is the normal CREATE TABLE statement.
+						char* pDdlWithEngine = SDBUtilAppendString(pCreateTableStmt, MYSQL_ENGINE_EQUAL_SCALEDB);
+						createTableReady = sendStmtToOtherNodes(sdbDbId_, pDdlWithEngine, false);
+						RELEASE_MEMORY(pDdlWithEngine);
+					}
+				}
 
 				if ( createTableReady == false )
 					retCode = CREATE_TABLE_FAILED_IN_CLUSTER;
@@ -4123,28 +4131,27 @@ int ha_scaledb::delete_table(const char* name)
 		if ( strstr(thd->query, SCALEDB_HINT_PASS_DDL) != NULL ) {
 			ddlFlag |= SDBFLAG_DDL_SECOND_NODE;
 
-			// For ALTER TABLE stmt, we do not delete the temp table because the corresponding temp table was not created.
-			// We need to commit it to show that ALTER TABLE has finished.
-			if ( (sqlCommand == SQLCOM_ALTER_TABLE) || (sqlCommand == SQLCOM_CREATE_INDEX) || (sqlCommand == SQLCOM_DROP_INDEX) ) { 
-				SDBCommit(sdbUserId_);
-				pSdbMysqlTxn_->setActiveTrn( false );	// mark the end of long implicit transaction
+			// Because we implement close(), secondary node should exit early on all the situations. 
+			SDBCommit(sdbUserId_);
+			pSdbMysqlTxn_->setActiveTrn( false );	// mark the end of long implicit transaction
 #ifdef SDB_DEBUG_LIGHT
-				if (mysqlInterfaceDebugLevel_ > 4) {
-					// print user lock status on the non-primary node
-					SDBDebugStart();			// synchronize threads printout	
-					SDBDebugPrintHeader("In ha_scaledb::delete_table, print user locks imposed by non-primary node ");
-					SDBDebugEnd();			// synchronize threads printout	
-					SDBShowUserLockStatus(sdbUserId_);
-				}
-#endif
-				DBUG_RETURN(errorNum);
+			if (mysqlInterfaceDebugLevel_ > 4) {
+				// print user lock status on the non-primary node
+				SDBDebugStart();			// synchronize threads printout	
+				SDBDebugPrintHeader("In ha_scaledb::delete_table, print user locks imposed by non-primary node ");
+				SDBDebugEnd();			// synchronize threads printout	
+				SDBShowUserLockStatus(sdbUserId_);
 			}
+#endif
+			DBUG_RETURN(errorNum);
 		}
 	}	// if (SDBNodeIsCluster() == true)
 
 	// First we fetch db and table names
 	fetchIdentifierName(name, dbName, tblFsName, pathName); 
 
+	// TODO: may simplify the logic in the remaining code because only primary node and single node will proceed 
+	// after this point.
 	// DROP TABLE: Primary node needs to lock the metadata of the master dbms before opening a user database
 	// DROP TABLE: Secondary nodes do NOT need to lock the metadata any more.
 	// ALTER TABLE and equivalent: primary node imposed lockMetaInfo in ::create()
@@ -4216,8 +4223,17 @@ int ha_scaledb::delete_table(const char* name)
 			retCode = METAINFO_UNDEFINED_DATA_TABLE;
 	}
 
-	// For both DROP TABLE and ALTER TABLE, primary node needs to release lock on MetaInfo
 	if ( !(ddlFlag & SDBFLAG_DDL_SECOND_NODE) ) {
+		// For ALTER TABLE in cluster, this is the last MySQL interface method call.
+		// The primary node now replicates DDL to other nodes.
+		if ( (sqlCommand==SQLCOM_ALTER_TABLE || sqlCommand==SQLCOM_CREATE_INDEX || sqlCommand==SQLCOM_DROP_INDEX) 
+			&& (SDBNodeIsCluster() == true) ) {
+			bool bAlterTableReady = sendStmtToOtherNodes(sdbDbId_, thd->query, false);
+			if (!bAlterTableReady)
+				retCode = ALTER_TABLE_FAILED_IN_CLUSTER;
+		}
+
+		// For both DROP TABLE and ALTER TABLE, primary node needs to release lock on MetaInfo
 		SDBCommit(sdbUserId_);
 		pSdbMysqlTxn_->setActiveTrn( false );	// mark the end of long implicit transaction
 	}
@@ -4280,26 +4296,13 @@ int ha_scaledb::rename_table(const char* fromTable, const char* toTable) {
 	unsigned int sqlCommand = thd_sql_command(thd);
 
 	// If the ddl statement has the key word SCALEDB_HINT_PASS_DDL, then this node
-	// is a non-primary node in cluster systems. We do nothing in the 2nd call for ALTER TABLE stmt
+	// is a non-primary node in cluster systems. We do nothing in the 2nd call for ALTER TABLE stmt.
+	// Secondary node does nothing on all cases. 
 	unsigned short ddlFlag = 0;
 	if (SDBNodeIsCluster() == true)	// if this is a cluster machine
 		if ( strstr(thd->query, SCALEDB_HINT_PASS_DDL) != NULL ) {		// if this is a non-primary node
 			ddlFlag |= SDBFLAG_DDL_SECOND_NODE;
-
-			if ( (sqlCommand==SQLCOM_ALTER_TABLE || sqlCommand==SQLCOM_CREATE_INDEX || sqlCommand==SQLCOM_DROP_INDEX)
-				&& ( strstr(fromTblFsName, MYSQL_TEMP_TABLE_PREFIX) ) ) {
-				// This is the 2nd call on a secondary node.  We do nothing.
-#ifdef SDB_DEBUG_LIGHT
-				if (mysqlInterfaceDebugLevel_ > 4) {
-					// print user lock status on the non-primary node
-					SDBDebugStart();			// synchronize threads printout	
-					SDBDebugPrintHeader("In 2nd call to ha_scaledb::rename_table, print user locks imposed by non-primary node ");
-					SDBDebugEnd();			// synchronize threads printout	
-					SDBShowUserLockStatus(sdbUserId_);
-				}
-#endif
-				DBUG_RETURN(errorNum);
-			}
+			DBUG_RETURN(errorNum);
 		}
 
 	if ( (sdbTableNumber_ == 0) && (!virtualTableFlag_) ) 
@@ -4311,6 +4314,8 @@ int ha_scaledb::rename_table(const char* fromTable, const char* toTable) {
 		DBUG_RETURN(HA_ERR_UNSUPPORTED);
 	}
 
+	// TODO: We can simplify the logic in the remaining code because only primary node and single node will
+	// proceed the remaining code.
 	// RENAME TABLE: Primary node needs to lock the metadata of the master dbms before opening a user database
 	// RENAME TABLE: Secondary nodes do NOT need to lock the metadata any more.
 	// ALTER TABLE: primary node already imposed lockMetaInfo in ::create()
@@ -4322,44 +4327,6 @@ int ha_scaledb::rename_table(const char* fromTable, const char* toTable) {
 
 	sdbDbId_ = SDBOpenDatabase(sdbUserId_, dbName, dbName, ddlFlag);
 	pSdbMysqlTxn_->setScaledbDbId( sdbDbId_ );
-
-	// On a non-primary node in cluster systems, we only need to close the related table files
-	// and clean up the in-memory metadata in the 1st rename_table call.  Then we have an early exit.
-	if ( ddlFlag & SDBFLAG_DDL_SECOND_NODE ) {
-		switch ( sqlCommand ) {
-		case SQLCOM_RENAME_TABLE:
-			SDBCloseFile( sdbDbId_, sdbTableNumber_);
-			retCode = SDBDeleteTableById(sdbDbId_, sdbTableNumber_);
-			break;
-
-		case SQLCOM_ALTER_TABLE:
-		case SQLCOM_CREATE_INDEX:
-		case SQLCOM_DROP_INDEX:
-			if ( strstr(fromTblFsName, MYSQL_TEMP_TABLE_PREFIX) == NULL ) {	
-				// this is first rename_table call for ALTER TABLE stmt on the secondaray node.  
-				// We need to close the table files for the altered table so that
-				// the primary node can delete the files later.
-				SDBCloseFile( sdbDbId_, sdbTableNumber_);
-				retCode = SDBDeleteTableById(sdbDbId_, sdbTableNumber_);
-			}
-			break;
-
-		default:
-			break;
-		}
-
-#ifdef SDB_DEBUG_LIGHT
-		if (mysqlInterfaceDebugLevel_ > 4) {
-			// print user lock status on the non-primary node
-			SDBDebugStart();			// synchronize threads printout	
-			SDBDebugPrintHeader("In 1st call to ha_scaledb::rename_table, print user locks imposed by non-primary node ");
-			SDBDebugEnd();			// synchronize threads printout	
-			SDBShowUserLockStatus(sdbUserId_);
-		}
-#endif
-		errorNum = convertToMysqlErrorCode( retCode );
-		DBUG_RETURN(errorNum);
-	}
 
 	// If a table name has special characters such as $ or + enclosed in back-ticks,
 	// then MySQL encodes the user table name by replacing the special characters with ASCII code.
@@ -4373,32 +4340,6 @@ int ha_scaledb::rename_table(const char* fromTable, const char* toTable) {
 	// when a user has ALTER TABLE or CREATE/DROP INDEX commands.
 	// We also need to make sure that the scaledb hint is not found in the user query.
 	bool renameTableReady = true;
-	if ((SDBNodeIsCluster() == true) && 
-		!(ddlFlag & SDBFLAG_DDL_SECOND_NODE) ) { 
-		bool needToPassDDL = false;
-
-		switch ( sqlCommand ) {
-		case SQLCOM_RENAME_TABLE:
-			needToPassDDL = true;
-			break;
-		case SQLCOM_ALTER_TABLE:
-		case SQLCOM_CREATE_INDEX:
-		case SQLCOM_DROP_INDEX:
-			if ( strstr(fromTblFsName, MYSQL_TEMP_TABLE_PREFIX) == NULL ) {	
-				// this is first rename_table call for ALTER TABLE stmt on the primary node.  
-				// The primary node needs to pass the ALTER TABLE statement to non-primary nodes.
-				// Note that ALTER TABLE statement is replicated exactly once.  It is done here.
-				// TODO: 9/27/2009 Need to clean up.  We move the action passDDL to create().  
-				needToPassDDL = false;
-			}
-			break;
-		default:
-			break;
-		}
-
-		if (needToPassDDL) 
-			renameTableReady = sendStmtToOtherNodes(sdbDbId_, thd->query, false);
-	}
 
 	if ( renameTableReady ) {
 		if ( !(ddlFlag & SDBFLAG_DDL_SECOND_NODE) ) {
@@ -4420,8 +4361,15 @@ int ha_scaledb::rename_table(const char* fromTable, const char* toTable) {
 
 	// RENAME TABLE: primary node needs to release lock on MetaInfo
 	// ALTER TABLE: primary node releases lockMetaInfo in ::delete_table()
-	if ( (!(ddlFlag & SDBFLAG_DDL_SECOND_NODE))  && (sqlCommand==SQLCOM_RENAME_TABLE) )
+	if ( (!(ddlFlag & SDBFLAG_DDL_SECOND_NODE))  && (sqlCommand==SQLCOM_RENAME_TABLE) ) {
+		if ( (SDBNodeIsCluster() == TRUE) && (retCode == SUCCESS) ) {
+			renameTableReady = sendStmtToOtherNodes(sdbDbId_, thd->query, false);
+			if (!renameTableReady)
+				retCode = METAINFO_UNDEFINED_DATA_TABLE;
+		}
+
 		SDBCommit(sdbUserId_);
+	}
 
 	errorNum = convertToMysqlErrorCode( retCode );
 
@@ -4464,7 +4412,9 @@ bool ha_scaledb::sqlStmt(unsigned short dbmsId, char* sqlStmt, bool bIgnoreDB) {
 #endif
 
 	unsigned int  nodesArray[METAINFO_SLM_MAX_NODES];
-	unsigned char numberOfNodes = SDBSetupClusterNodes(nodesArray);
+	unsigned int  portsArray[METAINFO_SLM_MAX_NODES];
+	unsigned char numberOfNodes = SDBSetupClusterNodes(nodesArray,
+                                                           portsArray);
 
 	if (!numberOfNodes){
 		return true;
@@ -4481,7 +4431,7 @@ bool ha_scaledb::sqlStmt(unsigned short dbmsId, char* sqlStmt, bool bIgnoreDB) {
 
 		char ip[64];
         SDBUtilGetIpFromInet(&nodesArray[i], ip, sizeof(ip));
-		int port = SDBGetSystemParamInt("cluster_port", 3306);
+		int port = portsArray[i];
 		char* password = SDBGetSystemParamString("cluster_password");
 		char* user = SDBGetSystemParamString("cluster_user");
 		char* socket = NULL;
