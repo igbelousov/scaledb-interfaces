@@ -1241,10 +1241,11 @@ int ha_scaledb::open(const char *name, int mode, uint test_if_locked) {
 		if ( strstr(thd->query, SCALEDB_HINT_PASS_DDL) != NULL ) {		// if this is a non-primary node
 			bIsPrimaryNode = false;
 
-			// For ALTER TABLE, secondary node should NOT open temp table file.
+			// For ALTER TABLE, secondary node should NOT open table file.
 			// For CREATE TABLE t2 SELECT 1, 'aa'; secondary node should exit early as well.
 			// For CREATE TABLE t2 SELECT * FROM t1, secondary node should continue because we need to open the select-from table.
-			if ( (isAlterTableStmt && openTempFile) ||
+			//if ( (isAlterTableStmt && openTempFile) ||
+			if ( (isAlterTableStmt) ||
 				( (sqlCommand==SQLCOM_CREATE_TABLE) && (pSdbMysqlTxn_->getDdlFlag() & SDBFLAG_DDL_SECOND_NODE) ) )
 				DBUG_RETURN(errorNum);
 		}
