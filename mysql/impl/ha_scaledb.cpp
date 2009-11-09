@@ -282,6 +282,13 @@ static int scaledb_init_func(void *p)
 	}
 
 	ha_scaledb::mysqlInterfaceDebugLevel_ = SDBGetDebugLevel();
+#ifdef SDB_DEBUG_LIGHT
+	if (ha_scaledb::mysqlInterfaceDebugLevel_) {
+		SDBDebugStart();			// synchronize threads printout	
+		SDBDebugPrintString("\nMySQL Interface: executing scaledb_init_func()");
+		SDBDebugEnd();			// synchronize threads printout	
+	}
+#endif
 
 	DBUG_RETURN(0);
 }
@@ -289,9 +296,16 @@ static int scaledb_init_func(void *p)
 
 static int scaledb_done_func(void *p)
 {
-	int error= 0;
 	DBUG_ENTER("scaledb_done_func");
+#ifdef SDB_DEBUG_LIGHT
+	if (ha_scaledb::mysqlInterfaceDebugLevel_) {
+		SDBDebugStart();			// synchronize threads printout	
+		SDBDebugPrintString("\nMySQL Interface: executing scaledb_done_func()");
+		SDBDebugEnd();			// synchronize threads printout	
+	}
+#endif
 
+	int error= 0;
 	if ( !SDBStorageEngineIsInited() )
 		DBUG_RETURN(0);
 
@@ -299,11 +313,9 @@ static int scaledb_done_func(void *p)
 		error= 1;
 
 	hash_free(&scaledb_open_tables);
-
 	SDBGlobalEnd();
 
 	pthread_mutex_destroy(&scaledb_mutex);
-
 	DBUG_RETURN(0);
 }
 
@@ -1333,28 +1345,36 @@ int ha_scaledb::open(const char *name, int mode, uint test_if_locked) {
 int ha_scaledb::close(void) {
 	DBUG_ENTER("ha_scaledb::close");
 	print_header_thread_info("MySQL Interface: executing ha_scaledb::close(...) ");
+	unsigned int userId = 0;
 
 	THD* thd = ha_thd();
-	placeSdbMysqlTxnInfo( thd );
+	if (thd) {
+		// thd is defined.  In this case, a user executes a DDL.
+		placeSdbMysqlTxnInfo( thd );
 
-	unsigned int sqlCommand = thd_sql_command(thd);
-	bool isAlterTableStmt = false;
-	if (sqlCommand==SQLCOM_ALTER_TABLE || sqlCommand==SQLCOM_CREATE_INDEX || sqlCommand==SQLCOM_DROP_INDEX)
-		isAlterTableStmt = true;
+		unsigned int sqlCommand = thd_sql_command(thd);
+		bool isAlterTableStmt = false;
+		if (sqlCommand==SQLCOM_ALTER_TABLE || sqlCommand==SQLCOM_CREATE_INDEX || sqlCommand==SQLCOM_DROP_INDEX)
+			isAlterTableStmt = true;
 
-	// For ALTER TABLE, CREATE/DROP INDEX, secondary node should not close table because the temp table
-	// was never created and the table-to-be-altered is already closed in FLUSH TABLE statement.
-	// For CREATE TABLE ... SELECT statement, secondary node should exit early because the new table
-	// has not been committed by primary node.
-	if ( SDBNodeIsCluster() && (strstr(thd->query, SCALEDB_HINT_PASS_DDL) != NULL) ) {
-		if ( (isAlterTableStmt) || (sqlCommand==SQLCOM_CREATE_TABLE) )
-			DBUG_RETURN(free_share(share));
+		// For ALTER TABLE, CREATE/DROP INDEX, secondary node should not close table because the temp table
+		// was never created and the table-to-be-altered is already closed in FLUSH TABLE statement.
+		// For CREATE TABLE ... SELECT statement, secondary node should exit early because the new table
+		// has not been committed by primary node.
+		if ( SDBNodeIsCluster() && (strstr(thd->query, SCALEDB_HINT_PASS_DDL) != NULL) ) {
+			if ( (isAlterTableStmt) || (sqlCommand==SQLCOM_CREATE_TABLE) )
+				DBUG_RETURN(free_share(share));
+		}
+
+		userId = sdbUserId_;
 	}
+	else	// thd is NOT defined.  A system thread closes the opened tables.  Bug 969
+		userId = 1;	// this is system user ID
 
 	// MySQL may call this method multiple times on same table if a table is referenced more than
 	// one time in a previous SQL statement.  Example: INSERT INTO tbug261 SELECT  a + 1 , b FROM tbug261;
 	// Need call SDBCloseTable insead of SDBCloseFile so that ScaleDB engine tolerates multiple calls of this method.
-	SDBCloseTable(sdbUserId_, sdbDbId_, table->s->table_name.str);
+	SDBCloseTable(userId, sdbDbId_, table->s->table_name.str);
 
 	DBUG_RETURN(free_share(share));
 }
