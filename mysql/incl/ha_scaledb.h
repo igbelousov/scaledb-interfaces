@@ -313,11 +313,13 @@ public:
     // give records count
     ha_rows records();
 
-    // disable keys
-    int disable_indexes(uint mode);
+    // disable keys -- only myisam supports this.  Other storage engines do NOT support it.
+	// need to comment out this method as it does not work well with foreign key constraint
+    //int disable_indexes(uint mode);
 
-    // enable keys
-    int enable_indexes(uint mode);
+    // enable keys -- only myisam supports this.  Other storage engines do NOT support it.
+	// need to comment out this method as it does not work well with foreign key constraint
+    //int enable_indexes(uint mode);
 };
 
 #endif	// SDB_MYSQL

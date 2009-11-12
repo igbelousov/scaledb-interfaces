@@ -2173,6 +2173,24 @@ int ha_scaledb::copyRowToMySQLBuffer(unsigned char* buf) {
 		}
 
 		placeEngineFieldInMysqlBuffer(pFieldBuf, pSdbField, pField);
+
+#ifdef SDB_BUG974
+		if (fieldId < 5) {	// enable this code only when you debug Bug974
+			SDBDebugStart();			// synchronize threads printout	
+            int intValue = *((int *)pSdbField);
+			if (fieldId == 1) {
+                if (intValue == 5000) {
+				    SDBDebugPrintHeader("This is last record in the test case: ");
+                    SDBDebugPrintString("can set a breakpoint here."); // set a breakpoint here
+                }
+				SDBDebugPrintHeader("adm_note_id=");
+            }
+
+			SDBDebugPrintInt( intValue );
+			SDBDebugPrintString(", ");
+			SDBDebugEnd();			// synchronize threads printout	
+		}
+#endif
 	}
 
 	table->status = 0;
@@ -4867,67 +4885,72 @@ double ha_scaledb::read_time(uint inx, uint ranges, ha_rows rows) {
 	return ( ((double) ranges) + rowsFactor) ;
 }
 
-/*
-Disable indexes, making it persistent if requested.
-*/
-int ha_scaledb::disable_indexes(uint mode)
-{
-#ifdef SDB_DEBUG_LIGHT
-	if (mysqlInterfaceDebugLevel_) {
-		SDBDebugStart();			// synchronize threads printout	
-		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::disable_indexes(...) ");
-		if (mysqlInterfaceDebugLevel_>1) outputHandleAndThd();
-		SDBDebugEnd();			// synchronize threads printout	
-	}
-#endif
 
-	int errorNum = HA_ERR_WRONG_COMMAND;
+// TODO: need to comment out these 2 methods as it does not work well with foreign key constraint
+//-- only myisam supports this.  Other storage engines do NOT support it.
+// Do NOT remove the code yet as we may enable them in the future.
+///*
+//Disable indexes, making it persistent if requested.
+//*/
+//int ha_scaledb::disable_indexes(uint mode)
+//{
+//#ifdef SDB_DEBUG_LIGHT
+//	if (mysqlInterfaceDebugLevel_) {
+//		SDBDebugStart();			// synchronize threads printout	
+//		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::disable_indexes(...) ");
+//		if (mysqlInterfaceDebugLevel_>1) outputHandleAndThd();
+//		SDBDebugEnd();			// synchronize threads printout	
+//	}
+//#endif
+//
+//	int errorNum = HA_ERR_WRONG_COMMAND;
+//
+//	// This is not a normal ALTER TABLE statement.  It is DISABLE KEYS
+//	pSdbMysqlTxn_->setOrOpDdlFlag( (unsigned short)SDBFLAG_ALTER_TABLE_KEYS );
+//
+//	if (mode == HA_KEY_SWITCH_ALL || mode == HA_KEY_SWITCH_NONUNIQ_SAVE) {
+//
+//		// impose exclusive table level lock for ALTER TABLE DISABLE KEYS statement.
+//		// MySQL will later issue commit command to release the lock.
+//		if (SDBLockTable(sdbUserId_, sdbDbId_, sdbTableNumber_, REFERENCE_LOCK_EXCLUSIVE) == true)
+//			errorNum = SDBDisableTableIndexes(sdbUserId_, sdbDbId_, table->s->table_name.str);
+//		else
+//			errorNum = HA_ERR_LOCK_WAIT_TIMEOUT;
+//	}
+//
+//	return errorNum;
+//}
+//
+//
+///*
+//Enable indexes, making it persistent if requested.
+//*/
+//int ha_scaledb::enable_indexes(uint mode)
+//{
+//#ifdef SDB_DEBUG_LIGHT
+//	if (mysqlInterfaceDebugLevel_) {
+//		SDBDebugStart();			// synchronize threads printout	
+//		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::enable_indexes(...) ");
+//		if (mysqlInterfaceDebugLevel_>1) outputHandleAndThd();
+//		SDBDebugEnd();			// synchronize threads printout	
+//	}
+//#endif
+//
+//	int errorNum = HA_ERR_WRONG_COMMAND;
+//
+//	// This is not a normal ALTER TABLE statement.  It is ENABLE KEYS
+//	pSdbMysqlTxn_->setOrOpDdlFlag( (unsigned short)SDBFLAG_ALTER_TABLE_KEYS );
+//
+//	// impose exclusive table level lock for ALTER TABLE ENABLE KEYS statement.
+//	// MySQL will later issue commit command to release the lock.
+//	if (SDBLockTable(sdbUserId_, sdbDbId_, sdbTableNumber_, REFERENCE_LOCK_EXCLUSIVE) == true)
+//		errorNum = SDBEnableTableIndexes(sdbUserId_, sdbDbId_, table->s->table_name.str);
+//	else
+//		errorNum = HA_ERR_LOCK_WAIT_TIMEOUT;
+//
+//	return errorNum;
+//}
 
-	// This is not a normal ALTER TABLE statement.  It is DISABLE KEYS
-	pSdbMysqlTxn_->setOrOpDdlFlag( (unsigned short)SDBFLAG_ALTER_TABLE_KEYS );
-
-	if (mode == HA_KEY_SWITCH_ALL || mode == HA_KEY_SWITCH_NONUNIQ_SAVE) {
-
-		// impose exclusive table level lock for ALTER TABLE DISABLE KEYS statement.
-		// MySQL will later issue commit command to release the lock.
-		if (SDBLockTable(sdbUserId_, sdbDbId_, sdbTableNumber_, REFERENCE_LOCK_EXCLUSIVE) == true)
-			errorNum = SDBDisableTableIndexes(sdbUserId_, sdbDbId_, table->s->table_name.str);
-		else
-			errorNum = HA_ERR_LOCK_WAIT_TIMEOUT;
-	}
-
-	return errorNum;
-}
-
-
-/*
-Enable indexes, making it persistent if requested.
-*/
-int ha_scaledb::enable_indexes(uint mode)
-{
-#ifdef SDB_DEBUG_LIGHT
-	if (mysqlInterfaceDebugLevel_) {
-		SDBDebugStart();			// synchronize threads printout	
-		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::enable_indexes(...) ");
-		if (mysqlInterfaceDebugLevel_>1) outputHandleAndThd();
-		SDBDebugEnd();			// synchronize threads printout	
-	}
-#endif
-
-	int errorNum = HA_ERR_WRONG_COMMAND;
-
-	// This is not a normal ALTER TABLE statement.  It is ENABLE KEYS
-	pSdbMysqlTxn_->setOrOpDdlFlag( (unsigned short)SDBFLAG_ALTER_TABLE_KEYS );
-
-	// impose exclusive table level lock for ALTER TABLE ENABLE KEYS statement.
-	// MySQL will later issue commit command to release the lock.
-	if (SDBLockTable(sdbUserId_, sdbDbId_, sdbTableNumber_, REFERENCE_LOCK_EXCLUSIVE) == true)
-		errorNum = SDBEnableTableIndexes(sdbUserId_, sdbDbId_, table->s->table_name.str);
-	else
-		errorNum = HA_ERR_LOCK_WAIT_TIMEOUT;
-
-	return errorNum;
-}
 
 // returns estimated records in range
 ha_rows ha_scaledb::records_in_range(uint inx, key_range* min_key, key_range* max_key) {
