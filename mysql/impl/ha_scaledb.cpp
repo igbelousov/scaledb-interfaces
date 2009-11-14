@@ -603,7 +603,13 @@ static int scaledb_commit(
 
 	MysqlTxn* userTxn = (MysqlTxn *) *thd_ha_data(thd, hton);
 
-	if (all || (!thd_test_options(thd, OPTION_NOT_AUTOCOMMIT | OPTION_BEGIN | OPTION_TABLE_LOCK))) {
+	unsigned int userId = userTxn->getScaleDbUserId();
+	unsigned int sqlCommand = thd_sql_command(thd);
+	if (sqlCommand == SQLCOM_LOCK_TABLES)
+		DBUG_RETURN(0);		// do nothing if it is a LOCK TABLES statement. 
+
+	if (all || (!thd_test_options(thd, OPTION_NOT_AUTOCOMMIT | OPTION_BEGIN ))) {
+		// should see how innobase_commit sets the condition for reference.
 		// we need to commit txn under either of these two conditions:
 		// (a) A user issues commit statement
 		// (b) a user issues a single SQL statement with autocommit=1
@@ -611,10 +617,10 @@ static int scaledb_commit(
 		// and call this method directly.
 
 		// if ( userTxn != NULL ) {
-		unsigned int userId = userTxn->getScaleDbUserId();
-		unsigned int sqlCommand = thd_sql_command(thd);
+		//if ( (SDBNodeIsCluster() == true) && (!(userTxn->getDdlFlag() & SDBFLAG_ALTER_TABLE_KEYS)) &&
+		//	(sqlCommand==SQLCOM_ALTER_TABLE || sqlCommand==SQLCOM_CREATE_INDEX || sqlCommand==SQLCOM_DROP_INDEX) ) {
 
-		if ( (SDBNodeIsCluster() == true) && (!(userTxn->getDdlFlag() & SDBFLAG_ALTER_TABLE_KEYS)) &&
+		if ( (SDBNodeIsCluster() == true) && (!(userTxn->getDdlFlag() & SDBFLAG_DDL_SECOND_NODE)) &&
 			(sqlCommand==SQLCOM_ALTER_TABLE || sqlCommand==SQLCOM_CREATE_INDEX || sqlCommand==SQLCOM_DROP_INDEX) ) {
 			// For regular ALTER TABLE, primary node will commit in delete_table method which is at very end of processing.
 			// At this point, we only need to sync the changed data pages to disk
@@ -622,7 +628,7 @@ static int scaledb_commit(
 		}
 		else {
 			// For all other cases, we should perform the normal commit.
-			// This includes ALTER TABLE ENABLE KEYS statement.
+			// This includes UNLOCK TABLE statement to release locks.
 			SDBCommit( userId );
 			// After calling commit(), lockCount_ should be 0 except ALTER TABLE, CREATE/DROP INDEX.
 			userTxn->lockCount_ = 0;
@@ -1120,7 +1126,7 @@ int ha_scaledb::external_lock(
 		trans_register_ha(thd, false, ht);
 		}
 		*/
-	} else {
+	} else {	// need to release locks
 		beginningOfScan_ = false;
 		if ( pSdbMysqlTxn_->lockCount_ > 0 ) {
 
@@ -3709,6 +3715,8 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 						// CREATE TABLE ... SELECT statement has no table option "engine=scaledb".  We need to insert it in the middle.
 						// If this approach does not work well, we should prepend "SET SESSION STORAGE_ENGINE = SCALEDB;"
 						// and turn on CLIENT_MULTI_STATEMENTS.  See http://dev.mysql.com/doc/refman/5.1/en/c-api-multiple-queries.html
+                        // A better way is to revise SdbMysqlClient::executeQuery so that we send out statement
+                        // "SET SESSION STORAGE_ENGINE = SCALEDB;" first, and then send out real query.
 						char* pCreateTableTemp = (char*) GET_MEMORY( strlen(pCreateTableStmt) + 17 );
 						size_t sizeOfFrontPortion = (size_t) (pSelect-pCreateTableStmt);
 						size_t sizeOfBackPortion = strlen(pCreateTableStmt) - sizeOfFrontPortion;
@@ -3719,10 +3727,19 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 						RELEASE_MEMORY( pCreateTableTemp );
 					}
 					else {
-						// This is the normal CREATE TABLE statement.
-						char* pDdlWithEngine = SDBUtilAppendString(pCreateTableStmt, MYSQL_ENGINE_EQUAL_SCALEDB);
-						createTableReady = sendStmtToOtherNodes(sdbDbId_, pDdlWithEngine, false);
-						RELEASE_MEMORY(pDdlWithEngine);
+                        // For CREATE TABLE ... LIKE ... statement, it cannot have table engine option
+                        char* pLikeKeyWord = strstr(pCreateTableStmt, "like ");
+
+                        if (pLikeKeyWord) {
+                            // This is the CREATE TABLE ... LIKE ... statement.  Send the user query without change
+    						createTableReady = sendStmtToOtherNodes(sdbDbId_, thd->query, false);
+                        }
+                        else {
+    						// This is the normal CREATE TABLE statement.  Add 'engine=scaledb'
+    						char* pDdlWithEngine = SDBUtilAppendString(pCreateTableStmt, MYSQL_ENGINE_EQUAL_SCALEDB);
+    						createTableReady = sendStmtToOtherNodes(sdbDbId_, pDdlWithEngine, false);
+    						RELEASE_MEMORY(pDdlWithEngine);
+					    }
 					}
 				}
 
