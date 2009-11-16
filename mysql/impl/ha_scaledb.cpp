@@ -1078,7 +1078,11 @@ int ha_scaledb::external_lock(
 					DBUG_RETURN(HA_ERR_LOCK_WAIT_TIMEOUT);
 
 				pSdbMysqlTxn_->addLockTableName( table->s->table_name.str );
-			}
+
+				// Need to register with MySQL for the beginning of a transaction so that we will be called
+				// to perform commit/rollback statements issued by end users.  LOCK TABLES implies a transaction.
+				trans_register_ha(thd, true, ht);
+			} 
 		}
 		else {	// the normal case
 			if ( pSdbMysqlTxn_->lockCount_ == 0 ) {
@@ -1116,7 +1120,7 @@ int ha_scaledb::external_lock(
 
 		trans_register_ha(thd, false, ht);
 
-		if (thd_test_options(thd, OPTION_NOT_AUTOCOMMIT | OPTION_BEGIN | OPTION_TABLE_LOCK)) {
+		if (thd_test_options(thd, OPTION_NOT_AUTOCOMMIT | OPTION_BEGIN)) {
 			trans_register_ha(thd, true, ht);
 		}
 
