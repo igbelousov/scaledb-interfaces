@@ -209,6 +209,7 @@ static uchar* scaledb_get_key(SCALEDB_SHARE *share, size_t* length,
 							  my_bool not_used __attribute__((unused)))
 {
 #ifdef SDB_DEBUG_LIGHT
+
 	if (ha_scaledb::mysqlInterfaceDebugLevel_) {
 		SDBDebugStart();
 		SDBDebugPrintHeader("MySQL Interface: executing scaledb_get_key(...) ");
@@ -1224,6 +1225,7 @@ int ha_scaledb::open(const char *name, int mode, uint test_if_locked) {
 	DBUG_ENTER("ha_scaledb::open");
 
 #ifdef SDB_DEBUG_LIGHT
+
 	if (mysqlInterfaceDebugLevel_) {
 		print_header_thread_info("MySQL Interface: executing ha_scaledb::open");
 		SDBDebugStart();
