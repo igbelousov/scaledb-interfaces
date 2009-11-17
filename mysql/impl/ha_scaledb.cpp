@@ -621,15 +621,19 @@ static int scaledb_commit(
 		//if ( (SDBNodeIsCluster() == true) && (!(userTxn->getDdlFlag() & SDBFLAG_ALTER_TABLE_KEYS)) &&
 		//	(sqlCommand==SQLCOM_ALTER_TABLE || sqlCommand==SQLCOM_CREATE_INDEX || sqlCommand==SQLCOM_DROP_INDEX) ) {
 
-		if ( (SDBNodeIsCluster() == true) && (!(userTxn->getDdlFlag() & SDBFLAG_DDL_SECOND_NODE)) &&
-			(sqlCommand==SQLCOM_ALTER_TABLE || sqlCommand==SQLCOM_CREATE_INDEX || sqlCommand==SQLCOM_DROP_INDEX) ) {
+		if ( (SDBNodeIsCluster() == true) && 
+			 (!(userTxn->getDdlFlag() & SDBFLAG_DDL_SECOND_NODE)) &&
+			 ((sqlCommand==SQLCOM_ALTER_TABLE || sqlCommand==SQLCOM_CREATE_INDEX || sqlCommand==SQLCOM_DROP_INDEX) 
+				&& (userTxn->getDdlFlag() & SDBFLAG_ALTER_TABLE_CREATE) ) // ensure that commit is called inside processing ALTER TABLE
+			) {
 			// For regular ALTER TABLE, primary node will commit in delete_table method which is at very end of processing.
-			// At this point, we only need to sync the changed data pages to disk
+			// At this point, we only need to sync the changed data pages to disk.
 			SDBSyncToDisk( userId );
 		}
 		else {
 			// For all other cases, we should perform the normal commit.
 			// This includes UNLOCK TABLE statement to release locks.
+			// This also includes the case that, when auto_commit==0, an additional commit method is called before ALTER TABLE is executed.
 			SDBCommit( userId );
 			// After calling commit(), lockCount_ should be 0 except ALTER TABLE, CREATE/DROP INDEX.
 			userTxn->lockCount_ = 0;
@@ -3529,6 +3533,12 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 	}
 
 	unsigned int sqlCommand = thd_sql_command(thd);
+
+	// signal that we have reached ::create method in processing ALTER TABLE statement.
+	// This flag is checked in scaledb_commit method if it is called before running an ALTER TABLE statement.
+	if (sqlCommand==SQLCOM_ALTER_TABLE || sqlCommand==SQLCOM_CREATE_INDEX || sqlCommand==SQLCOM_DROP_INDEX)
+		pSdbMysqlTxn_->setOrOpDdlFlag( (unsigned short)SDBFLAG_ALTER_TABLE_CREATE );
+
 	if (ddlFlag & SDBFLAG_DDL_SECOND_NODE) {
 		// For CREATE TABLE statement, secondary node does not need to open table.  MySQL will later issue open() call if needed.  
 		// For ALTER TABLE statement, secondary node need to exit without creating the temporary table.
