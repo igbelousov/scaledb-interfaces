@@ -32,11 +32,13 @@
 #endif
 
 #include "mysql.h"
+#include "string.h"
 
 
 // it appears that this is required for making mysql client thread safe
 // see http://lists.mysql.com/internals/36147
 #define MYSQL_SERVER 1
+#define SET_STORAGE_ENGINE_SCALEDB "SET SESSION STORAGE_ENGINE=SCALEDB"
 
 class SdbMysqlClient {
 
@@ -45,7 +47,7 @@ public:
 	SdbMysqlClient(char* host, char* user, char* password, char* dbName, char* socket, unsigned int port, unsigned char debugLevel);
 	~SdbMysqlClient();
 	
-	int executeQuery(char* query, unsigned long length);
+	int executeQuery(char* query, unsigned long length, bool bEngineOption);
 
 private:
 

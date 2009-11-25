@@ -46,7 +46,8 @@
 #define SCALEDB_HINT_PASS_DDL	" /*SCALEDBHINT: PASS DDL*/"
 #define SCALEDB_HINT_CLOSEFILE	" /*SCALEDBHINT: CLOSEFILE*/"
 #define SCALEDB_HINT_OPENFILE	" /*SCALEDBHINT: OPENFILE*/"
-#define MYSQL_TEMP_TABLE_PREFIX "#sql"
+#define MYSQL_TEMP_TABLE_PREFIX "#sql"		// ususally the first temp table used in ALTER TABLE
+#define MYSQL_TEMP_TABLE_PREFIX2 "#sql2"	// the second temp table used in ALTER TABLE statement
 #define MYSQL_ENGINE_EQUAL_SCALEDB " engine=scaledb "	// 16 bytes
 
 /*
@@ -290,7 +291,7 @@ public:
 
 	// this function is called to issue DDL statements to the other nodes on a cluster
 	// This function is static because other static functions will call it.
-	static bool sqlStmt(unsigned short dbmsId, char* sqlStmt, bool bIgnoreDB=false);
+	static bool sqlStmt(unsigned short dbmsId, char* sqlStmt, bool bIgnoreDB=false, bool bEngineOption=false);
 
     // return last key which actually resulted in an error (duplicate error)
     unsigned short get_last_index_error_key();

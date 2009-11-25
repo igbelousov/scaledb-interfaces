@@ -38,7 +38,7 @@ SdbMysqlClient::~SdbMysqlClient(){
 // public function to connect and execute a query on a generic RDBMS system
 // 0 is success, other numbers are failure codes
 //////////////////////////////////////////////////////////////////////
-int SdbMysqlClient::executeQuery(char* query, unsigned long length){
+int SdbMysqlClient::executeQuery(char* query, unsigned long length, bool bEngineOption){
 
 #ifdef SDB_DEBUG
 	if (debugLevel_) {
@@ -56,9 +56,16 @@ int SdbMysqlClient::executeQuery(char* query, unsigned long length){
 		}
 	}
 
-	int result = sendQuery(query, length);
+	int retCode = 0;
 
-	return result;
+	if (bEngineOption == true) {
+		retCode = sendQuery( SET_STORAGE_ENGINE_SCALEDB, strlen(SET_STORAGE_ENGINE_SCALEDB) );
+		if (retCode)
+			return retCode;
+	}
+
+	retCode = sendQuery(query, length);
+	return retCode;
 }
 
 //////////////////////////////////////////////////////////////////////
