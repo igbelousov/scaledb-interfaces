@@ -77,10 +77,21 @@ MysqlTxn::~MysqlTxn() {   // destructor
 // Note that the table handler can determine the table name, table alias name.
 // Using table handler can uniquely define the right table object currently being used by MySQL query processor.
 void MysqlTxn::addQueryManagerId(bool isRealIndex, char* pDesignatorName, void* pHandler, char* pKey, 
-								 unsigned int aKenLength, unsigned short aQueryMgrId) {
+				unsigned int aKenLength, unsigned short aQueryMgrId, unsigned char mysqlInterfaceDebugLevel) {
 	//queryMgrArray_[QueryManagerIdCount_].pMetaInfo_ = pMetaInfo;
 	queryMgrArray_[QueryManagerIdCount_].queryMgrId_ = aQueryMgrId;
 	queryMgrArray_[QueryManagerIdCount_].pDesignatorName_ = SDBUtilDuplicateString(pDesignatorName);
+#ifdef SDB_DEBUG_LIGHT
+	if (mysqlInterfaceDebugLevel > 1) {
+		SDBDebugStart();			// synchronize threads printout	
+		SDBDebugPrintHeader("MysqlTxn::addQueryManagerId, add new designator ");
+		SDBDebugPrintString( queryMgrArray_[QueryManagerIdCount_].pDesignatorName_ );
+		SDBDebugPrintString(" pHandler= ");
+		SDBDebugPrintPointer( pHandler );
+		SDBDebugEnd();			// synchronize threads printout	
+	}
+#endif
+
 	if ( isRealIndex )
 		queryMgrArray_[QueryManagerIdCount_].designatorId_ = SDBGetIndexNumberByName(scaledbDbId_, pDesignatorName);
 	else
@@ -115,10 +126,20 @@ unsigned short MysqlTxn::findQueryManagerId(char* aDesignatorName, void* pHandle
 }
 
 
-void MysqlTxn::freeAllQueryManagerIds() {
+void MysqlTxn::freeAllQueryManagerIds(unsigned char mysqlInterfaceDebugLevel) {
 	for (int i=0; i < QueryManagerIdCount_; ++i) {
 		SDBCloseQueryManager(queryMgrArray_[i].queryMgrId_  );
 
+#ifdef SDB_DEBUG_LIGHT
+		if (mysqlInterfaceDebugLevel > 1) {
+			SDBDebugStart();			// synchronize threads printout	
+			SDBDebugPrintHeader("MysqlTxn::freeAllQueryManagerIds, release designator ");
+			SDBDebugPrintString( queryMgrArray_[i].pDesignatorName_ );
+			SDBDebugPrintString(" pHandler= ");
+			SDBDebugPrintPointer( queryMgrArray_[i].pHandler_ );
+			SDBDebugEnd();			// synchronize threads printout	
+		}
+#endif
 		RELEASE_MEMORY( queryMgrArray_[i].pDesignatorName_ );
         queryMgrArray_[i].pHandler_ = NULL;
 		queryMgrArray_[i].pKey_ = NULL;

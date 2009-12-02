@@ -92,12 +92,12 @@ public:
 
 	// save the query manager id for a given designator in a given table handler
 	void addQueryManagerId(bool isRealIndex, char* pDesignatorName, void* pHandler, char* pKey, 
-			unsigned int aKenLength, unsigned short aQueryMgrId);
+			unsigned int aKenLength, unsigned short aQueryMgrId, unsigned char mysqlInterfaceDebugLevel=0);
 	// Find the query manager id based on the designator name for a given table handler
 	unsigned short findQueryManagerId(char* aDesignatorName, void* pHandler, char* aKey, 
 			unsigned int aKenLength, bool virtualTableFlag = false);
 
-	void freeAllQueryManagerIds();
+	void freeAllQueryManagerIds(unsigned char mysqlInterfaceDebugLevel=0);
 	char* getDesignatorNameByQueryMrgId(unsigned short aQueryMgrId);
 	unsigned short getDesignatorIdByQueryMrgId(unsigned short aQueryMgrId);
 

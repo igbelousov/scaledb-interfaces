@@ -1059,7 +1059,7 @@ int ha_scaledb::external_lock(
 		// Hence we need to call commit() to release table locks if this is the last unlock table and it is not
 		// in a transaction.
 		if ( retValue && (pSdbMysqlTxn_->numberOfLockTables_ == 0) && (pSdbMysqlTxn_->getActiveTxn() == false) ) {
-			pSdbMysqlTxn_->freeAllQueryManagerIds();
+			pSdbMysqlTxn_->freeAllQueryManagerIds(mysqlInterfaceDebugLevel_);
 			scaledb_commit(ht, thd, true);
 		}
 
@@ -1146,7 +1146,7 @@ int ha_scaledb::external_lock(
 		}
 
 		if ( pSdbMysqlTxn_->lockCount_ == 0 ) {  // TBD: If the lockCount_ is not correct, then we may have QueryManagerId not released
-			pSdbMysqlTxn_->freeAllQueryManagerIds();
+			pSdbMysqlTxn_->freeAllQueryManagerIds(mysqlInterfaceDebugLevel_);
 			if ( !thd_test_options(thd, OPTION_NOT_AUTOCOMMIT | OPTION_BEGIN) ) {	// in auto_commit mode
 
 				// MySQL query processor does NOT execute autocommit for pure SELECT transactions.
@@ -1739,7 +1739,7 @@ void ha_scaledb::update_create_info(HA_CREATE_INFO* create_info) {
 	// since external lock is not called in this case we need to free the query manager's here
 	// to avoid memory leak
 	unsigned int sqlCommand = thd_sql_command(thd);
-	pSdbMysqlTxn_->freeAllQueryManagerIds();
+	pSdbMysqlTxn_->freeAllQueryManagerIds(mysqlInterfaceDebugLevel_);
 	if ( !thd_test_options(thd, OPTION_NOT_AUTOCOMMIT | OPTION_BEGIN) ) {	// in auto_commit mode
 
 		// We need to call commit() method to release locks imposed by records().
@@ -2423,7 +2423,8 @@ void ha_scaledb::prepareIndexOrSequentialQueryManager()
 		sdbQueryMgrId_ = pSdbMysqlTxn_->findQueryManagerId(designatorName, (void*) this, NULL, 0);
 		if ( !sdbQueryMgrId_ ) {  // need to get a new one and save sdbQueryMgrId_ into MysqlTxn object
 			sdbQueryMgrId_ = SDBGetQueryManagerId(sdbUserId_);
-			pSdbMysqlTxn_->addQueryManagerId(false, designatorName, (void*) this, NULL, 0, sdbQueryMgrId_);  // save sdbQueryMgrId_
+			 // save sdbQueryMgrId_
+			pSdbMysqlTxn_->addQueryManagerId(false, designatorName, (void*) this, NULL, 0, sdbQueryMgrId_, mysqlInterfaceDebugLevel_); 
 		}
 		RELEASE_MEMORY( designatorName );
 		sdbDesignatorName_ = pSdbMysqlTxn_->getDesignatorNameByQueryMrgId(sdbQueryMgrId_);	// point to name string on heap
@@ -2461,7 +2462,7 @@ void ha_scaledb::prepareFirstKeyQueryManager()
 	sdbQueryMgrId_ = pSdbMysqlTxn_->findQueryManagerId(pDesignatorName, (void*) this, (char*)NULL, 0, virtualTableFlag_);
 	if ( !sdbQueryMgrId_ ) {  // need to get a new one and save sdbQueryMgrId_ into MysqlTxn object
 		sdbQueryMgrId_ = SDBGetQueryManagerId(sdbUserId_);
-		pSdbMysqlTxn_->addQueryManagerId(true, pDesignatorName, (void*) this, (char*) NULL, 0, sdbQueryMgrId_);
+		pSdbMysqlTxn_->addQueryManagerId(true, pDesignatorName, (void*) this, (char*) NULL, 0, sdbQueryMgrId_, mysqlInterfaceDebugLevel_);
 	}
 	SDBSetActiveQueryManager(sdbQueryMgrId_); // cache the object for performance
 	sdbDesignatorName_ = pSdbMysqlTxn_->getDesignatorNameByQueryMrgId(sdbQueryMgrId_);
@@ -2476,10 +2477,13 @@ void ha_scaledb::prepareIndexQueryManager(unsigned int indexNum, const uchar* ke
 		char* pTableFsName = SDBGetTableFileSystemNameByTableNumber(sdbDbId_, sdbTableNumber_);
 		char* designatorName = SDBUtilFindDesignatorName(pTableFsName, pKey->name, indexNum);
 
+unsigned int tmpNameSizeA = *(unsigned int *)(designatorName -sizeof(int));	// tmp code
+
 		sdbQueryMgrId_ = pSdbMysqlTxn_->findQueryManagerId(designatorName, (void*) this, (char*) key, key_len, virtualTableFlag_);
 		if ( !sdbQueryMgrId_ ) {  // need to get a new one and save sdbQueryMgrId_ into MysqlTxn object
 			sdbQueryMgrId_ = SDBGetQueryManagerId(sdbUserId_);
-			pSdbMysqlTxn_->addQueryManagerId(true, designatorName, (void*) this, (char*) key, key_len, sdbQueryMgrId_);  // save sdbQueryMgrId_
+			// save sdbQueryMgrId_
+			pSdbMysqlTxn_->addQueryManagerId(true, designatorName, (void*) this, (char*) key, key_len, sdbQueryMgrId_, mysqlInterfaceDebugLevel_);
 		}
 
 #ifdef SDB_DEBUG_LIGHT
@@ -2503,7 +2507,13 @@ void ha_scaledb::prepareIndexQueryManager(unsigned int indexNum, const uchar* ke
 			SDBDebugEnd();			// synchronize threads printout	
 		}
 #endif
+
+unsigned int tmpNameSizeB = *(unsigned int *)(designatorName -sizeof(int));	// tmp code
+
 		RELEASE_MEMORY( designatorName );
+
+unsigned int tmpNameSizeC = *(unsigned int *)(designatorName -sizeof(int));	// tmp code
+
 	}
 
 	sdbDesignatorName_ = pSdbMysqlTxn_->getDesignatorNameByQueryMrgId(sdbQueryMgrId_);
@@ -3127,7 +3137,8 @@ int ha_scaledb::rnd_next(uchar* buf) {
 			sdbQueryMgrId_ = pSdbMysqlTxn_->findQueryManagerId(designatorName, (void*) this, NULL, 0);
 			if ( !sdbQueryMgrId_ ) {  // need to get a new one and save sdbQueryMgrId_ into MysqlTxn object
 				sdbQueryMgrId_ = SDBGetQueryManagerId(sdbUserId_);
-				pSdbMysqlTxn_->addQueryManagerId(false, designatorName, (void*) this, NULL, 0, sdbQueryMgrId_);  // save sdbQueryMgrId_
+				// save sdbQueryMgrId_
+				pSdbMysqlTxn_->addQueryManagerId(false, designatorName, (void*) this, NULL, 0, sdbQueryMgrId_, mysqlInterfaceDebugLevel_);
 			}
 			RELEASE_MEMORY( designatorName );
 			SDBSetActiveQueryManager(sdbQueryMgrId_); // cache the object for performance
