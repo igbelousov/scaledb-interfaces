@@ -1394,13 +1394,19 @@ int ha_scaledb::close(void) {
 
 	// MySQL may call this method multiple times on same table if a table is referenced more than
 	// one time in a previous SQL statement.  Example: INSERT INTO tbug261 SELECT  a + 1 , b FROM tbug261;
-	// Need call SDBCloseTable instead of SDBCloseFile so that ScaleDB engine tolerates multiple calls of this method.
-	// Also MySQL instantiate a table handler object if another user thread is holding a handler object for the same table.
+	// Need to call SDBCloseTable instead of SDBCloseFile so that ScaleDB engine tolerates multiple calls of this method.
+	// Also MySQL instantiates a table handler object if another user thread is holding a handler object for the same table.
 	// MySQL remembers how many handler objects it creates for a given table.  It will call this method one time
 	// for each instantiated table handler.  Hence we remove table information from metainfo for DDL/FLUSH statements only
-	// or this method is called from a system thread (such as mysqladdmin shutdown command).
-	if ( (needToRemoveFromScaledbCache) || (thd == NULL) )
+	// or this method is called from a system thread (such as mysqladmin shutdown command).
+	if ( (needToRemoveFromScaledbCache) || (thd == NULL) ) {
 		SDBCloseTable(userId, sdbDbId_, table->s->table_name.str);
+
+		// For mysqladmin shutdown command, we need to commit because we have some pending locks made in SDBCloseTable call.
+		// Need to call SDBCommit rather than scaledb_commit because the request does not come from a normal MySQL user.
+		if (thd == NULL)
+			SDBCommit( userId );
+	}
 
 	DBUG_RETURN(free_share(share));
 }
