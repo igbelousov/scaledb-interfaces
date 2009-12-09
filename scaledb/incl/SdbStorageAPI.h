@@ -197,6 +197,8 @@ unsigned short SDBGetNumberOfFieldsInTableByTableNumber(unsigned short dbId, uns
 
 // open the table with specified table file name.  This method returns the table id.
 unsigned short SDBOpenTable(unsigned short userId, unsigned short dbId, char *pTableFsName);
+// Use this method to open files related to a table if tableId is known.
+void SDBOpenTableFiles(unsigned short userId, unsigned short dbId, unsigned short tableId);
 // close an open table based on table name (not its file-system-safe name)
 unsigned short SDBCloseTable(unsigned short userId, unsigned short dbId, char *pTableName);
 

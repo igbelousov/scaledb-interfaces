@@ -1343,9 +1343,9 @@ int ha_scaledb::open(const char *name, int mode, uint test_if_locked) {
 			retCode = SDBLockMetaInfo(userIdforOpen, sdbDbId_);
 			if (retCode == SUCCESS) { 
 				if (isAlterTableStmt && openTempFile)
-					SDBOpenTable(sdbUserId_, sdbDbId_, tblFsName);
+					sdbTableNumber_ = SDBOpenTable(sdbUserId_, sdbDbId_, tblFsName);
 				else	// outside of a user transaction
-					SDBOpenTable(userIdforOpen, sdbDbId_, tblFsName);	
+					sdbTableNumber_ = SDBOpenTable(userIdforOpen, sdbDbId_, tblFsName);	
 			}
 		}
 
@@ -1353,15 +1353,15 @@ int ha_scaledb::open(const char *name, int mode, uint test_if_locked) {
 		// Secondary node should NOT open the new table which is inside of external_lock pair.
 		if ( (sqlCommand==SQLCOM_CREATE_TABLE) && (bIsPrimaryNode==false)
 			&& (pSdbMysqlTxn_->getDdlFlag() == 0) )		// this condition says the to-be-opened table is outside external_lock pair
-			SDBOpenTable(userIdforOpen, sdbDbId_, tblFsName);
+			sdbTableNumber_ = SDBOpenTable(userIdforOpen, sdbDbId_, tblFsName);
 	}
 	else {	// on a single node solution
 		retCode = SDBLockMetaInfo(userIdforOpen, sdbDbId_);
 		if (retCode == SUCCESS) {
 			if (isAlterTableStmt && openTempFile)
-				SDBOpenTable(sdbUserId_, sdbDbId_, tblFsName);
+				sdbTableNumber_ = SDBOpenTable(sdbUserId_, sdbDbId_, tblFsName);
 			else	// outside of a user transaction
-				SDBOpenTable(userIdforOpen, sdbDbId_, tblFsName);	
+				sdbTableNumber_ = SDBOpenTable(userIdforOpen, sdbDbId_, tblFsName);	
 		}
 	}
 
@@ -3734,10 +3734,9 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 		SDBSetAutoIncrBaseValue( sdbDbId_, sdbTableNumber_, create_info->auto_increment_value );
 
 	// Bug 1008: A user may CREATE TABLE and then RENAME TABLE immediately. 
-	// In order to fix this bug, we need to open the table so that the table files can be created.
-	// Then we can rename the table files.
+	// In order to fix this bug, we need to open and create the table files. Then we can rename the table files.
 	if ( sqlCommand == SQLCOM_CREATE_TABLE ) {
-		SDBOpenTable(sdbUserId_, sdbDbId_, tblFsName);
+		SDBOpenTableFiles(sdbUserId_, sdbDbId_, sdbTableNumber_);
 		SDBCloseTable(sdbUserId_, sdbDbId_, pTableName);
 	}
 
