@@ -38,7 +38,7 @@ SdbMysqlClient::~SdbMysqlClient(){
 // public function to connect and execute a query on a generic RDBMS system
 // 0 is success, other numbers are failure codes
 //////////////////////////////////////////////////////////////////////
-int SdbMysqlClient::executeQuery(char* query, unsigned long length, bool bEngineOption){
+int SdbMysqlClient::executeQuery(char* query, unsigned long length){
 
 #ifdef SDB_DEBUG
 	if (debugLevel_) {
@@ -56,16 +56,9 @@ int SdbMysqlClient::executeQuery(char* query, unsigned long length, bool bEngine
 		}
 	}
 
-	int retCode = 0;
+	int result = sendQuery(query, length);
 
-	if (bEngineOption == true) {
-		retCode = sendQuery( SET_STORAGE_ENGINE_SCALEDB, strlen(SET_STORAGE_ENGINE_SCALEDB) );
-		if (retCode)
-			return retCode;
-	}
-
-	retCode = sendQuery(query, length);
-	return retCode;
+	return result;
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -113,27 +106,13 @@ bool SdbMysqlClient::connect(){
 		return result;
 	}
 
-	// If other nodes take a long time to return the query result, we may get error 1159
-	// (Got timeout reading communication packets ) issued by the method cli_read_query_result in client.c file.  
-	// To play safe, we set the connect timeout to an high limit in case the server is very busy.  
-#ifdef SDB_DEBUG
-	unsigned int timeoutInSeconds = 3600;	// to use with a debugger breakpoint
-#else
-	unsigned int timeoutInSeconds = 600;
-#endif
+	// set the connect timeout to an upper limit;  TODO: does not help.
+	//unsigned int timeoutInSeconds = 600;
+	//int retCode = mysql_options(mysql_, MYSQL_OPT_CONNECT_TIMEOUT, &timeoutInSeconds);
+	//if (retCode)
+	//	DataUtil::terminateEngine(__FILE__, __LINE__, "Error in setting mysql_options");
 
-	int retCode = 0;
-	retCode = mysql_options(mysql_, MYSQL_OPT_CONNECT_TIMEOUT, &timeoutInSeconds);
-	if (retCode)
-		SDBTerminate(0, "Error in setting mysql_options MYSQL_OPT_CONNECT_TIMEOUT");
-	retCode = mysql_options(mysql_, MYSQL_OPT_READ_TIMEOUT, &timeoutInSeconds);
-	if (retCode)
-		SDBTerminate(0, "Error in setting mysql_options MYSQL_OPT_READ_TIMEOUT");
-	retCode = mysql_options(mysql_, MYSQL_OPT_WRITE_TIMEOUT, &timeoutInSeconds);
-	if (retCode)
-		SDBTerminate(0, "Error in setting mysql_options MYSQL_OPT_WRITE_TIMEOUT");
-
-	// mysql_real_connect(MYSQL *mysql, const char *host, const char *user, const char *passwd, const char *db, 
+	// (MYSQL *mysql, const char *host, const char *user, const char *passwd, const char *db, 
 	//	unsigned int port, const char *unix_socket, unsigned long client_flag)
 	// Note that do NOT use client flag CLIENT_MULTI_STATEMENTS because we need to know exactly
 	// which statement fails.  The multi-statement executions cause confusion.
@@ -164,31 +143,38 @@ bool SdbMysqlClient::connect(){
 
 int SdbMysqlClient::sendQuery(char* query, unsigned long length) {
 
-	int rc = 0;
+	int rc = 1;
 	rc = mysql_real_query(mysql_, query, length);
 
 	unsigned int mysqlErrorNum = 0;
-	if (rc)	{	// if there is an error, we fetch MySQL error number. 
+	if (rc)		// if there is an error, we fetch MySQL error number. 
 		mysqlErrorNum = mysql_errno(mysql_);
-#ifdef SDB_DEBUG_LIGHT
-		if (debugLevel_) {
-			SDBDebugStart();
-			SDBDebugPrintString("\nmysql_real_query (");
-			SDBDebugPrintString(query);
-			SDBDebugPrintString(") fails with MySQL error number  ");
+
+#ifdef SDB_DEBUG
+	if (debugLevel_) {
+		SDBDebugStart();
+		SDBDebugPrintString("\nmysql_real_query (");
+		SDBDebugPrintString(query);
+		SDBDebugPrintString(") returned: ");
+		SDBDebugPrintInt(rc);
+		if (!rc) {
+			SDBDebugPrintString(" success");
+		}
+		else {
+			// TODO: If other nodes take a long time (more than 20 seconds) to return the query result,  
+			// we may get packet_error (error number 1159) issued by the method cli_read_query_result in client.c file.  
+			SDBDebugPrintString(" failure: MySQL error number ");
 			SDBDebugPrintInt(mysqlErrorNum);
 			SDBDebugPrintString("; MySQL error message: ");
 			const char* msg = mysql_error(mysql_);
 			if (msg) {
 				SDBDebugPrintString((char*)msg);
 			}
-			SDBDebugPrintNewLine(1);
-			SDBDebugEnd();
 		}
-#endif
-
-		SDBTerminate(0, "Replicate DDL to other node failed");
+		SDBDebugPrintNewLine(1);
+		SDBDebugEnd();
 	}
+#endif
 
 	// clear the state after the query
 	MYSQL_RES* resultSet = mysql_store_result(mysql_);

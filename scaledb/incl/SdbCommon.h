@@ -96,8 +96,6 @@ typedef enum SdbKeySearchDirection {
 #define SDBFLAG_DDL_SECOND_NODE (1 << 1) /* execute on non-primary node in cluster */
 #define SDBFLAG_CMD_OPEN_FILE	(1 << 2) /* open table files on a non-primary node */
 #define SDBFLAG_CMD_CLOSE_FILE	(1 << 3) /* close table files on a non-primary node */
-#define SDBFLAG_ALTER_TABLE_KEYS (1 << 4) /* set up this flag if the statement is ALTER TABLE DISABLE/ENABLE KEYS */
-#define SDBFLAG_ALTER_TABLE_CREATE (1 << 5) /* set up this flag if MySQL has called create() method for ALTER TABLE */
 
 #define SDB_VIRTUAL_VIEW "sdb_view_"
 #define SDB_VIRTUAL_VIEW_PREFIX_BYTES  9

@@ -17,9 +17,7 @@
 //
 //  File Name: mysql_txn.h
 //
-//  Description: This class contains information pertaining to a user thread such as
-//    MySQL thread_id, ScaleDB user id, and lock count information.  It is a place holder for information
-//    to be used between multiple MySQL interface method calls.
+//  Description: This class contains MySQL thread_id, ScaleDB user id, and lock count information.
 //    A MysqlTxn object is instantiated when a user executes the very first query in his connection.
 //    A MysqlTxn object is freed when a user logs off (or close connection).
 //
@@ -52,7 +50,7 @@ This is because we have STL header files which must be declared before C header 
 struct QueryManagerInfo {  	
 	unsigned short queryMgrId_;
 	unsigned short designatorId_;
-	char* pDesignatorName_;  
+	char* designatorName_;  
 	void* pHandler_;	// pointer to handler object which is currently being used
 	char* pKey_;		// points to the key value used in index_next_same
 	unsigned int keyLength_;
@@ -86,18 +84,14 @@ public:
 	bool getActiveTxn() { return (activeTxn_>0 ? true : false); }	// go around compiler bug
 	void setActiveTrn(bool aBool)  { activeTxn_ = (aBool) ? 1 : 0; }
 
-	unsigned short getDdlFlag() { return ddlFlag_; }
-	void setDdlFlag(unsigned short ddlFlag)  { ddlFlag_ = ddlFlag; }
-	void setOrOpDdlFlag(unsigned short value)  { ddlFlag_ = ddlFlag_ | value ; }	//apply logical OR operation
-
 	// save the query manager id for a given designator in a given table handler
 	void addQueryManagerId(bool isRealIndex, char* pDesignatorName, void* pHandler, char* pKey, 
-			unsigned int aKenLength, unsigned short aQueryMgrId, unsigned char mysqlInterfaceDebugLevel=0);
+			unsigned int aKenLength, unsigned short aQueryMgrId);
 	// Find the query manager id based on the designator name for a given table handler
 	unsigned short findQueryManagerId(char* aDesignatorName, void* pHandler, char* aKey, 
 			unsigned int aKenLength, bool virtualTableFlag = false);
 
-	void freeAllQueryManagerIds(unsigned char mysqlInterfaceDebugLevel=0);
+	void freeAllQueryManagerIds();
 	char* getDesignatorNameByQueryMrgId(unsigned short aQueryMgrId);
 	unsigned short getDesignatorIdByQueryMrgId(unsigned short aQueryMgrId);
 
@@ -121,10 +115,6 @@ public:
     void setScanType(unsigned short queryMgrId, bool sequentialScan=false);
     bool isSequentialScan(unsigned short queryMgrId);
 
-	void addAlterTableName(char* pAlterTableName) { pAlterTableName_= SDBUtilDuplicateString(pAlterTableName); };
-	void removeAlterTableName();
-	char* getAlterTableName() { return pAlterTableName_; }
-
 	int lockCount_;   // number of table locks used in a statement
 	int numberOfLockTables_;		// number of tables specified in LOCK TABLES statement
 	unsigned long  txnIsolationLevel_;	// transaciton isolation level
@@ -135,17 +125,10 @@ private:
 	unsigned int scaleDbUserId_;	// The UserId is actually a session id.
     unsigned int scaleDbTxnId_;
 	unsigned short scaledbDbId_;	// current DbId used by ScaleDB
-
-	unsigned int  activeTxn_;		// whether or not it is within a transaction at the moment	
-									// need to use integer rather than bool due to a compiler bug??
+//	bool  activeTxn_;				// whether or not it is within a transaction at the moment
+	unsigned int  activeTxn_;			// need to use integer rather than bool due to a compiler bug??
 	SdbDynamicArray* pLockTablesArray_;	// pointer to vector holding all lock table names
     uint64  lastStmtSavePointId_;   // last stmt save point id
-
-	// flag to indicate if it is a non-primary node in cluster.
-	// We cannot put this flag in a table handler because ALTER TABLE and CREATE TABLE ... SELECT both use multiple handlers.
-	unsigned short ddlFlag_ ;		// This flag has multiple bit values.  Need to deal bits individually.
-
-	char* pAlterTableName_;			// table name used in ALTER TABLE, CREATE/DROP INDEX statement
 
 	QueryManagerInfo queryMgrArray_[METAINFO_MAX_QUERY_MANAGER_ID];
 };
