@@ -47,11 +47,12 @@ MysqlTxn::MysqlTxn() {  //constructor
     lockCount_ = 0;
 	numberOfLockTables_ = 0;
     lastStmtSavePointId_ = 0;
-
+	ddlFlag_ = 0;
+	pAlterTableName_ = NULL;
 
 	QueryManagerIdCount_ = 0;
 	for (int i=0; i < METAINFO_MAX_QUERY_MANAGER_ID; ++i) {
-		queryMgrArray_[i].designatorName_ = NULL;
+		queryMgrArray_[i].pDesignatorName_ = NULL;
         queryMgrArray_[i].pHandler_ = NULL;
 		queryMgrArray_[i].pKey_ = NULL;
 		queryMgrArray_[i].keyLength_ = 0;
@@ -67,7 +68,8 @@ MysqlTxn::MysqlTxn() {  //constructor
 MysqlTxn::~MysqlTxn() {   // destructor
 	// memory released in method freeAllQueryManagerIds()
 	SDBArrayFreeWithMembers(pLockTablesArray_);
-
+	if (pAlterTableName_)
+		RELEASE_MEMORY(pAlterTableName_);
 }
 
 
@@ -75,10 +77,21 @@ MysqlTxn::~MysqlTxn() {   // destructor
 // Note that the table handler can determine the table name, table alias name.
 // Using table handler can uniquely define the right table object currently being used by MySQL query processor.
 void MysqlTxn::addQueryManagerId(bool isRealIndex, char* pDesignatorName, void* pHandler, char* pKey, 
-								 unsigned int aKenLength, unsigned short aQueryMgrId) {
+				unsigned int aKenLength, unsigned short aQueryMgrId, unsigned char mysqlInterfaceDebugLevel) {
 	//queryMgrArray_[QueryManagerIdCount_].pMetaInfo_ = pMetaInfo;
 	queryMgrArray_[QueryManagerIdCount_].queryMgrId_ = aQueryMgrId;
-	queryMgrArray_[QueryManagerIdCount_].designatorName_ = SDBUtilDuplicateString(pDesignatorName);
+	queryMgrArray_[QueryManagerIdCount_].pDesignatorName_ = SDBUtilDuplicateString(pDesignatorName);
+#ifdef SDB_DEBUG_LIGHT
+	if (mysqlInterfaceDebugLevel > 1) {
+		SDBDebugStart();			// synchronize threads printout	
+		SDBDebugPrintHeader("MysqlTxn::addQueryManagerId, add new designator ");
+		SDBDebugPrintString( queryMgrArray_[QueryManagerIdCount_].pDesignatorName_ );
+		SDBDebugPrintString(" pHandler= ");
+		SDBDebugPrintPointer( pHandler );
+		SDBDebugEnd();			// synchronize threads printout	
+	}
+#endif
+
 	if ( isRealIndex )
 		queryMgrArray_[QueryManagerIdCount_].designatorId_ = SDBGetIndexNumberByName(scaledbDbId_, pDesignatorName);
 	else
@@ -101,7 +114,7 @@ unsigned short MysqlTxn::findQueryManagerId(char* aDesignatorName, void* pHandle
 
 		// We found the query manger id if both the table handler object and designator match. 
 		if ( (queryMgrArray_[i].pHandler_ == pHandler) &&
-				SDBUtilCompareStrings(aDesignatorName, queryMgrArray_[i].designatorName_, true) ) {
+				SDBUtilCompareStrings(aDesignatorName, queryMgrArray_[i].pDesignatorName_, true) ) {
 
 			queryMgrArray_[i].pKey_ = (char*) aKey;    // update its key value
 			queryMgrArray_[i].keyLength_ = aKenLength;
@@ -113,11 +126,21 @@ unsigned short MysqlTxn::findQueryManagerId(char* aDesignatorName, void* pHandle
 }
 
 
-void MysqlTxn::freeAllQueryManagerIds() {
+void MysqlTxn::freeAllQueryManagerIds(unsigned char mysqlInterfaceDebugLevel) {
 	for (int i=0; i < QueryManagerIdCount_; ++i) {
 		SDBCloseQueryManager(queryMgrArray_[i].queryMgrId_  );
 
-		RELEASE_MEMORY( queryMgrArray_[i].designatorName_ );
+#ifdef SDB_DEBUG_LIGHT
+		if (mysqlInterfaceDebugLevel > 1) {
+			SDBDebugStart();			// synchronize threads printout	
+			SDBDebugPrintHeader("MysqlTxn::freeAllQueryManagerIds, release designator ");
+			SDBDebugPrintString( queryMgrArray_[i].pDesignatorName_ );
+			SDBDebugPrintString(" pHandler= ");
+			SDBDebugPrintPointer( queryMgrArray_[i].pHandler_ );
+			SDBDebugEnd();			// synchronize threads printout	
+		}
+#endif
+		RELEASE_MEMORY( queryMgrArray_[i].pDesignatorName_ );
         queryMgrArray_[i].pHandler_ = NULL;
 		queryMgrArray_[i].pKey_ = NULL;
 		queryMgrArray_[i].keyLength_ = 0;
@@ -130,7 +153,7 @@ void MysqlTxn::freeAllQueryManagerIds() {
 char* MysqlTxn::getDesignatorNameByQueryMrgId(unsigned short aQueryMgrId) {
 	for (int i=0; i < QueryManagerIdCount_; ++i) {
 		if ( queryMgrArray_[i].queryMgrId_ == aQueryMgrId ) {
-			return (queryMgrArray_[i].designatorName_);
+			return (queryMgrArray_[i].pDesignatorName_);
 		}
 	}
 
@@ -253,7 +276,15 @@ void MysqlTxn::releaseAllLockTables() {
 
 		numberOfLockTables_ -= 1;
 	}
+}
 
+
+// release the memory allocated for pAlterTableName_
+void MysqlTxn::removeAlterTableName() {
+	if (pAlterTableName_)
+		RELEASE_MEMORY( pAlterTableName_ );
+
+	pAlterTableName_ = NULL;
 }
 
 #endif	// SDB_MYSQL

@@ -46,7 +46,9 @@
 #define SCALEDB_HINT_PASS_DDL	" /*SCALEDBHINT: PASS DDL*/"
 #define SCALEDB_HINT_CLOSEFILE	" /*SCALEDBHINT: CLOSEFILE*/"
 #define SCALEDB_HINT_OPENFILE	" /*SCALEDBHINT: OPENFILE*/"
-#define MYSQL_TEMP_TABLE_PREFIX "#sql"
+#define MYSQL_TEMP_TABLE_PREFIX "#sql"		// ususally the first temp table used in ALTER TABLE
+#define MYSQL_TEMP_TABLE_PREFIX2 "#sql2"	// the second temp table used in ALTER TABLE statement
+#define MYSQL_ENGINE_EQUAL_SCALEDB " engine=scaledb "	// 16 bytes
 
 /*
   Version for file format.
@@ -95,7 +97,6 @@ private:
 	unsigned int readDebugCounter_; // counter for debugging
 	bool releaseLocksAfterRead_;    // flag to indicate whether we hold the locks after reading data
 	unsigned int deleteRowCount_;
-	unsigned short ddlFlag_ ;		// flag to indicate if it is a non-primary node in cluster
 
 	unsigned short getOffsetByDesignator(unsigned short designator);
 	// This method packs a MySQL row into ScaleDB engine row buffer 
@@ -129,7 +130,8 @@ private:
 	void outputHandleAndThd();
 
 	// initialize DB id and Table id.  Returns non-zero if there is an error
-	unsigned short initializeDbTableId(char* pDbName=NULL, char* pTblName=NULL, bool isFileName=false);
+	unsigned short initializeDbTableId(char* pDbName=NULL, char* pTblName=NULL, 
+										bool isFileName=false, bool allowTableClosed=false);
 
 
 public:
@@ -260,7 +262,7 @@ public:
 	int create(const char* name, TABLE *form, HA_CREATE_INFO *create_info);  ///< required
 	int add_columns_to_table(THD* thd, TABLE *table_arg, unsigned short ddlFlag);
 	int add_indexes_to_table(THD* thd, TABLE *table_arg, char* tblName, unsigned short ddlFlag, SdbDynamicArray* fkInfoArray);
-	int create_fks(THD* thd, TABLE *table_arg, char* tblName, SdbDynamicArray* fkInfoArray);
+	int create_fks(THD* thd, TABLE *table_arg, char* tblName, SdbDynamicArray* fkInfoArray, char* pCreateTableStmt);
 
 	// delete a user table.
 	int delete_table(const char* name);
@@ -289,7 +291,7 @@ public:
 
 	// this function is called to issue DDL statements to the other nodes on a cluster
 	// This function is static because other static functions will call it.
-	static bool sqlStmt(unsigned short dbmsId, char* sqlStmt, bool bIgnoreDB=false);
+	static bool sqlStmt(unsigned short dbmsId, char* sqlStmt, bool bIgnoreDB=false, bool bEngineOption=false);
 
     // return last key which actually resulted in an error (duplicate error)
     unsigned short get_last_index_error_key();
@@ -312,11 +314,13 @@ public:
     // give records count
     ha_rows records();
 
-    // disable keys
-    int disable_indexes(uint mode);
+    // disable keys -- only myisam supports this.  Other storage engines do NOT support it.
+	// need to comment out this method as it does not work well with foreign key constraint
+    //int disable_indexes(uint mode);
 
-    // enable keys
-    int enable_indexes(uint mode);
+    // enable keys -- only myisam supports this.  Other storage engines do NOT support it.
+	// need to comment out this method as it does not work well with foreign key constraint
+    //int enable_indexes(uint mode);
 };
 
 #endif	// SDB_MYSQL

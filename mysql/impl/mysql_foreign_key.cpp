@@ -44,33 +44,6 @@ bool isSeparator(char c) {
 }
 
 
-// get next token from character string cstr, and return the new char pointer position
-
-char* getNextToken(char* token, char* cstr) {
-    unsigned short i = 0;
-    unsigned short j = 0;
-    
-    while ( (cstr[i]==' ') && (cstr[i]!='\0') )
-        ++i;      // remove the preceding blanks
-    
-	if ( cstr[i] == '`' ) {
-		++i;	// skip the left backtick
-		while ( cstr[i] != '`' ) {	// the token consists of all characters between two backticks
-			token[j++] = cstr[i++];
-		} ;
-
-		++i;	// skip the right backtick
-	} else {
-		while ( !isSeparator(cstr[i])  && (cstr[i] != '\0') ) {
-			token[j] = cstr[i];
-			++i;
-			++j;
-		}
-	}
-
-    return cstr+i;
-} 
-
 MysqlForeignKey::MysqlForeignKey() {
 #ifdef __DEBUG_CLASS_CALLS
 	DebugClass::countClass("MysqlForeignKey");
@@ -100,6 +73,36 @@ MysqlForeignKey::~MysqlForeignKey() {
 			RELEASE_MEMORY( parentColumnNames_[i] );
 	}
 }
+
+
+// get next token from character string cstr, and return the new char pointer position
+// This utility function can get next MySQL token from character string cstr, and return the new char pointer position.
+// Make it static so that it can be called without instantiating the object.
+char* MysqlForeignKey::getNextToken(char* token, char* cstr) {
+    unsigned short i = 0;
+    unsigned short j = 0;
+    
+    while ( (cstr[i]==' ') && (cstr[i]!='\0') )
+        ++i;      // remove the preceding blanks
+    
+	if ( cstr[i] == '`' ) {
+		++i;	// skip the left backtick
+		while ( cstr[i] != '`' ) {	// the token consists of all characters between two backticks
+			token[j++] = cstr[i++];
+		} ;
+
+		++i;	// skip the right backtick
+	} else {
+		while ( !isSeparator(cstr[i])  && (cstr[i] != '\0') ) {
+			token[j] = cstr[i];
+			++i;
+			++j;
+		}
+	}
+
+    return cstr+i;
+} 
+
 
 void MysqlForeignKey::setForeignKeyName(char* pForeignKeyName) {
     char keyName[ METAINFO_MAX_IDENTIFIER_SIZE ] = { 0 };

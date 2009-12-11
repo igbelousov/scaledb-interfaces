@@ -128,7 +128,7 @@ void SDBTerminateEngine(int errCode, const char *msg, char *file, int line);
 //
 //////////////////////////////////////////////////////////////////////////////
 */
-unsigned short SDBOpenDatabase(unsigned int userId, char *databaseName, char *databaseFsName=0);
+unsigned short SDBOpenDatabase(unsigned int userId, char *databaseName, char *databaseFsName=0, unsigned short ddlFlag=0);
 void SDBOpenDatabaseById(unsigned int userId, unsigned short databaseId);
 void SDBOpenAllDatabases();
 unsigned short SDBGetDatabaseNumberByName(unsigned short userId, char *databaseName, bool openTables=false);
@@ -163,6 +163,7 @@ void SDBShowUserLockStatus(unsigned int userId);
 */
 
 void SDBOpenFile(unsigned short dbId, unsigned short tableId);
+// When we close a table, we also remove table information from metadata cache
 void SDBCloseFile(unsigned short dbId, unsigned short tableId);
 
 // Initialize Database Table
@@ -194,8 +195,12 @@ unsigned short SDBCanTableBeDroped(unsigned short dbId, char* tableName);
 
 unsigned short SDBGetNumberOfFieldsInTableByTableNumber(unsigned short dbId, unsigned short tableNumber);
 
-unsigned short SDBOpenTable(unsigned short userId, unsigned short dbId, const char *tableName);
-unsigned short SDBCloseTable(unsigned short userId, unsigned short dbId, const char *tableName);
+// open the table with specified table file name.  This method returns the table id.
+unsigned short SDBOpenTable(unsigned short userId, unsigned short dbId, char *pTableFsName);
+// Use this method to open files related to a table if tableId is known.
+void SDBOpenTableFiles(unsigned short userId, unsigned short dbId, unsigned short tableId);
+// close an open table based on table name (not its file-system-safe name)
+unsigned short SDBCloseTable(unsigned short userId, unsigned short dbId, char *pTableName);
 
 unsigned short SDBGetTableNumberByName(unsigned short userId, unsigned short dbId, const char *tableName);
 unsigned short SDBGetTableNumberByFileSystemName(unsigned short userId, unsigned short dbId, const char *tableName);
@@ -286,6 +291,7 @@ void SDBSetAutoIncrBaseValue(unsigned short dbId, unsigned short tableId, unsign
 
 unsigned short SDBStartTransaction(unsigned int userId);
 unsigned short SDBCommit(unsigned int userId);
+unsigned short SDBSyncToDisk(unsigned int userId);
 
 long SDBGetTransactionIdForUser(unsigned userId);
 bool SDBIsUserInTransaction(unsigned int userId);
@@ -414,7 +420,8 @@ void SDBQueryCursorSetFlags(unsigned short queryMgrId, unsigned short indexId, b
 */
 bool SDBNodeIsCluster(void);
 unsigned char SDBGetTotalNodesInCluster(void);
-unsigned char SDBSetupClusterNodes(unsigned int *dstArray);
+unsigned char SDBSetupClusterNodes(unsigned int *dstArray, 
+                                   unsigned int *portArray);
 /*
 //////////////////////////////////////////////////////////////////////////////
 //
@@ -448,7 +455,11 @@ void SDBPrintMemoryInfo();
 void SDBPrintStructure(unsigned short dbId);
 void SDBPrintFilesInfo(bool showFileNames=true);
 char* SDBUtilPtr2String(char *dstPtr, const void* srcPtr);
+// this method allocates memory space for result without freeing first param
 char *SDBUtilAppendString(char *ptr1, char *ptr2);
+// this method allocates memory space for result and free's first param
+char *SDBUtilAppendStringFreeFirstParam(char *ptr1, char *ptr2);  
+
 unsigned short SDBUtilGetStrLength(char *ptr);
 char *SDBUtilDuplicateString(char *ptr);
 char *SDBUtilGetStrInLower(char *ptr);
