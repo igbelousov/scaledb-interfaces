@@ -1957,7 +1957,7 @@ int ha_scaledb::delete_all_rows()
 	int errorNum = 0;
 	//pMetaInfo_ = pSdbEngine->getMetaInfo( sdbDbId_ );
 	char* tblName = SDBGetTableNameByNumber(sdbUserId_, sdbDbId_, sdbTableNumber_);
-	int retValue = SDBCanTableBeDroped(sdbDbId_, tblName);
+	int retValue = SDBCanTableBeDropped(sdbUserId_, sdbDbId_, tblName);
 	if (retValue == SUCCESS) {
 		deleteAllRows_ = true;
 
@@ -4322,7 +4322,7 @@ int ha_scaledb::delete_table(const char* name)
 	// then MySQL encodes the user table name by replacing the special characters with ASCII code.
 	// In our metadata, we save the original user-defined table name and the file-system-compliant name.
 	pTableName = SDBGetTableNameByNumber(sdbUserId_, sdbDbId_, sdbTableNumber_);
-	retCode = SDBCanTableBeDroped(sdbDbId_, pTableName);
+	retCode = SDBCanTableBeDropped(sdbUserId_, sdbDbId_, pTableName);
 	if (retCode == SUCCESS) {
 
 		// The primary node needs to propagate the DDL to other nodes.

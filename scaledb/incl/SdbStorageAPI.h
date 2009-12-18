@@ -190,8 +190,8 @@ unsigned short SDBRenameTable(unsigned int userId, unsigned short dbId,
 // Truncate a table
 unsigned short SDBTruncateTable(unsigned int userId, unsigned short dbId, char* tableName, unsigned short stmtFlag); 
 
-// Can table be dropped
-unsigned short SDBCanTableBeDroped(unsigned short dbId, char* tableName);
+// Can table be dropped?
+unsigned short SDBCanTableBeDropped(unsigned int userId, unsigned short dbId, char* tableName);
 
 
 unsigned short SDBGetNumberOfFieldsInTableByTableNumber(unsigned short dbId, unsigned short tableNumber);
