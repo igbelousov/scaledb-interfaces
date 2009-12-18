@@ -153,6 +153,7 @@ unsigned int SDBGetNewUserId(unsigned short userType = SDB_USER_TYPE_DEFAULT);
 void SDBRemoveUserById(unsigned int userId);
 void SDBShowUserActivity(unsigned int userId);
 void SDBShowUserLockStatus(unsigned int userId);
+void SDBShowAllUsersLockStatus();
 
 /*
 //////////////////////////////////////////////////////////////////////////////

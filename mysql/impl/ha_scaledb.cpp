@@ -1280,7 +1280,12 @@ int ha_scaledb::open(const char *name, int mode, uint test_if_locked) {
 		}
 	}
 
-	// Because MySQL calls this method outside of a normal user treansaction,
+#ifdef SDB_DEBUG
+	if (mysqlInterfaceDebugLevel_ > 4) 
+		SDBShowAllUsersLockStatus();
+#endif
+
+	// Because MySQL calls this method outside of a normal user transaction,
 	// hence we use a different user id to open database and table in order to avoid commit issue.
 	unsigned int userIdforOpen = SDBGetNewUserId();
 
@@ -1380,6 +1385,7 @@ int ha_scaledb::close(void) {
 	print_header_thread_info("MySQL Interface: executing ha_scaledb::close(...) ");
 	unsigned int userId = 0;
 	bool needToRemoveFromScaledbCache = false;
+	bool needToCommit = false;
 
 	THD* thd = ha_thd();
 	if (thd) {
@@ -1404,10 +1410,21 @@ int ha_scaledb::close(void) {
 			|| sqlCommand==SQLCOM_RENAME_TABLE || sqlCommand==SQLCOM_ALTER_TABLESPACE )
 			needToRemoveFromScaledbCache = true;
 
+		if (isAlterTableStmt) {
+			if (pSdbMysqlTxn_->getDdlFlag() & SDBFLAG_ALTER_TABLE_CREATE)
+				// For regular ALTER TABLE, primary node will commit in delete_table method which is at very end of processing.
+				needToCommit = false;
+			else	// statement such as  ALTER TABLE t1 DISABLE KEYS;
+				needToCommit = true;
+		} else if (sqlCommand==SQLCOM_FLUSH)
+			needToCommit = true;
+
 		userId = sdbUserId_;
 	}
-	else	// thd is NOT defined.  A system thread closes the opened tables.  Bug 969
+	else {	// thd is NOT defined.  A system thread closes the opened tables.  Bug 969
 		userId = 1;	// this is system user ID
+		needToCommit = true;
+	}
 
 	// MySQL may call this method multiple times on same table if a table is referenced more than
 	// one time in a previous SQL statement.  Example: INSERT INTO tbug261 SELECT  a + 1 , b FROM tbug261;
@@ -1421,9 +1438,18 @@ int ha_scaledb::close(void) {
 
 		// For mysqladmin shutdown command, we need to commit because we have some pending locks made in SDBCloseTable call.
 		// Need to call SDBCommit rather than scaledb_commit because the request does not come from a normal MySQL user.
-		if (thd == NULL)
+		if (needToCommit)
 			SDBCommit( userId );
 	}
+#ifdef SDB_DEBUG
+	if (mysqlInterfaceDebugLevel_ > 4) {
+		// print user lock status on the primary node
+		SDBDebugStart();			// synchronize threads printout	
+		SDBDebugPrintHeader("In ha_scaledb::close, print user locks after SDBCloseTable");
+		SDBDebugEnd();			// synchronize threads printout	
+		SDBShowUserLockStatus(sdbUserId_);
+	}
+#endif
 
 	DBUG_RETURN(free_share(share));
 }
@@ -3688,8 +3714,11 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 	// Second we add column information to metadata memory
 	errorNum = add_columns_to_table(thd, table_arg, ddlFlag);
 	if (errorNum){
-		SDBRollBack(sdbUserId_);	// rollback new table record in transaction
-		SDBDeleteTableById(sdbDbId_, sdbTableNumber_);
+		// No need to rollback, or deleteTableById here, as both of these were done by
+		// the add_columns_to_table, as it returned a non zero errorNum.
+		// SDBRollBack(sdbUserId_);	// rollback new table record in transaction
+		// SDBDeleteTableById(sdbDbId_, sdbTableNumber_);
+
 		RELEASE_MEMORY( pCreateTableStmt );
 		DBUG_RETURN(errorNum);
 	}
@@ -3794,10 +3823,8 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 
 	// CREATE TABLE: Primary node needs to release lockMetaInfo here after all nodes finish processing.
 	// ALTER TABLE: Primary node needs to release lockMetaInfo in the last step: delete_table .
-	//if ( !(ddlFlag & SDBFLAG_DDL_SECOND_NODE) ) {
-		if ( sqlCommand == SQLCOM_CREATE_TABLE )
-			SDBCommit(sdbUserId_);
-	//}
+	if ( sqlCommand == SQLCOM_CREATE_TABLE )
+		SDBCommit(sdbUserId_);
 
 #ifdef SDB_DEBUG_LIGHT
 	if (mysqlInterfaceDebugLevel_ > 4) {
@@ -4214,6 +4241,7 @@ int ha_scaledb::delete_table(const char* name)
 	char tblFsName[METAINFO_MAX_IDENTIFIER_SIZE] = {0};
 	char pathName[METAINFO_MAX_IDENTIFIER_SIZE] = {0};
 
+	char* pTableName = NULL;
 	int errorNum = 0;
 	unsigned short retCode = 0;
 	THD* thd = ha_thd();
@@ -4221,34 +4249,17 @@ int ha_scaledb::delete_table(const char* name)
 
 	unsigned int sqlCommand = thd_sql_command(thd);
 
+	// First we fetch db and table names
+	fetchIdentifierName(name, dbName, tblFsName, pathName); 
+
 	// If the ddl statement has the key word defined in SCALEDB_HINT_PASS_DDL,
 	// then we need to update memory metadata only.  (NOT the metadata on disk).
 	unsigned short ddlFlag = 0;
 	if (SDBNodeIsCluster() == true) {
-		if ( strstr(thd->query, SCALEDB_HINT_PASS_DDL) != NULL ) {
+		if ( strstr(thd->query, SCALEDB_HINT_PASS_DDL) != NULL ) 
 			ddlFlag |= SDBFLAG_DDL_SECOND_NODE;
+	}
 
-			// Because we implement close(), secondary node should exit early on all the situations. 
-			SDBCommit(sdbUserId_);
-			pSdbMysqlTxn_->setActiveTrn( false );	// mark the end of long implicit transaction
-#ifdef SDB_DEBUG_LIGHT
-			if (mysqlInterfaceDebugLevel_ > 4) {
-				// print user lock status on the non-primary node
-				SDBDebugStart();			// synchronize threads printout	
-				SDBDebugPrintHeader("In ha_scaledb::delete_table, print user locks imposed by non-primary node ");
-				SDBDebugEnd();			// synchronize threads printout	
-				SDBShowUserLockStatus(sdbUserId_);
-			}
-#endif
-			DBUG_RETURN(errorNum);
-		}
-	}	// if (SDBNodeIsCluster() == true)
-
-	// First we fetch db and table names
-	fetchIdentifierName(name, dbName, tblFsName, pathName); 
-
-	// TODO: may simplify the logic in the remaining code because only primary node and single node will proceed 
-	// after this point.
 	// DROP TABLE: Primary node needs to lock the metadata of the master dbms before opening a user database
 	// DROP TABLE: Secondary nodes do NOT need to lock the metadata any more.
 	// ALTER TABLE and equivalent: primary node imposed lockMetaInfo in ::create()
@@ -4260,6 +4271,36 @@ int ha_scaledb::delete_table(const char* name)
 
 	sdbDbId_ = SDBOpenDatabase(sdbUserId_, dbName, dbName, ddlFlag);
 	pSdbMysqlTxn_->setScaledbDbId( sdbDbId_ );
+
+	sdbTableNumber_ = SDBGetTableNumberByFileSystemName(sdbUserId_, sdbDbId_, tblFsName);
+
+	// Secondary node needs to delete memory metadata only.  (NOT the metadata on disk).
+	if (ddlFlag & SDBFLAG_DDL_SECOND_NODE) {
+
+		// At this moment, the table should have been closed.  However, a table may be left open
+		// when we process its child table.  Hence, we need to close it if it is still open.
+		if (sdbTableNumber_) {
+			pTableName = SDBGetTableNameByNumber(sdbUserId_, sdbDbId_, sdbTableNumber_);
+			SDBCloseTable(sdbUserId_, sdbDbId_, pTableName);
+		}
+
+		// Because we implement close(), secondary node should exit early on all the situations. 
+		SDBCommit(sdbUserId_);
+		pSdbMysqlTxn_->setActiveTrn( false );	// mark the end of long implicit transaction
+#ifdef SDB_DEBUG_LIGHT
+		if (mysqlInterfaceDebugLevel_ > 4) {
+			// print user lock status on the non-primary node
+			SDBDebugStart();			// synchronize threads printout	
+			SDBDebugPrintHeader("In ha_scaledb::delete_table, print user locks imposed by non-primary node ");
+			SDBDebugEnd();			// synchronize threads printout	
+			SDBShowUserLockStatus(sdbUserId_);
+		}
+#endif
+		DBUG_RETURN(errorNum);
+	}	
+
+	// TODO: may simplify the logic in the remaining code because only primary node and single node will proceed 
+	// after this point.
 
 	if ( (sdbTableNumber_ == 0) && (!virtualTableFlag_) ) {
 
@@ -4280,7 +4321,7 @@ int ha_scaledb::delete_table(const char* name)
 	// If a table name has special characters such as $ or + enclosed in back-ticks,
 	// then MySQL encodes the user table name by replacing the special characters with ASCII code.
 	// In our metadata, we save the original user-defined table name and the file-system-compliant name.
-	char* pTableName = SDBGetTableNameByNumber(sdbUserId_, sdbDbId_, sdbTableNumber_);
+	pTableName = SDBGetTableNameByNumber(sdbUserId_, sdbDbId_, sdbTableNumber_);
 	retCode = SDBCanTableBeDroped(sdbDbId_, pTableName);
 	if (retCode == SUCCESS) {
 
@@ -4386,8 +4427,14 @@ int ha_scaledb::rename_table(const char* fromTable, const char* toTable) {
 	char fromDbName[METAINFO_MAX_IDENTIFIER_SIZE] = {0};
 	char fromTblFsName[METAINFO_MAX_IDENTIFIER_SIZE] = {0};
 	char toTblFsName[METAINFO_MAX_IDENTIFIER_SIZE] = {0};
+	char* userFromTblName = NULL;
+
 	// First we fetch db and table names
 	fetchIdentifierName(fromTable, fromDbName, fromTblFsName, pathName); 
+	fetchIdentifierName(toTable, dbName, toTblFsName, pathName);
+	if (!SDBUtilCompareStrings(dbName, fromDbName, true) ){
+		DBUG_RETURN(HA_ERR_UNSUPPORTED);
+	}
 
 	unsigned int errorNum = 0;
 	unsigned short retCode = 0;
@@ -4395,43 +4442,55 @@ int ha_scaledb::rename_table(const char* fromTable, const char* toTable) {
 	placeSdbMysqlTxnInfo( thd );	
 	unsigned int sqlCommand = thd_sql_command(thd);
 
-	// If the ddl statement has the key word SCALEDB_HINT_PASS_DDL, then this node
-	// is a non-primary node in cluster systems. We do nothing in the 2nd call for ALTER TABLE stmt.
-	// Secondary node does nothing on all cases. 
+	// If the ddl statement has the key word defined in SCALEDB_HINT_PASS_DDL,
+	// then we need to update memory metadata only.  (NOT the metadata on disk).
 	unsigned short ddlFlag = 0;
-	if (SDBNodeIsCluster() == true)	// if this is a cluster machine
-		if ( strstr(thd->query, SCALEDB_HINT_PASS_DDL) != NULL ) {		// if this is a non-primary node
+	if (SDBNodeIsCluster() == true) {
+		if ( strstr(thd->query, SCALEDB_HINT_PASS_DDL) != NULL ) 
 			ddlFlag |= SDBFLAG_DDL_SECOND_NODE;
-			DBUG_RETURN(errorNum);
-		}
-
-	if ( (sdbTableNumber_ == 0) && (!virtualTableFlag_) ) 
-		errorNum = initializeDbTableId(fromDbName, fromTblFsName, true);
-
-	fetchIdentifierName(toTable, dbName, toTblFsName, pathName);
-
-	if (!SDBUtilCompareStrings(dbName, fromDbName, true) ){
-		DBUG_RETURN(HA_ERR_UNSUPPORTED);
 	}
 
-	// TODO: We can simplify the logic in the remaining code because only primary node and single node will
-	// proceed the remaining code.
 	// RENAME TABLE: Primary node needs to lock the metadata of the master dbms before opening a user database
 	// RENAME TABLE: Secondary nodes do NOT need to lock the metadata any more.
 	// ALTER TABLE: primary node already imposed lockMetaInfo in ::create()
-	if ( (!(ddlFlag & SDBFLAG_DDL_SECOND_NODE))  && (sqlCommand==SQLCOM_RENAME_TABLE) ) {
+	if ( (!(ddlFlag & SDBFLAG_DDL_SECOND_NODE)) && (sqlCommand==SQLCOM_RENAME_TABLE) ) {
 		retCode = SDBLockMetaInfo(sdbUserId_);
 		if (retCode)
 			DBUG_RETURN( convertToMysqlErrorCode(retCode) );
 	}
 
-	sdbDbId_ = SDBOpenDatabase(sdbUserId_, dbName, dbName, ddlFlag);
+	sdbDbId_ = SDBOpenDatabase(sdbUserId_, fromDbName, fromDbName, ddlFlag);
 	pSdbMysqlTxn_->setScaledbDbId( sdbDbId_ );
+
+	sdbTableNumber_ = SDBGetTableNumberByFileSystemName(sdbUserId_, sdbDbId_, fromTblFsName);
+
+	// If the ddl statement has the key word SCALEDB_HINT_PASS_DDL, then this node
+	// is a non-primary node in cluster systems. We do nothing in the 2nd call for ALTER TABLE stmt.
+	// Secondary node does nothing on all cases. 
+	if (ddlFlag & SDBFLAG_DDL_SECOND_NODE) {
+
+		// At this moment, the table should have been closed.  However, a table may be left open
+		// when we process its child table.  Hence, we need to close it if it is still open.
+		if (sdbTableNumber_) {
+			userFromTblName = SDBGetTableNameByNumber(sdbUserId_, sdbDbId_, sdbTableNumber_);
+			SDBCloseTable(sdbUserId_, sdbDbId_, userFromTblName);
+		}
+
+		// Because we implement close(), secondary node should exit early on all the situations. 
+		SDBCommit(sdbUserId_);
+		DBUG_RETURN(errorNum);
+	}
+
+	// TODO: We can simplify the logic in the remaining code because only primary node and single node will
+	// proceed the remaining code.
+
+	if ( (sdbTableNumber_ == 0) && (!virtualTableFlag_) ) 
+		errorNum = initializeDbTableId(fromDbName, fromTblFsName, true);
 
 	// If a table name has special characters such as $ or + enclosed in back-ticks,
 	// then MySQL encodes the user table name by replacing the special characters with ASCII code.
 	// In our metadata, we save the original user-defined table name.
-	char* userFromTblName = SDBGetTableNameByNumber(sdbUserId_, sdbDbId_, sdbTableNumber_);
+	userFromTblName = SDBGetTableNameByNumber(sdbUserId_, sdbDbId_, sdbTableNumber_);
 	char* userToTblName = SDBUtilDecodeCharsInStrings(toTblFsName);	// change name if chars are encoded ????
 	// This is a kludge as we cannot find the new table name unless we parse the SQL statement.  
 
