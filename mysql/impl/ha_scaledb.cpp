@@ -1289,6 +1289,8 @@ int ha_scaledb::open(const char *name, int mode, uint test_if_locked) {
 	// hence we use a different user id to open database and table in order to avoid commit issue.
 	unsigned int userIdforOpen = SDBGetNewUserId();
 
+	// Note that SDBLockMetaInfo is expensive, we should avoid it as much as possible.
+	// SDBLockMetaInfo should be called by the first user who opens the database and/or table.
 	// Need to open files on primary nodes.
 	// Also need to open non-temp table files on secondary nodes for later processing.
 
@@ -1334,39 +1336,45 @@ int ha_scaledb::open(const char *name, int mode, uint test_if_locked) {
 		//	SDBCommit(userIdforOpen);
 
 		SDBOpenAllDBFiles(userIdforOpen, sdbDbId_ );
+		// We can commit without problem for this new user
+		SDBCommit(userIdforOpen);
 	}
 
 	info(HA_STATUS_VARIABLE | HA_STATUS_CONST);
 
 	// Second, we open the specified table
 
-	if (SDBNodeIsCluster() == true)	{	// if this is a cluster machine
-		// need to open the table because it may be closed by secondary node processing on DDL.
-		// Secondary node should NOT impose lockMetaInfo because primary node already did.
-		// If we open a temp file for ALTER TABLE, it is inside a user transaction.
-		if ( bIsPrimaryNode && (openTempFile == false) ) {
+	sdbTableNumber_ = SDBGetTableNumberByFileSystemName(sdbUserId_, sdbDbId_, tblFsName);
+	if (sdbTableNumber_ == 0) {
+
+		if (SDBNodeIsCluster() == true)	{	// if this is a cluster machine
+			// need to open the table because it may be closed by secondary node processing on DDL.
+			// Secondary node should NOT impose lockMetaInfo because primary node already did.
+			// If we open a temp file for ALTER TABLE, it is inside a user transaction.
+			if ( bIsPrimaryNode && (openTempFile == false) ) {
+				retCode = SDBLockMetaInfo(userIdforOpen, sdbDbId_);
+				if (retCode == SUCCESS) { 
+					if (isAlterTableStmt && openTempFile)
+						sdbTableNumber_ = SDBOpenTable(sdbUserId_, sdbDbId_, tblFsName);
+					else	// outside of a user transaction
+						sdbTableNumber_ = SDBOpenTable(userIdforOpen, sdbDbId_, tblFsName);	
+				}
+			}
+
+			// For CREATE TABLE ... SELECT, Secondary node needs to open the select-from table without calling SDBLockMetaInfo. 
+			// Secondary node should NOT open the new table which is inside of external_lock pair.
+			if ( (sqlCommand==SQLCOM_CREATE_TABLE) && (bIsPrimaryNode==false)
+				&& (pSdbMysqlTxn_->getDdlFlag() == 0) )		// this condition says the to-be-opened table is outside external_lock pair
+				sdbTableNumber_ = SDBOpenTable(userIdforOpen, sdbDbId_, tblFsName);
+		}
+		else {	// on a single node solution
 			retCode = SDBLockMetaInfo(userIdforOpen, sdbDbId_);
-			if (retCode == SUCCESS) { 
+			if (retCode == SUCCESS) {
 				if (isAlterTableStmt && openTempFile)
 					sdbTableNumber_ = SDBOpenTable(sdbUserId_, sdbDbId_, tblFsName);
 				else	// outside of a user transaction
 					sdbTableNumber_ = SDBOpenTable(userIdforOpen, sdbDbId_, tblFsName);	
 			}
-		}
-
-		// For CREATE TABLE ... SELECT, Secondary node needs to open the select-from table without calling SDBLockMetaInfo. 
-		// Secondary node should NOT open the new table which is inside of external_lock pair.
-		if ( (sqlCommand==SQLCOM_CREATE_TABLE) && (bIsPrimaryNode==false)
-			&& (pSdbMysqlTxn_->getDdlFlag() == 0) )		// this condition says the to-be-opened table is outside external_lock pair
-			sdbTableNumber_ = SDBOpenTable(userIdforOpen, sdbDbId_, tblFsName);
-	}
-	else {	// on a single node solution
-		retCode = SDBLockMetaInfo(userIdforOpen, sdbDbId_);
-		if (retCode == SUCCESS) {
-			if (isAlterTableStmt && openTempFile)
-				sdbTableNumber_ = SDBOpenTable(sdbUserId_, sdbDbId_, tblFsName);
-			else	// outside of a user transaction
-				sdbTableNumber_ = SDBOpenTable(userIdforOpen, sdbDbId_, tblFsName);	
 		}
 	}
 
@@ -2040,7 +2048,7 @@ int ha_scaledb::fetchRowByPosition(unsigned char* buf, unsigned int pos) {
 
 	int errorNum = 0;
 
-	int retValue = (int) SDBGetSeqRowByPosition( sdbQueryMgrId_, pos);
+	int retValue = (int) SDBGetSeqRowByPosition(sdbUserId_, sdbQueryMgrId_, pos);
 
 	if (retValue == SUCCESS)
 		retValue = copyRowToMySQLBuffer(buf);
@@ -2077,9 +2085,9 @@ retryFetch:
 	int retValue = 0;
 
 	if (active_index == MAX_KEY)
-		retValue = SDBQueryCursorNextSequential(sdbQueryMgrId_);
+		retValue = SDBQueryCursorNextSequential(sdbUserId_, sdbQueryMgrId_);
 	else
-		retValue = SDBQueryCursorNext(sdbQueryMgrId_);
+		retValue = SDBQueryCursorNext(sdbUserId_, sdbQueryMgrId_);
 
 	if (retValue != SUCCESS) {
 		// no row
@@ -2380,7 +2388,7 @@ int ha_scaledb::fetchVirtualRow(unsigned char* buf) {
 	print_header_thread_info("MySQL Interface: executing ha_scaledb::fetchVirtualRow(...) ");
 
 	int errorNum = 0;
-	errorNum = SDBQueryCursorNext(sdbQueryMgrId_);	// always use the Multi-Table Index to fetch record
+	errorNum = SDBQueryCursorNext(sdbUserId_, sdbQueryMgrId_);	// always use the Multi-Table Index to fetch record
 
 	if (errorNum != SUCCESS) {
 		// no row
@@ -2482,7 +2490,7 @@ void ha_scaledb::prepareIndexOrSequentialQueryManager()
 		SDBResetQuery( sdbQueryMgrId_ );  // remove the previously defined query
 		SDBSetActiveQueryManager(sdbQueryMgrId_); // cache the object for performance
 
-		retValue = SDBPrepareSequentialScan(sdbQueryMgrId_, sdbDbId_, table->s->table_name.str, ((THD*)ha_thd())->query_id);
+		retValue = SDBPrepareSequentialScan(sdbUserId_, sdbQueryMgrId_, sdbDbId_, table->s->table_name.str, ((THD*)ha_thd())->query_id);
 
 	}
 }
@@ -2601,12 +2609,12 @@ int ha_scaledb::prepareIndexKeyQuery(const uchar* key, uint key_len, enum ha_rke
 		if (find_flag == HA_READ_AFTER_KEY){
 			SDBQueryCursorGetFirst(sdbQueryMgrId_, sdbDbId_, sdbDesignatorId_);
 			SDBQueryCursorDefineQueryAllValues(sdbQueryMgrId_, sdbDbId_, sdbDesignatorId_, false);
-			return SDBPrepareQuery(sdbQueryMgrId_, 0,((THD*)ha_thd())->query_id, releaseLocksAfterRead_);	
+			return SDBPrepareQuery(sdbUserId_, sdbQueryMgrId_, 0,((THD*)ha_thd())->query_id, releaseLocksAfterRead_);	
 		}
 		if (find_flag == HA_READ_BEFORE_KEY){
 			SDBQueryCursorGetLast(sdbQueryMgrId_, sdbDbId_, sdbDesignatorId_);
 			SDBQueryCursorDefineQueryAllValues(sdbQueryMgrId_, sdbDbId_, sdbDesignatorId_, false);
-			return SDBPrepareQuery(sdbQueryMgrId_, 0,((THD*)ha_thd())->query_id, releaseLocksAfterRead_);	
+			return SDBPrepareQuery(sdbUserId_, sdbQueryMgrId_, 0,((THD*)ha_thd())->query_id, releaseLocksAfterRead_);	
 		}
 	}
 
@@ -2766,7 +2774,7 @@ int ha_scaledb::prepareIndexKeyQuery(const uchar* key, uint key_len, enum ha_rke
 	//	retValue = pSdbEngine->query( sdbQueryMgrId_ )->defineQuery(sdbDbId_, sdbDesignatorId_, pkeyValuePtr, false);
 
 	// we execute the query
-	retValue = SDBPrepareQuery(sdbQueryMgrId_, 0,((THD*)ha_thd())->query_id, releaseLocksAfterRead_);	
+	retValue = SDBPrepareQuery(sdbUserId_, sdbQueryMgrId_, 0,((THD*)ha_thd())->query_id, releaseLocksAfterRead_);	
 
 	//RELEASE_MEMORY( pkeyValuePtr );
 	return retValue;
@@ -3195,7 +3203,7 @@ int ha_scaledb::rnd_next(uchar* buf) {
 			sdbDesignatorId_ = 0;	// no index is used.
 
 			SDBResetQuery( sdbQueryMgrId_ );  // remove the previously defined query
-			retValue = (int) SDBPrepareSequentialScan(sdbQueryMgrId_, sdbDbId_, table->s->table_name.str, ((THD*)ha_thd())->query_id);
+			retValue = (int) SDBPrepareSequentialScan(sdbUserId_, sdbQueryMgrId_, sdbDbId_, table->s->table_name.str, ((THD*)ha_thd())->query_id);
 
 			// We fetch the result record and save it into buf
 			if ( retValue == 0 ) {
@@ -3301,7 +3309,7 @@ int ha_scaledb::rnd_pos(uchar * buf, uchar *pos)
 			active_index = old_active_index;
 		}
 		SDBResetQuery(sdbQueryMgrId_);  // remove the previously defined query
-		retValue = (int) SDBPrepareSequentialScan(sdbQueryMgrId_, sdbDbId_, table->s->table_name.str, ((THD*)ha_thd())->query_id);
+		retValue = (int) SDBPrepareSequentialScan(sdbUserId_, sdbQueryMgrId_, sdbDbId_, table->s->table_name.str, ((THD*)ha_thd())->query_id);
 		beginningOfScan_ = false;
         pSdbMysqlTxn_->setScanType(sdbQueryMgrId_, true);
 	}
@@ -3714,7 +3722,7 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 	// Second we add column information to metadata memory
 	errorNum = add_columns_to_table(thd, table_arg, ddlFlag);
 	if (errorNum){
-		// No need to rollback, or deleteTableById here, as both of these were done by
+		// Fix for 882, No need to rollback, or deleteTableById here, as both of these were done by
 		// the add_columns_to_table, as it returned a non zero errorNum.
 		// SDBRollBack(sdbUserId_);	// rollback new table record in transaction
 		// SDBDeleteTableById(sdbDbId_, sdbTableNumber_);
@@ -3733,7 +3741,7 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 		errorNum = create_fks(thd, table_arg, pTableName, fkInfoArray, pCreateTableStmt);
 		if (errorNum){
 			SDBRollBack(sdbUserId_);	// rollback new table record in transaction
-			SDBDeleteTableById(sdbDbId_, sdbTableNumber_);
+			SDBDeleteTableById(sdbUserId_, sdbDbId_, sdbTableNumber_);
 			RELEASE_MEMORY( pCreateTableStmt );
 			DBUG_RETURN(errorNum);
 		}
@@ -3741,7 +3749,7 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 		errorNum = add_indexes_to_table(thd, table_arg, pTableName, ddlFlag, fkInfoArray);
 		if (errorNum){
 			SDBRollBack(sdbUserId_);	// rollback new table record in transaction
-			SDBDeleteTableById(sdbDbId_, sdbTableNumber_);
+			SDBDeleteTableById(sdbUserId_, sdbDbId_, sdbTableNumber_);
 			RELEASE_MEMORY( pCreateTableStmt );
 			DBUG_RETURN(errorNum);
 		}
@@ -4032,7 +4040,7 @@ int ha_scaledb::add_columns_to_table(THD* thd, TABLE *table_arg, unsigned short 
 
 		default:
 			sdbFieldType = 0;
-			SDBDeleteTableById(sdbDbId_, sdbTableNumber_);
+			SDBDeleteTableById(sdbUserId_, sdbDbId_, sdbTableNumber_);
 			SDBRollBack(sdbUserId_);
 			SDBCommit(sdbUserId_);
 #ifdef SDB_DEBUG_LIGHT
@@ -4047,7 +4055,7 @@ int ha_scaledb::add_columns_to_table(THD* thd, TABLE *table_arg, unsigned short 
 		sdbFieldId = SDBCreateField(sdbUserId_, sdbDbId_, sdbTableNumber_, (char*) pField->field_name, sdbFieldType, 
 			sdbFieldSize, sdbMaxDataLength, NULL, isAutoIncrField, ddlFlag);
 		if ( sdbFieldId == 0 ) {	// an error occurs
-			SDBDeleteTableById(sdbDbId_, sdbTableNumber_);
+			SDBDeleteTableById(sdbUserId_, sdbDbId_, sdbTableNumber_);
 			SDBRollBack(sdbUserId_);
 			SDBCommit(sdbUserId_);
 #ifdef SDB_DEBUG_LIGHT
@@ -4168,7 +4176,7 @@ int ha_scaledb::add_indexes_to_table(THD* thd, TABLE *table_arg, char* tblName, 
 			RELEASE_MEMORY( keyFields );
 			RELEASE_MEMORY( keySizes );
 			if (retValue == 0) {	// an error occurs
-				SDBDeleteTableById(sdbDbId_, sdbTableNumber_);	// cleans up table name and field name
+				SDBDeleteTableById(sdbUserId_, sdbDbId_, sdbTableNumber_);	// cleans up table name and field name
 				SDBRollBack(sdbUserId_);
 				SDBCommit(sdbUserId_);
 				errorNum = HA_ERR_NO_SUCH_TABLE;
@@ -4205,7 +4213,7 @@ int ha_scaledb::add_indexes_to_table(THD* thd, TABLE *table_arg, char* tblName, 
 			RELEASE_MEMORY( keyFields );
 			RELEASE_MEMORY( keySizes );
 			if (retValue == 0) {	// an error occurs as index number should be > 0
-				SDBDeleteTableById(sdbDbId_, sdbTableNumber_);	// cleans up table name and field name
+				SDBDeleteTableById(sdbUserId_, sdbDbId_, sdbTableNumber_);	// cleans up table name and field name
 				SDBRollBack(sdbUserId_);
 				SDBCommit(sdbUserId_);
 				errorNum = HA_ERR_WRONG_INDEX;
@@ -4921,7 +4929,7 @@ ha_rows ha_scaledb::records() {
 	}
 
 	prepareIndexOrSequentialQueryManager();
-	totalRows = SDBCountRef(sdbQueryMgrId_, sdbDbId_, sdbTableNumber_, ((THD*)ha_thd())->query_id );
+	totalRows = SDBCountRef(sdbUserId_, sdbQueryMgrId_, sdbDbId_, sdbTableNumber_, ((THD*)ha_thd())->query_id );
 
 	if (totalRows < 0) {
 		// error condition

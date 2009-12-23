@@ -84,7 +84,6 @@ private:
 	bool deleteAllRows_;	// set to true if delete_all_rows() method is called.
 	unsigned short sdbDbId_;		// DbId used by ScaleDB
 	unsigned short sdbTableNumber_; // table number used by ScaleDB
-  	//MetaInfo* pMetaInfo_;			// MetaInfo pointer 
 	unsigned int sdbUserId_;			// user id assigned by ScaleDB storage engine
 	unsigned short sdbQueryMgrId_;	// current query Manager ID
 	MysqlTxn* pSdbMysqlTxn_;		// pointer to MysqlTxn object

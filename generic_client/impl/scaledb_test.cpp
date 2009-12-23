@@ -172,14 +172,14 @@ int main(int argc, char** argv){
 	retVal = SDBDefineQuery(queryMgrId, dbId, indexId, (char*)"product id", NULL);
 							  
 	// set the cursor by the query definitions
-	retVal = SDBPrepareQuery(queryMgrId, 0, 0, true) ;
+	retVal = SDBPrepareQuery(userId, queryMgrId, 0, 0, true) ;
 
 	void *field;
 
 	printf("\nID    Product Name          Price");
 	printf("\n----  --------------------  ------------");
 
-	while (!SDBNext(queryMgrId)){
+	while (!SDBNext(userId, queryMgrId)){
 		// retrieve the rows
 
 		// get the product id

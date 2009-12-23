@@ -163,9 +163,9 @@ void SDBShowAllUsersLockStatus();
 //////////////////////////////////////////////////////////////////////////////
 */
 
-void SDBOpenFile(unsigned short dbId, unsigned short tableId);
+void SDBOpenFile(unsigned short userId, unsigned short dbId, unsigned short tableId);
 // When we close a table, we also remove table information from metadata cache
-void SDBCloseFile(unsigned short dbId, unsigned short tableId);
+void SDBCloseFile(unsigned short userId, unsigned short dbId, unsigned short tableId);
 
 // Initialize Database Table
 unsigned short SDBValidateInitDatabaseTable(const char *dbName, const char *tableName);
@@ -178,7 +178,7 @@ unsigned short SDBCreateTable(unsigned int userId, unsigned short dbId, char* ta
 unsigned short SDBDeleteTable(unsigned int userId, unsigned short dbId, 
 							  char* tableName, unsigned short ddlFlag=0); 
 
-unsigned short SDBDeleteTableById(unsigned short dbId, unsigned short tableId); 
+unsigned short SDBDeleteTableById(unsigned int userId, unsigned short dbId, unsigned short tableId); 
 
 
 // Rename a table
@@ -363,15 +363,17 @@ void SDBCloseQueryManager(unsigned int queryManagerId);
 
 void SDBFreeQueryManagerBuffers(unsigned int queryManagerId);
 
-unsigned short SDBPrepareSequentialScan(unsigned short queryMgrId, unsigned short dbId, char *tableName, unsigned long long queryId);
+unsigned short SDBPrepareSequentialScan(unsigned int userId, unsigned short queryMgrId, unsigned short dbId, char *tableName, 
+										unsigned long long queryId);
 
-unsigned short SDBNextSequential(unsigned short queryMgrId);
+//unsigned short SDBNextSequential(unsigned short queryMgrId);
 
-unsigned short SDBGetSeqRowByPosition(unsigned short queryMgrId, unsigned int rowId);
+unsigned short SDBGetSeqRowByPosition(unsigned int userId, unsigned short queryMgrId, unsigned int rowId);
 
-unsigned short SDBPrepareQuery(unsigned short queryMgrId, unsigned short partitionId, unsigned long long queryId, bool releaseLocksAfterRead) ;
+unsigned short SDBPrepareQuery(unsigned int userId, unsigned short queryMgrId, unsigned short partitionId, 
+							   unsigned long long queryId, bool releaseLocksAfterRead) ;
 
-unsigned short SDBNext(unsigned short queryMgrId);
+unsigned short SDBNext(unsigned int userId, unsigned short queryMgrId);
 
 void SDBResetQuery(unsigned short queryMgrId);
 
@@ -382,7 +384,7 @@ void SDBCloseAllQueryManagerIds(unsigned int userId);
 char* SDBGetFieldValueByTable(unsigned short queryMgrId, unsigned short dbId, unsigned short tableId, 
 							  unsigned short fieldId, char* ptrToColumnValue, unsigned int* fieldSize);
 
-unsigned long long SDBCountRef(unsigned short queryMgrId, unsigned short dbId, unsigned short tableId, unsigned long long queryId);
+long long SDBCountRef(unsigned int userId, unsigned short queryMgrId, unsigned short dbId, unsigned short tableId, unsigned long long queryId);
 
 // Query Cursor
 
@@ -391,8 +393,8 @@ unsigned short SDBDefineQuery(unsigned short queryMgrId, unsigned short dbId, un
 							  char* key);
 unsigned short SDBDefineQueryPrefix(unsigned short queryMgrId, unsigned short dbId, unsigned short indexId, char *fieldName, 
 									char* key, bool useStarForPrefixEnd, int keyPrefixSize, bool usePoundSign);
-unsigned short SDBQueryCursorNextSequential(unsigned short queryMgrId);
-unsigned short SDBQueryCursorNext(unsigned short queryMgrId);
+unsigned short SDBQueryCursorNextSequential(unsigned int userId, unsigned short queryMgrId);
+unsigned short SDBQueryCursorNext(unsigned int userId, unsigned short queryMgrId);
 bool SDBQueryCursorFieldIsNull(unsigned short queryMgrId, unsigned short fieldId);
 bool SDBQueryCursorFieldIsNullByIndex(unsigned short queryMgrId, unsigned short indexId, unsigned short fieldId);
 void SDBQueryCursorFreeBuffers(unsigned short queryMgrId);
