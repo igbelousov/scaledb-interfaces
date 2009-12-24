@@ -2534,8 +2534,6 @@ void ha_scaledb::prepareIndexQueryManager(unsigned int indexNum, const uchar* ke
 		char* pTableFsName = SDBGetTableFileSystemNameByTableNumber(sdbDbId_, sdbTableNumber_);
 		char* designatorName = SDBUtilFindDesignatorName(pTableFsName, pKey->name, indexNum);
 
-unsigned int tmpNameSizeA = *(unsigned int *)(designatorName -sizeof(int));	// tmp code
-
 		sdbQueryMgrId_ = pSdbMysqlTxn_->findQueryManagerId(designatorName, (void*) this, (char*) key, key_len, virtualTableFlag_);
 		if ( !sdbQueryMgrId_ ) {  // need to get a new one and save sdbQueryMgrId_ into MysqlTxn object
 			sdbQueryMgrId_ = SDBGetQueryManagerId(sdbUserId_);
@@ -2547,7 +2545,12 @@ unsigned int tmpNameSizeA = *(unsigned int *)(designatorName -sizeof(int));	// t
 		if (mysqlInterfaceDebugLevel_) {
 			SDBDebugStart();			// synchronize threads printout	
 			SDBDebugPrintHeader("MySQL Interface: designator: ");
-			SDBDebugPrintString( designatorName );
+			if (designatorName)
+				SDBDebugPrintString( designatorName );
+			else
+				SDBTerminate(IDENTIFIER_INTERFACE + ERRORNUM_INTERFACE_MYSQL + 11, 
+					"The designator name should NOT be NULL!!");		// ERROR - 16010011
+				
 			SDBDebugPrintString(" table: ");
 			SDBDebugPrintString( table->s->table_name.str );
 			SDBDebugEnd();			// synchronize threads printout	
@@ -2565,12 +2568,7 @@ unsigned int tmpNameSizeA = *(unsigned int *)(designatorName -sizeof(int));	// t
 		}
 #endif
 
-unsigned int tmpNameSizeB = *(unsigned int *)(designatorName -sizeof(int));	// tmp code
-
 		RELEASE_MEMORY( designatorName );
-
-unsigned int tmpNameSizeC = *(unsigned int *)(designatorName -sizeof(int));	// tmp code
-
 	}
 
 	sdbDesignatorName_ = pSdbMysqlTxn_->getDesignatorNameByQueryMrgId(sdbQueryMgrId_);
@@ -4117,6 +4115,9 @@ int ha_scaledb::create_fks(THD* thd, TABLE *table_arg, char* tblName, SdbDynamic
 			unsigned short parentTableId  = SDBGetTableNumberByName( sdbUserId_, sdbDbId_, pParentTableName );
 			if ( parentTableId == 0 ) 
 				parentTableId = SDBOpenTable(sdbUserId_, sdbDbId_, pParentTableName); 
+
+			if ( parentTableId == 0 ) 
+				return HA_ERR_CANNOT_ADD_FOREIGN;
 
 			// save the info about this foreign key for use when creating the associated designator
 	    	if (keyNum >= 0){
