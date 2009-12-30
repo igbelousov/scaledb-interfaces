@@ -1168,7 +1168,7 @@ int ha_scaledb::external_lock(
 }
 
 
-// If a user issues LOCK TABLES statement, MySQL will call ::external_lock only once.
+// If a user issues LOCK TABLES statement, MySQL will call ::external_lock only once to release lock.
 // In this case, MySQL will call this method at the beginning of each SQL statement after LOCK TABLES statement.
 int ha_scaledb::start_stmt(THD* thd, thr_lock_type lock_type) {
 	DBUG_ENTER("ha_scaledb::start_stmt");
@@ -1178,6 +1178,17 @@ int ha_scaledb::start_stmt(THD* thd, thr_lock_type lock_type) {
 
 	int retValue = 0;
 	placeSdbMysqlTxnInfo( thd );	
+
+	unsigned int sqlCommand = thd_sql_command(thd);
+
+	if (sqlCommand==SQLCOM_ALTER_TABLE || sqlCommand==SQLCOM_CREATE_INDEX || sqlCommand==SQLCOM_DROP_INDEX) {
+		if ( (SDBNodeIsCluster() == true) && (thd->query) && (strstr(thd->query, SCALEDB_HINT_PASS_DDL) == NULL) )
+		{	// This is the primary node in a cluster system
+			if (strstr(table->s->table_name.str, MYSQL_TEMP_TABLE_PREFIX)==NULL)  
+				// We can find the alter-table name (same logic used in the first external_lock when there is no LOCK TABLES)
+				pSdbMysqlTxn_->addAlterTableName(table->s->table_name.str);	// must be the regular table name, not temporary table
+		}
+	}
 
 	bool all_tx = false;
 	if (pSdbMysqlTxn_->lockCount_ == 0) {
@@ -1781,27 +1792,15 @@ void ha_scaledb::update_create_info(HA_CREATE_INFO* create_info) {
 	placeSdbMysqlTxnInfo( thd );
 
 	unsigned short retValue = 0;
+	// need to set Dbid and TableId in case SHOW CREATE TABLE is the first statement in a user session
 	if ( (sdbTableNumber_ == 0) && (!virtualTableFlag_) ) 
 		retValue = initializeDbTableId();
-	// need to set Dbid and TableId in case SHOW CREATE TABLE is the first statement in a user session
 
-	if ( records() > 0 ) {
-		// need to adjust auto_increment_value to the next integer
-		if (!(create_info->used_fields & HA_CREATE_USED_AUTO)) {
-			info(HA_STATUS_AUTO);
-			create_info->auto_increment_value = stats.auto_increment_value + 1;
-		}
-	}
-
-	// since external lock is not called in this case we need to free the query manager's here
-	// to avoid memory leak
-	unsigned int sqlCommand = thd_sql_command(thd);
-	pSdbMysqlTxn_->freeAllQueryManagerIds(mysqlInterfaceDebugLevel_);
-	if ( !thd_test_options(thd, OPTION_NOT_AUTOCOMMIT | OPTION_BEGIN) ) {	// in auto_commit mode
-
-		// We need to call commit() method to release locks imposed by records().
-		if ( sqlCommand == SQLCOM_SHOW_CREATE )
-			scaledb_commit(ht, thd, false);
+	//if ( records() > 0 ) 	// Bug 1022
+	// need to adjust auto_increment_value to the next integer
+	if (!(create_info->used_fields & HA_CREATE_USED_AUTO)) {
+		info(HA_STATUS_AUTO);
+		create_info->auto_increment_value = stats.auto_increment_value + 1;
 	}
 }
 
@@ -3645,6 +3644,7 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 #endif
 	if (retCode) {
 		SDBRemoveUserById(userIdforOpen);
+		pSdbMysqlTxn_->removeAlterTableName();
 		DBUG_RETURN( convertToMysqlErrorCode(retCode) );
 	}
 
@@ -3689,6 +3689,7 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 			if (alterTableNum == 0) {	// this is not a ScaleDB table.
 				SDBCommit(sdbUserId_);
 				RELEASE_MEMORY( pCreateTableStmt );
+				pSdbMysqlTxn_->removeAlterTableName();
 				DBUG_RETURN( HA_ERR_UNSUPPORTED );
 			}
 		}
@@ -4393,7 +4394,8 @@ int ha_scaledb::delete_table(const char* name)
 
 #ifdef SDB_DEBUG_LIGHT
 	if (mysqlInterfaceDebugLevel_ > 1) {
-		SDBPrintStructure(sdbDbId_);		// print metadata structure
+		if (retCode == SUCCESS)
+			SDBPrintStructure(sdbDbId_);		// print metadata structure
 	}
 #endif
 
@@ -4918,7 +4920,7 @@ ha_rows ha_scaledb::records() {
 #endif
 
     if (pSdbMysqlTxn_->getScaledbDbId() == 0) {
-        // not yet initialized .. records() can be called directly
+        // not yet initialized .. This method may be called directly
         pSdbMysqlTxn_->setScaledbDbId(sdbDbId_);
     }
 
