@@ -279,6 +279,15 @@ void MysqlTxn::releaseAllLockTables() {
 }
 
 
+// save the table name used in ALTER TABLE statement (used in cluster environment) 
+void MysqlTxn::addAlterTableName(char* pAlterTableName) { 
+	if (pAlterTableName_)
+		RELEASE_MEMORY( pAlterTableName_ );
+
+	pAlterTableName_= SDBUtilDuplicateString(pAlterTableName); 
+};
+
+
 // release the memory allocated for pAlterTableName_
 void MysqlTxn::removeAlterTableName() {
 	if (pAlterTableName_)

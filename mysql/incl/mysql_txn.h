@@ -121,7 +121,7 @@ public:
     void setScanType(unsigned short queryMgrId, bool sequentialScan=false);
     bool isSequentialScan(unsigned short queryMgrId);
 
-	void addAlterTableName(char* pAlterTableName) { pAlterTableName_= SDBUtilDuplicateString(pAlterTableName); };
+	void addAlterTableName(char* pAlterTableName);
 	void removeAlterTableName();
 	char* getAlterTableName() { return pAlterTableName_; }
 
