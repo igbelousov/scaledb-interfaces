@@ -139,6 +139,8 @@ unsigned short SDBOpenAllDBFiles(unsigned short userId, unsigned short dbId);
 unsigned short SDBLockMetaInfo(unsigned short userId, unsigned short dbId=SDB_MASTER_DBID);
 unsigned short SDBLockAndOpenDatabaseMetaInfo(unsigned short userId, char *databaseName);
 unsigned short SDBLockAndRemoveDatabaseMetaInfo(unsigned short userId, unsigned short dbId, unsigned short ddlFlag, char *databaseName);
+char * SDBGetClusterPassword();
+char * SDBGetClusterUser();
 int SDBGetSystemParamInt(const char *param, int defValue);
 char* SDBGetSystemParamString(const char *param);
 
@@ -230,7 +232,7 @@ unsigned long long SDBGetTableStats(unsigned short dbId, char* tableName, SDB_TA
 unsigned short SDBCreateIndex(unsigned int userId, unsigned short dbId, unsigned short tableId, 
 							  char *indexName, char **keyFields, unsigned short *keySizes, 
 							  bool isPrimaryKey, bool isNonUniqueIndex, char * parentIndexName, 
-							  unsigned short ddlFlag, unsigned short externalId);
+							  unsigned short ddlFlag, unsigned short externalId, bool isHashIndex);
 
 unsigned short SDBDropIndex(unsigned int userId, unsigned short dbId, unsigned short tableId, char *indexName);
 
@@ -324,7 +326,7 @@ unsigned int SDBUpdateRow(unsigned short userId, unsigned short dbId, unsigned s
 						  unsigned long long queryId=0);
 
 unsigned int SDBInsertRowAPI(unsigned short userId, unsigned short dbmsId, unsigned short tableId, unsigned int rowId , 
-							 unsigned short source, unsigned long long queryId=0);
+							 unsigned short source, unsigned long long queryId=0, unsigned short sdbCommandType=0);
 
 unsigned int SDBUpdateRowAPI(unsigned short userId, unsigned short dbmsId, unsigned short tableId, unsigned int rowId , 
 							 unsigned long long queryId=0);

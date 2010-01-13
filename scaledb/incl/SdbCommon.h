@@ -102,9 +102,14 @@ typedef enum SdbKeySearchDirection {
 #define SDB_VIRTUAL_VIEW "sdb_view_"
 #define SDB_VIRTUAL_VIEW_PREFIX_BYTES  9
 
+
 // The first table id in a user database.  
 // Tables with id 1 to 7 are all our meta tables (or data dictionary tables.
 #define SDB_FIRST_USER_TABLE_ID 16
+
+// Command type
+#define SDB_COMMAND_INSERT		0
+#define SDB_COMMAND_LOAD		1
 
 // Reference locks
 #define REFERENCE_LOCK_EXCLUSIVE 3
@@ -159,7 +164,6 @@ typedef enum SdbKeySearchDirection {
 #define ENGINE_INDEX_ERROR 101
 
 // error codes issued by MetaData component
-// #define METAINFO_SUCCESS  0		// use SUCCESS for consistency 
 #define METAINFO_UNDEFINED_DATA_TABLE  1001
 #define METAINFO_PRIMARY_KEY_EXISTS_FOR_TABLE  1002
 #define METAINFO_UNDEFINED_PARENT_DESIGNATOR  1003

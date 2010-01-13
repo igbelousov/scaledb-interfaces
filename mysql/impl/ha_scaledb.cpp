@@ -851,6 +851,7 @@ ha_scaledb::ha_scaledb(handlerton *hton, TABLE_SHARE *table_arg)
 	deleteAllRows_ = false;
 	sdbRowIdInScan_ = 0;
 	extraChecks_ = 0;
+	sdbCommandType_ = 0;
 }
 
 
@@ -1007,13 +1008,15 @@ int ha_scaledb::external_lock(
 	int retValue = 0;
 	placeSdbMysqlTxnInfo( thd );
 
-	unsigned int sqlCommand = thd_sql_command(thd);
+	this->sqlCommand_ = thd_sql_command(thd);
+	if (sqlCommand_ == SQLCOM_LOAD)
+		sdbCommandType_ = SDB_COMMAND_LOAD;
 
 	// On a non-primary node, we do nothing for DDL statements.
 	// CREATE TABLE ... SELECT statement calls this method as well.
 	if (SDBNodeIsCluster() == true) {	// it is a cluster system
-		if (sqlCommand==SQLCOM_CREATE_TABLE || sqlCommand==SQLCOM_ALTER_TABLE 
-			|| sqlCommand==SQLCOM_CREATE_INDEX || sqlCommand==SQLCOM_DROP_INDEX) {
+		if (sqlCommand_==SQLCOM_CREATE_TABLE || sqlCommand_==SQLCOM_ALTER_TABLE 
+			|| sqlCommand_==SQLCOM_CREATE_INDEX || sqlCommand_==SQLCOM_DROP_INDEX) {
 			if ( thd->query && strstr(thd->query, SCALEDB_HINT_PASS_DDL) != NULL ) { // must be last comparison as it is expensive
 				// this is secondary node
 				if (lock_type != F_UNLCK)
@@ -1024,7 +1027,7 @@ int ha_scaledb::external_lock(
 				DBUG_RETURN(0);
 			} else {	
 				// this is primary node
-				if ( (sqlCommand==SQLCOM_ALTER_TABLE || sqlCommand==SQLCOM_CREATE_INDEX || sqlCommand==SQLCOM_DROP_INDEX) 
+				if ( (sqlCommand_==SQLCOM_ALTER_TABLE || sqlCommand_==SQLCOM_CREATE_INDEX || sqlCommand_==SQLCOM_DROP_INDEX) 
 					&& (lock_type != F_UNLCK) && (strstr(table->s->table_name.str, MYSQL_TEMP_TABLE_PREFIX)==NULL) ) {
 					// We can find the alter-table name in the first external_lock on the regular table name
 						pSdbMysqlTxn_->addAlterTableName(table->s->table_name.str);
@@ -1051,7 +1054,7 @@ int ha_scaledb::external_lock(
 
 
 	// lock the table if the user has an explicit lock tables statement
-	if ( sqlCommand == SQLCOM_UNLOCK_TABLES ) {	// now the user has an explicit UNLOCK TABLES statement
+	if ( sqlCommand_ == SQLCOM_UNLOCK_TABLES ) {	// now the user has an explicit UNLOCK TABLES statement
 
 		retValue = pSdbMysqlTxn_->removeLockTableName(table->s->table_name.str );
 
@@ -1071,7 +1074,7 @@ int ha_scaledb::external_lock(
 		bool all_tx = false;
 
 		// lock the table if the user has an explicit lock tables statement
-		if ( (sqlCommand == SQLCOM_LOCK_TABLES) ) {	// now the user has an explicit LOCK TABLES statement
+		if ( (sqlCommand_ == SQLCOM_LOCK_TABLES) ) {	// now the user has an explicit LOCK TABLES statement
 			if ( thd_in_lock_tables(thd) ) {
 
 				unsigned char lockLevel = REFERENCE_READ_ONLY;	// table level read lock
@@ -1152,7 +1155,7 @@ int ha_scaledb::external_lock(
 				// MySQL query processor does NOT execute autocommit for pure SELECT transactions.
 				// We should commit for SELECT statement in order for ScaleDB engine to release the right locks.
 				// if ( pSdbMysqlTxn_->getActiveTxn() )	// 2008-10-18: this condition is not needed
-				if ( sqlCommand == SQLCOM_SELECT )
+				if ( sqlCommand_ == SQLCOM_SELECT )
 					scaledb_commit(ht, thd, false);
 			}
 
@@ -1179,9 +1182,11 @@ int ha_scaledb::start_stmt(THD* thd, thr_lock_type lock_type) {
 	int retValue = 0;
 	placeSdbMysqlTxnInfo( thd );	
 
-	unsigned int sqlCommand = thd_sql_command(thd);
+	this->sqlCommand_ = thd_sql_command(thd);
+	if (sqlCommand_ == SQLCOM_LOAD)
+		sdbCommandType_ = SDB_COMMAND_LOAD;
 
-	if (sqlCommand==SQLCOM_ALTER_TABLE || sqlCommand==SQLCOM_CREATE_INDEX || sqlCommand==SQLCOM_DROP_INDEX) {
+	if (sqlCommand_==SQLCOM_ALTER_TABLE || sqlCommand_==SQLCOM_CREATE_INDEX || sqlCommand_==SQLCOM_DROP_INDEX) {
 		if ( (SDBNodeIsCluster() == true) && (thd->query) && (strstr(thd->query, SCALEDB_HINT_PASS_DDL) == NULL) )
 		{	// This is the primary node in a cluster system
 			if (strstr(table->s->table_name.str, MYSQL_TEMP_TABLE_PREFIX)==NULL)  
@@ -1716,8 +1721,9 @@ int ha_scaledb::write_row(unsigned char* buf)
 
 	unsigned short retValue = placeMysqlRowInEngineBuffer( (unsigned char *) buf, (unsigned char *) buf, 0, true, needToUpdateAutoIncrement);
 
-	if (retValue == 0)
-		retValue = SDBInsertRowAPI(sdbUserId_, sdbDbId_, sdbTableNumber_, 0, 0, ((THD*)ha_thd())->query_id);
+	if (retValue == 0) {
+		retValue = SDBInsertRowAPI(sdbUserId_, sdbDbId_, sdbTableNumber_, 0, 0, ((THD*)ha_thd())->query_id, sdbCommandType_);
+	}
 
 	if (retValue == 0 && needToUpdateAutoIncrement){
 		((THD*)ha_thd())->first_successful_insert_id_in_cur_stmt = get_scaledb_autoincrement_value();
@@ -1969,9 +1975,9 @@ int ha_scaledb::delete_all_rows()
 		deleteAllRows_ = true;
 
 		THD* thd = ha_thd();
-		unsigned int sqlCommand = thd_sql_command(thd);
+		sqlCommand_ = thd_sql_command(thd);
 
-		if ( sqlCommand == SQLCOM_TRUNCATE ) {
+		if ( sqlCommand_ == SQLCOM_TRUNCATE ) {
 			unsigned short stmtFlag = 0;
 			if (SDBNodeIsCluster() == true) {
 				if ( strstr(thd->query, SCALEDB_HINT_PREFIX) != NULL )
@@ -2960,9 +2966,9 @@ int ha_scaledb::index_first(uchar* buf) {
 	ha_statistic_increment(&SSV::ha_read_first_count);
 
 	THD* thd = ha_thd();
-	unsigned int sqlCommand = thd_sql_command(thd);
+	sqlCommand_ = thd_sql_command(thd);
 	// For CREATE TABLE ... SELECT, a secondary node should exit early.
-	if ( (SDBNodeIsCluster() == true) && (sqlCommand == SQLCOM_CREATE_TABLE) ) {
+	if ( (SDBNodeIsCluster() == true) && (sqlCommand_ == SQLCOM_CREATE_TABLE) ) {
 		if ( pSdbMysqlTxn_->getDdlFlag() & SDBFLAG_DDL_SECOND_NODE )
 				DBUG_RETURN(HA_ERR_END_OF_FILE);
 	}
@@ -3055,7 +3061,7 @@ int ha_scaledb::rnd_init(bool scan) {
 	DBUG_ENTER("ha_scaledb::rnd_init");
 	int errorNum = 0;
 	THD* thd = ha_thd();
-	unsigned int sqlCommand = thd_sql_command(thd);
+	sqlCommand_ = thd_sql_command(thd);
 
 	// on a non-primary node, we do nothing for DDL statements.
 	// CREATE TABLE ... SELECT also calls this method.
@@ -3078,7 +3084,7 @@ int ha_scaledb::rnd_init(bool scan) {
 	}
 
 	if ( scan ) {  
-		if ( !(sqlCommand == SQLCOM_SELECT || sqlCommand == SQLCOM_INSERT_SELECT) && (SDBIsTableWithIndexes(sdbDbId_, sdbTableNumber_)) ) {
+		if ( !(sqlCommand_ == SQLCOM_SELECT || sqlCommand_ == SQLCOM_INSERT_SELECT) && (SDBIsTableWithIndexes(sdbDbId_, sdbTableNumber_)) ) {
 			prepareFirstKeyQueryManager();
 		}
 
@@ -3091,7 +3097,7 @@ int ha_scaledb::rnd_init(bool scan) {
 			// It is difficult to tell if a user is doig update-all.  This is because MySQL query optimizer
 			// will use full table scan if the update condition is on a non-index column.
 
-			switch (sqlCommand) {
+			switch (sqlCommand_) {
 			case SQLCOM_ALTER_TABLE:	
 			case SQLCOM_CREATE_INDEX:
 			case SQLCOM_DROP_INDEX:
@@ -3110,7 +3116,7 @@ int ha_scaledb::rnd_init(bool scan) {
 				break;
 			}
 
-			if ( sqlCommand != SQLCOM_SELECT ) {
+			if ( sqlCommand_ != SQLCOM_SELECT ) {
 				if (SDBLockTable(sdbUserId_, sdbDbId_, sdbTableNumber_, tableLockLevel) == false)
 					errorNum = HA_ERR_LOCK_WAIT_TIMEOUT;
 			}
@@ -3533,7 +3539,6 @@ this (the database will call ::open() if it needs to).
 Parameter name contains database name and table name that are file system compliant names.
 The user-defined table name is saved in table_arg->s->table_name.str
 */
-
 int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *create_info)
 {
 	DBUG_ENTER("ha_scaledb::create");
@@ -3745,7 +3750,7 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 			DBUG_RETURN(errorNum);
 		}
 
-		errorNum = add_indexes_to_table(thd, table_arg, pTableName, ddlFlag, fkInfoArray);
+		errorNum = add_indexes_to_table(thd, table_arg, pTableName, ddlFlag, fkInfoArray, pCreateTableStmt);
 		if (errorNum){
 			SDBRollBack(sdbUserId_);	// rollback new table record in transaction
 			SDBDeleteTableById(sdbUserId_, sdbDbId_, sdbTableNumber_);
@@ -4146,9 +4151,10 @@ int ha_scaledb::create_fks(THD* thd, TABLE *table_arg, char* tblName, SdbDynamic
 	return errorNum;
 }
 
-// add indexes to a table, part of create table
-int ha_scaledb::add_indexes_to_table(THD* thd, TABLE *table_arg, char* tblName, unsigned short ddlFlag, SdbDynamicArray* fkInfoArray){
 
+// add indexes to a table, part of create table
+int ha_scaledb::add_indexes_to_table(THD* thd, TABLE *table_arg, char* tblName, unsigned short ddlFlag, 
+									 SdbDynamicArray* fkInfoArray, char* pCreateTableStmt) {
 	unsigned int errorNum = 0;
 	unsigned int primaryKeyNum = table_arg->s->primary_key;
 	KEY_PART_INFO* pKeyPart;
@@ -4157,9 +4163,26 @@ int ha_scaledb::add_indexes_to_table(THD* thd, TABLE *table_arg, char* tblName, 
 	for (int i=0; i < numOfKeys; ++i ) {
 		KEY* pKey = table_arg->key_info + i;
 		char* pTableFsName = SDBGetTableFileSystemNameByTableNumber(sdbDbId_, sdbTableNumber_);
-		char* designatorName = SDBUtilFindDesignatorName(pTableFsName, pKey->name, i);
+		char* keyNameInLower = SDBUtilGetStrInLower(pKey->name);
+		char* designatorName = SDBUtilFindDesignatorName(pTableFsName, keyNameInLower, i);
+
+		// MySQL does not set value properly in pKey->algorithm for HASH index.
+		// We need to parse USING HASH clause in a CREATE TABLE statement.  The syntax is:
+		//col_name column_definition
+		// | [CONSTRAINT [symbol]] PRIMARY KEY [index_type] (index_col_name,...) [index_option] ...
+		// | {INDEX|KEY} [index_name] [index_type] (index_col_name,...) [index_option] ...
+		// | [CONSTRAINT [symbol]] UNIQUE [INDEX|KEY] [index_name] [index_type] (index_col_name,...) [index_option] ...
+		bool isHashIndex = false;
 
 		if ( (primaryKeyNum == 0) && (i == 0) ) {  // primary key specified
+
+			if ( strstr( pCreateTableStmt, "using hash") ) {
+				char* pPrimaryKeyClause = strstr( pCreateTableStmt, "primary key ");
+				char* pUsingHash = strstr( pPrimaryKeyClause+12, "using hash");
+				if (pUsingHash - pPrimaryKeyClause == 12)	// PRIMARY KEY immediately followed by USING HASH
+					isHashIndex = true;
+			}
+
 			KEY* pKey = table_arg->key_info + i;
 			int numOfKeyFields = (int) pKey->key_parts;
 			char** keyFields = (char **) GET_MEMORY((numOfKeyFields + 1) * sizeof(char *));
@@ -4173,7 +4196,7 @@ int ha_scaledb::add_indexes_to_table(THD* thd, TABLE *table_arg, char* tblName, 
 			keyFields[numOfKeyFields] = NULL;  // must end with NULL to signal the end of pointer list
 
 			unsigned short retValue = SDBCreateIndex(sdbUserId_, sdbDbId_, sdbTableNumber_, designatorName, 
-				keyFields, keySizes, true, false, NULL, ddlFlag, 0);
+				keyFields, keySizes, true, false, NULL, ddlFlag, 0, isHashIndex);
 			// Need to free keyFields, but not the field names used by MySQL.
 			RELEASE_MEMORY( keyFields );
 			RELEASE_MEMORY( keySizes );
@@ -4186,8 +4209,16 @@ int ha_scaledb::add_indexes_to_table(THD* thd, TABLE *table_arg, char* tblName, 
 			}
 
 		} else {  // add secondary index (including the foreign key)
-			int numOfKeyFields = (int) pKey->key_parts;
 
+			if ( keyNameInLower && strstr( pCreateTableStmt, "using hash") ) {
+				char* pIndexName = strstr( pCreateTableStmt, keyNameInLower);
+				unsigned short indexNameLen = SDBUtilGetStrLength(keyNameInLower);
+				char* pUsingHash = strstr( pIndexName+indexNameLen+1, "using hash");
+				if (pUsingHash - pIndexName == indexNameLen+1)	// index_name immediately followed by USING HASH
+					isHashIndex = true;
+			}
+
+			int numOfKeyFields = (int) pKey->key_parts;
 			bool isUniqueIndex = (pKey->flags & HA_NOSAME) ? true : false;
 			char** keyFields = (char **) GET_MEMORY((numOfKeyFields + 1)* sizeof(char *));
 			unsigned short* keySizes = (unsigned short*) GET_MEMORY((numOfKeyFields + 1) * sizeof(unsigned short));
@@ -4210,7 +4241,7 @@ int ha_scaledb::add_indexes_to_table(THD* thd, TABLE *table_arg, char* tblName, 
 			}
 
 			unsigned short retValue = SDBCreateIndex(sdbUserId_, sdbDbId_, sdbTableNumber_, designatorName,  
-				keyFields, keySizes, false, !isUniqueIndex, parent, ddlFlag, i);
+				keyFields, keySizes, false, !isUniqueIndex, parent, ddlFlag, i, isHashIndex);
 			// Need to free keyFields, but not the field names used by MySQL.
 			RELEASE_MEMORY( keyFields );
 			RELEASE_MEMORY( keySizes );
@@ -4223,11 +4254,13 @@ int ha_scaledb::add_indexes_to_table(THD* thd, TABLE *table_arg, char* tblName, 
 			}
 		}
 
+		RELEASE_MEMORY( keyNameInLower );
 		RELEASE_MEMORY( designatorName );
 	}   // for (int i=0; i < numOfKeys; ++i )
 
 	return errorNum;
 }
+
 
 // delete a user table. 
 // This method is outside the pair of external_lock calls.  Hence we need to set sdbTableNumber_.
@@ -4601,8 +4634,8 @@ bool ha_scaledb::sqlStmt(unsigned short dbmsId, char* sqlStmt, bool bIgnoreDB, b
 		char ip[64];
         SDBUtilGetIpFromInet(&nodesArray[i], ip, sizeof(ip));
 		int port = portsArray[i];
-		char* password = SDBGetSystemParamString("cluster_password");
-		char* user = SDBGetSystemParamString("cluster_user");
+		char* password = SDBGetClusterPassword();
+		char* user = SDBGetClusterUser();
 		char* socket = NULL;
 
 		// set up MySQL client connection

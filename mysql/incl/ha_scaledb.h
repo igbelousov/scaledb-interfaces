@@ -96,6 +96,9 @@ private:
 	unsigned int readDebugCounter_; // counter for debugging
 	bool releaseLocksAfterRead_;    // flag to indicate whether we hold the locks after reading data
 	unsigned int deleteRowCount_;
+	int sqlCommand_;		// SQL command defined in ::external_lock.  Use this variable to avoid repetitively calling
+							// thd_sql_command() function.  Example: DATA LOAD command
+	unsigned short sdbCommandType_;	// specifies command to be passed to ScaleDB engine
 
 	unsigned short getOffsetByDesignator(unsigned short designator);
 	// This method packs a MySQL row into ScaleDB engine row buffer 
@@ -260,7 +263,8 @@ public:
 	// create a user table.
 	int create(const char* name, TABLE *form, HA_CREATE_INFO *create_info);  ///< required
 	int add_columns_to_table(THD* thd, TABLE *table_arg, unsigned short ddlFlag);
-	int add_indexes_to_table(THD* thd, TABLE *table_arg, char* tblName, unsigned short ddlFlag, SdbDynamicArray* fkInfoArray);
+	int add_indexes_to_table(THD* thd, TABLE *table_arg, char* tblName, unsigned short ddlFlag, 
+							SdbDynamicArray* fkInfoArray, char* pCreateTableStmt);
 	int create_fks(THD* thd, TABLE *table_arg, char* tblName, SdbDynamicArray* fkInfoArray, char* pCreateTableStmt);
 
 	// delete a user table.

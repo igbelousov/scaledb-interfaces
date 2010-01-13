@@ -78,21 +78,18 @@ int main(int argc, char** argv){
 
 	// create field price (8 bytes unsigned number)
 	fieldId = SDBCreateField(userId, dbId, tableId, (char*)"price", ENGINE_TYPE_S_NUMBER, 8, 0, NULL, false, 0);
-
 	
 	// Create index over product id
 	char *keyFields[2];				// maintains an array of names of fields that make the key
 	keyFields[0] = (char*)"product id";	// first field in the key
 	keyFields[1] = 0;
-	
 
 	// note: productIdIndex is a unique index
-	unsigned short indexId = SDBCreateIndex(userId, dbId, tableId, (char*)"productIdIndex", keyFields, NULL, true, false, NULL, 0, 0);
-                       
+	unsigned short indexId = SDBCreateIndex(userId, dbId, tableId, (char*)"productIdIndex", keyFields, NULL, 
+											true, false, NULL, 0, 0, false);
 	
 	printf("\nTable Catalog created successfully");
 	fflush(stdout);
-
 
 
 	// open files of the new table to allow read + write
@@ -101,11 +98,9 @@ int main(int argc, char** argv){
 	printf("\nTable Catalog is ready for read and write");
 	fflush(stdout);
 
-
 	// DML
 
 	// INSERT
-
 
 	unsigned int id;
 	char productName[21];
