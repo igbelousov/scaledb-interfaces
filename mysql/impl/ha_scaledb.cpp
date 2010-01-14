@@ -4159,10 +4159,10 @@ int ha_scaledb::add_indexes_to_table(THD* thd, TABLE *table_arg, char* tblName, 
 	unsigned int primaryKeyNum = table_arg->s->primary_key;
 	KEY_PART_INFO* pKeyPart;
 	int numOfKeys = (int) table_arg->s->keys ;
+	char* pTableFsName = SDBGetTableFileSystemNameByTableNumber(sdbDbId_, sdbTableNumber_);
 
 	for (int i=0; i < numOfKeys; ++i ) {
 		KEY* pKey = table_arg->key_info + i;
-		char* pTableFsName = SDBGetTableFileSystemNameByTableNumber(sdbDbId_, sdbTableNumber_);
 		char* keyNameInLower = SDBUtilGetStrInLower(pKey->name);
 		char* designatorName = SDBUtilFindDesignatorName(pTableFsName, keyNameInLower, i);
 
@@ -4178,9 +4178,11 @@ int ha_scaledb::add_indexes_to_table(THD* thd, TABLE *table_arg, char* tblName, 
 
 			if ( strstr( pCreateTableStmt, "using hash") ) {
 				char* pPrimaryKeyClause = strstr( pCreateTableStmt, "primary key ");
-				char* pUsingHash = strstr( pPrimaryKeyClause+12, "using hash");
-				if (pUsingHash - pPrimaryKeyClause == 12)	// PRIMARY KEY immediately followed by USING HASH
-					isHashIndex = true;
+				if (pPrimaryKeyClause) {
+					char* pUsingHash = strstr( pPrimaryKeyClause+12, "using hash");
+					if (pUsingHash - pPrimaryKeyClause == 12)	// PRIMARY KEY immediately followed by USING HASH
+						isHashIndex = true;
+				}
 			}
 
 			KEY* pKey = table_arg->key_info + i;
@@ -4211,11 +4213,13 @@ int ha_scaledb::add_indexes_to_table(THD* thd, TABLE *table_arg, char* tblName, 
 		} else {  // add secondary index (including the foreign key)
 
 			if ( keyNameInLower && strstr( pCreateTableStmt, "using hash") ) {
-				char* pIndexName = strstr( pCreateTableStmt, keyNameInLower);
-				unsigned short indexNameLen = SDBUtilGetStrLength(keyNameInLower);
-				char* pUsingHash = strstr( pIndexName+indexNameLen+1, "using hash");
-				if (pUsingHash - pIndexName == indexNameLen+1)	// index_name immediately followed by USING HASH
-					isHashIndex = true;
+				if (pKey->name) {	// For now, we assume a user needs to specify index_name if he wants USING HASH
+					char* pIndexName = strstr( pCreateTableStmt, keyNameInLower);
+					unsigned short indexNameLen = SDBUtilGetStrLength(keyNameInLower);
+					char* pUsingHash = strstr( pIndexName+indexNameLen+1, "using hash");
+					if (pUsingHash - pIndexName == indexNameLen+1)	// index_name immediately followed by USING HASH
+						isHashIndex = true;
+				}
 			}
 
 			int numOfKeyFields = (int) pKey->key_parts;
