@@ -4346,7 +4346,7 @@ int ha_scaledb::delete_table(const char* name)
 		DBUG_RETURN(errorNum);
 	}	
 
-	// TODO: may simplify the logic in the remaining code because only primary node and single node will proceed 
+	// may simplify the logic in the remaining code because only primary node and single node will proceed 
 	// after this point.
 
 	if ( (sdbTableNumber_ == 0) && (!virtualTableFlag_) ) {
@@ -4372,10 +4372,18 @@ int ha_scaledb::delete_table(const char* name)
 	retCode = SDBCanTableBeDropped(sdbUserId_, sdbDbId_, pTableName);
 	if (retCode == SUCCESS) {
 
+		// For DROP TABLE and DROP DATABASE, we need to impose the exclusive table level lock.
+		// For ALTER TABLE, we already imposed the exclusive table level lock in rnd_init. 
+		if ( (sqlCommand == SQLCOM_DROP_TABLE) || (sqlCommand == SQLCOM_DROP_DB) ) {
+			if (SDBLockTable(sdbUserId_, sdbDbId_, sdbTableNumber_, REFERENCE_LOCK_EXCLUSIVE) == false) {
+				SDBCommit(sdbUserId_);	// release lockMetaInfo
+				DBUG_RETURN(HA_ERR_LOCK_WAIT_TIMEOUT);
+			}
+		}
+
 		// The primary node needs to propagate the DDL to other nodes.
 		bool dropTableReady = true;
-		if ((SDBNodeIsCluster() == true) && 
-			!(ddlFlag & SDBFLAG_DDL_SECOND_NODE) ) {
+		if ( SDBNodeIsCluster() == true ) {
 			char* passedDDL = NULL;
 			if ( (sqlCommand == SQLCOM_DROP_TABLE) || (sqlCommand == SQLCOM_DROP_DB) ) {
 				// We cannot use user's drop table statement because we can process only one DROP TABLE statement
@@ -4391,17 +4399,12 @@ int ha_scaledb::delete_table(const char* name)
 		// pass the DDL statement to engine so that it can be propagated to other nodes
 		// The user statement may be DROP TABLE, ALTER TABLE or CREATE/DROP INDEX,
 		if (dropTableReady == true) {
-			// lock MetaInfo for changes
-			//if ( !(ddlFlag & SDBFLAG_DDL_SECOND_NODE) ) {
-			//	SDBLockMetaInfoForTable(sdbUserId_, sdbDbId_, sdbTableNumber_, RESOURCE_LOCK_EXCLUSIVE);
-			//}
-
 			// remove the table name from lock table vector if it exists
 			pSdbMysqlTxn_->removeLockTableName(pTableName );
 
 			// single node solution: need to drop table and its in-memory metadata.
 			// cluster solution: primary node need to drop table and its in-memory metadata.  
-			// cluster solution: Secondary node need to drop its in-memory metadata.
+			// cluster solution: MySQL already closed the to-be-dropped table and deleted MySQL metadata for the table.
 			retCode = SDBDeleteTable(sdbUserId_, sdbDbId_, pTableName, ddlFlag);
 		}
 		else		
@@ -4421,7 +4424,7 @@ int ha_scaledb::delete_table(const char* name)
 				retCode = ALTER_TABLE_FAILED_IN_CLUSTER;
 		}
 
-		// For both DROP TABLE and ALTER TABLE, primary node needs to release lock on MetaInfo
+		// For both DROP TABLE and ALTER TABLE, primary node needs to release lockMetaInfo and table level lock
 		SDBCommit(sdbUserId_);
 		pSdbMysqlTxn_->setActiveTrn( false );	// mark the end of long implicit transaction
 	}
@@ -4549,9 +4552,15 @@ int ha_scaledb::rename_table(const char* fromTable, const char* toTable) {
 	bool renameTableReady = true;
 
 	if ( renameTableReady ) {
-		//if ( !(ddlFlag & SDBFLAG_DDL_SECOND_NODE) ) {
-		//	SDBLockMetaInfoForTable(sdbUserId_, sdbDbId_, sdbTableNumber_, RESOURCE_LOCK_EXCLUSIVE);
-		//}
+
+		// For RENAME TABLE, we need to impose the exclusive table level lock.
+		// For ALTER TABLE, we already imposed the exclusive table level lock in rnd_init. 
+		if ( sqlCommand == SQLCOM_RENAME_TABLE ) {
+			if (SDBLockTable(sdbUserId_, sdbDbId_, sdbTableNumber_, REFERENCE_LOCK_EXCLUSIVE) == false) {
+				SDBCommit(sdbUserId_);	// release lockMetaInfo
+				DBUG_RETURN(HA_ERR_LOCK_WAIT_TIMEOUT);
+			}
+		}
 
 		// TODO: To be enabled later for fast ALTER TABLE statement.
 		// For ALTER TABLE statement, we need to enable indexes on the scratch table before renaming it to the final table
