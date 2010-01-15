@@ -4403,8 +4403,8 @@ int ha_scaledb::delete_table(const char* name)
 			pSdbMysqlTxn_->removeLockTableName(pTableName );
 
 			// single node solution: need to drop table and its in-memory metadata.
-			// cluster solution: primary node need to drop table and its in-memory metadata.  
-			// cluster solution: MySQL already closed the to-be-dropped table and deleted MySQL metadata for the table.
+			// cluster solution: primary node needs to drop table and its in-memory metadata.  
+			// cluster solution: secondary node: MySQL already closed the to-be-dropped table and deleted MySQL metadata for the table.
 			retCode = SDBDeleteTable(sdbUserId_, sdbDbId_, pTableName, ddlFlag);
 		}
 		else		
