@@ -267,6 +267,8 @@ public:
 							SdbDynamicArray* fkInfoArray, char* pCreateTableStmt);
 	int create_fks(THD* thd, TABLE *table_arg, char* tblName, SdbDynamicArray* fkInfoArray, char* pCreateTableStmt);
 
+	int get_field_key_participation_length(THD* thd, TABLE *table_arg, Field * pField);
+
 	// delete a user table.
 	int delete_table(const char* name);
 

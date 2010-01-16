@@ -173,7 +173,7 @@ void SDBCloseFile(unsigned short userId, unsigned short dbId, unsigned short tab
 unsigned short SDBValidateInitDatabaseTable(const char *dbName, const char *tableName);
 
 // Create new user table. Return newly created table id
-unsigned short SDBCreateTable(unsigned int userId, unsigned short dbId, char* tableName, 
+unsigned short SDBCreateTable(unsigned int userId, unsigned short dbId, char* tableName, unsigned long long autoIncrBaseValue, 
 							  char *tableFsName=0, bool virtualTable = false, unsigned short ddlFlag=0);
 
 // Drop a table
@@ -203,7 +203,8 @@ unsigned short SDBOpenTable(unsigned short userId, unsigned short dbId, char *pT
 // Use this method to open files related to a table if tableId is known.
 void SDBOpenTableFiles(unsigned short userId, unsigned short dbId, unsigned short tableId);
 // close an open table based on table name (not its file-system-safe name)
-unsigned short SDBCloseTable(unsigned short userId, unsigned short dbId, char *pTableName);
+// the calling method needs to decide if we need to lock table before closing it.
+unsigned short SDBCloseTable(unsigned short userId, unsigned short dbId, char *pTableName, bool bLockTable=true);
 
 unsigned short SDBGetTableNumberByName(unsigned short userId, unsigned short dbId, const char *tableName);
 unsigned short SDBGetTableNumberByFileSystemName(unsigned short userId, unsigned short dbId, const char *tableName);

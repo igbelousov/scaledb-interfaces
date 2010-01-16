@@ -65,7 +65,7 @@ int main(int argc, char** argv){
 	// DDL
 
 	// Create a table in database test.
-	unsigned short tableId = SDBCreateTable(userId, dbId, (char*)"Catalog");
+	unsigned short tableId = SDBCreateTable(userId, dbId, (char*)"Catalog",1);
 
 	unsigned short fieldId;
 	

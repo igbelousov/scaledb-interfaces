@@ -1410,6 +1410,7 @@ int ha_scaledb::close(void) {
 	unsigned int userId = 0;
 	bool needToRemoveFromScaledbCache = false;
 	bool needToCommit = false;
+	unsigned short ddlFlag = 0;
 
 	THD* thd = ha_thd();
 	if (thd) {
@@ -1420,12 +1421,14 @@ int ha_scaledb::close(void) {
 		bool isAlterTableStmt = false;
 		if (sqlCommand==SQLCOM_ALTER_TABLE || sqlCommand==SQLCOM_CREATE_INDEX || sqlCommand==SQLCOM_DROP_INDEX)
 			isAlterTableStmt = true;
+		if ( strstr(thd->query, SCALEDB_HINT_PASS_DDL) )
+			ddlFlag |= SDBFLAG_DDL_SECOND_NODE;		// this flag is used locally.
 
 		// For ALTER TABLE, CREATE/DROP INDEX, secondary node should not close table because the temp table
 		// was never created and the table-to-be-altered is already closed in FLUSH TABLE statement.
 		// For CREATE TABLE ... SELECT statement, secondary node should exit early because the new table
 		// has not been committed by primary node.
-		if ( SDBNodeIsCluster() && (strstr(thd->query, SCALEDB_HINT_PASS_DDL) != NULL) ) {
+		if ( SDBNodeIsCluster() && (ddlFlag & SDBFLAG_DDL_SECOND_NODE) ) {
 			if ( (isAlterTableStmt) || (sqlCommand==SQLCOM_CREATE_TABLE) )
 				DBUG_RETURN(free_share(share));
 		}
@@ -1458,7 +1461,10 @@ int ha_scaledb::close(void) {
 	// for each instantiated table handler.  Hence we remove table information from metainfo for DDL/FLUSH statements only
 	// or this method is called from a system thread (such as mysqladmin shutdown command).
 	if ( (needToRemoveFromScaledbCache) || (thd == NULL) ) {
-		SDBCloseTable(userId, sdbDbId_, table->s->table_name.str);
+		if (ddlFlag & SDBFLAG_DDL_SECOND_NODE)
+			SDBCloseTable(userId, sdbDbId_, table->s->table_name.str, false);
+		else
+			SDBCloseTable(userId, sdbDbId_, table->s->table_name.str, true);
 
 		// For mysqladmin shutdown command, we need to commit because we have some pending locks made in SDBCloseTable call.
 		// Need to call SDBCommit rather than scaledb_commit because the request does not come from a normal MySQL user.
@@ -3715,7 +3721,7 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 		}
 	}
 
-	sdbTableNumber_ = SDBCreateTable(sdbUserId_, sdbDbId_, pTableName, tblFsName, virtualTableFlag_, ddlFlag);
+	sdbTableNumber_ = SDBCreateTable(sdbUserId_, sdbDbId_, pTableName, create_info->auto_increment_value, tblFsName, virtualTableFlag_, ddlFlag);
 	if ( sdbTableNumber_ == 0 ) {	// createTable fails, need to rollback
 		SDBRollBack(sdbUserId_);
 		SDBCommit(sdbUserId_);
@@ -3765,17 +3771,11 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
     }
     SDBArrayFree(fkInfoArray);
 
-	// If the clause AUTO_INCREMENT=value is present in either CREATE TABLE or ALTER TABLE statement,
-	// then we need to set the new value in the auto increment column for the table
-	// TODO: Due to possible early exit in a cluster, may need to move the following statement close to the beginning of this method.
-	if ( create_info->auto_increment_value != 0)
-		SDBSetAutoIncrBaseValue( sdbDbId_, sdbTableNumber_, create_info->auto_increment_value );
-
 	// Bug 1008: A user may CREATE TABLE and then RENAME TABLE immediately. 
 	// In order to fix this bug, we need to open and create the table files. Then we can rename the table files.
 	if ( sqlCommand == SQLCOM_CREATE_TABLE ) {
 		SDBOpenTableFiles(sdbUserId_, sdbDbId_, sdbTableNumber_);
-		SDBCloseTable(sdbUserId_, sdbDbId_, pTableName);
+		SDBCloseTable(sdbUserId_, sdbDbId_, pTableName,true);
 	}
 
 #ifdef SDB_DEBUG_LIGHT
@@ -4024,12 +4024,8 @@ int ha_scaledb::add_columns_to_table(THD* thd, TABLE *table_arg, unsigned short 
 			break;
 
 		case MYSQL_TYPE_VARCHAR:  
-		case MYSQL_TYPE_VAR_STRING: // These 2 types apply to VARCHAR or VARBINARY 
-
-		case MYSQL_TYPE_TINY_BLOB:  
-		case MYSQL_TYPE_BLOB:	// These 4 data types apply to to TEXT as well
-		case MYSQL_TYPE_MEDIUM_BLOB:  
-		case MYSQL_TYPE_LONG_BLOB: 
+		case MYSQL_TYPE_VAR_STRING: 
+		case MYSQL_TYPE_TINY_BLOB:  // tiny	blob applies to to TEXT as well
 			if ( pField->binary() ) 
 				sdbFieldType = ENGINE_TYPE_BYTE_ARRAY;
 			else
@@ -4039,6 +4035,28 @@ int ha_scaledb::add_columns_to_table(THD* thd, TABLE *table_arg, unsigned short 
 				sdbFieldSize = maxColumnLengthInBaseFile;
 			else
 				sdbFieldSize = pField->field_length;
+			sdbMaxDataLength = pField->field_length;
+			break;
+
+		case MYSQL_TYPE_BLOB:	// These 3 data types apply to to TEXT as well
+		case MYSQL_TYPE_MEDIUM_BLOB:  
+		case MYSQL_TYPE_LONG_BLOB: 
+			if ( pField->binary() ) 
+				sdbFieldType = ENGINE_TYPE_BYTE_ARRAY;
+			else
+				sdbFieldType = ENGINE_TYPE_STRING;
+
+			// We parse through the index keys, based on the participation of this field in the
+			// keys we decide how much of the field we want to store as part of the record and 
+			// how much in the overflow file. If field does not participate in any index then
+			// we do not store anything as part of the record.
+			sdbFieldSize = get_field_key_participation_length(thd, table_arg, pField);
+			if( sdbFieldSize > maxColumnLengthInBaseFile )
+				sdbFieldSize = maxColumnLengthInBaseFile; // can not exceed maxColumnLengthInBaseFile under any circumstances)
+
+			sdbMaxDataLength = pField->field_length;
+			break;
+
 			sdbMaxDataLength = pField->field_length;
 			break;
 
@@ -4151,6 +4169,26 @@ int ha_scaledb::create_fks(THD* thd, TABLE *table_arg, char* tblName, SdbDynamic
 	return errorNum;
 }
 
+// Find if a given field is participating in indexes (is a keypart), and if yes for how much size?
+int ha_scaledb::get_field_key_participation_length(THD* thd, TABLE *table_arg, Field * pField) {
+	unsigned int errorNum = 0;
+	unsigned int primaryKeyNum = table_arg->s->primary_key;
+	KEY_PART_INFO* pKeyPart;
+	int numOfKeys = (int) table_arg->s->keys ;
+	int maxParticipationLength = 0;
+
+	for (int i=0; i < numOfKeys; ++i ) {
+		KEY* pKey = table_arg->key_info + i;
+		int numOfKeyFields = (int) pKey->key_parts;
+		for ( int i2=0; i2 < numOfKeyFields; ++i2) {
+			pKeyPart = pKey->key_part + i2;
+			if (SDBUtilCompareStrings(pKeyPart->field->field_name, pField->field_name, true))
+				if (maxParticipationLength < pKeyPart->length)
+					maxParticipationLength = pKeyPart->length;
+		}
+	}
+	return maxParticipationLength;
+}
 
 // add indexes to a table, part of create table
 int ha_scaledb::add_indexes_to_table(THD* thd, TABLE *table_arg, char* tblName, unsigned short ddlFlag, 
@@ -4328,7 +4366,7 @@ int ha_scaledb::delete_table(const char* name)
 		// when we process its child table.  Hence, we need to close it if it is still open.
 		if (sdbTableNumber_) {
 			pTableName = SDBGetTableNameByNumber(sdbUserId_, sdbDbId_, sdbTableNumber_);
-			SDBCloseTable(sdbUserId_, sdbDbId_, pTableName);
+			SDBCloseTable(sdbUserId_, sdbDbId_, pTableName, false);
 		}
 
 		// Because we implement close(), secondary node should exit early on all the situations. 
@@ -4524,7 +4562,7 @@ int ha_scaledb::rename_table(const char* fromTable, const char* toTable) {
 		// when we process its child table.  Hence, we need to close it if it is still open.
 		if (sdbTableNumber_) {
 			userFromTblName = SDBGetTableNameByNumber(sdbUserId_, sdbDbId_, sdbTableNumber_);
-			SDBCloseTable(sdbUserId_, sdbDbId_, userFromTblName);
+			SDBCloseTable(sdbUserId_, sdbDbId_, userFromTblName, false);
 		}
 
 		// Because we implement close(), secondary node should exit early on all the situations. 
