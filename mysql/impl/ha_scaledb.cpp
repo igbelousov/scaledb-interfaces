@@ -638,7 +638,7 @@ static int scaledb_commit(
 			// After calling commit(), lockCount_ should be 0 except ALTER TABLE, CREATE/DROP INDEX.
 			userTxn->lockCount_ = 0;
 			if (userTxn->getDdlFlag() & SDBFLAG_ALTER_TABLE_KEYS)
-				userTxn->setDdlFlag(0);	// reset the flag as MySQL may reuse this handler object
+				userTxn->setDdlFlag(0);	// reset the flag as we may check this flag in next SQL statement
 		}
 
 		userTxn->setActiveTrn( false );
@@ -3775,7 +3775,7 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 	// In order to fix this bug, we need to open and create the table files. Then we can rename the table files.
 	if ( sqlCommand == SQLCOM_CREATE_TABLE ) {
 		SDBOpenTableFiles(sdbUserId_, sdbDbId_, sdbTableNumber_);
-		SDBCloseTable(sdbUserId_, sdbDbId_, pTableName,true);
+		SDBCloseTable(sdbUserId_, sdbDbId_, pTableName, true);
 	}
 
 #ifdef SDB_DEBUG_LIGHT
@@ -4053,9 +4053,6 @@ int ha_scaledb::add_columns_to_table(THD* thd, TABLE *table_arg, unsigned short 
 			sdbFieldSize = get_field_key_participation_length(thd, table_arg, pField);
 			if( sdbFieldSize > maxColumnLengthInBaseFile )
 				sdbFieldSize = maxColumnLengthInBaseFile; // can not exceed maxColumnLengthInBaseFile under any circumstances)
-
-			sdbMaxDataLength = pField->field_length;
-			break;
 
 			sdbMaxDataLength = pField->field_length;
 			break;
@@ -4449,24 +4446,23 @@ int ha_scaledb::delete_table(const char* name)
 			retCode = METAINFO_UNDEFINED_DATA_TABLE;
 	}
 
-	if ( !(ddlFlag & SDBFLAG_DDL_SECOND_NODE) ) {
-		// For ALTER TABLE in cluster, this is the last MySQL interface method call.
-		// The primary node now replicates DDL to other nodes.
-		if ( (sqlCommand==SQLCOM_ALTER_TABLE || sqlCommand==SQLCOM_CREATE_INDEX || sqlCommand==SQLCOM_DROP_INDEX) 
-			&& (SDBNodeIsCluster() == true) && ( strstr(tblFsName, MYSQL_TEMP_TABLE_PREFIX2) ) ) {
-			// if the table to be dropped is the second temp table, then we proceed to replicate to other nodes.
-			// if not, then we are rolling back an ALTER TABLE statement by removing the first temp table; 
-			// hence there is no need to send ALTER TABLE statements to other nodes
-			bool bAlterTableReady = sendStmtToOtherNodes(sdbDbId_, thd->query, false, false);
-			if (!bAlterTableReady)
-				retCode = ALTER_TABLE_FAILED_IN_CLUSTER;
-		}
 
-		// For both DROP TABLE and ALTER TABLE, primary node needs to release lockMetaInfo and table level lock
-		SDBCommit(sdbUserId_);
-		pSdbMysqlTxn_->setActiveTrn( false );	// mark the end of long implicit transaction
+	// For ALTER TABLE in cluster, this is the last MySQL interface method call.
+	// The primary node now replicates DDL to other nodes.
+	if ( (sqlCommand==SQLCOM_ALTER_TABLE || sqlCommand==SQLCOM_CREATE_INDEX || sqlCommand==SQLCOM_DROP_INDEX) 
+		&& (SDBNodeIsCluster() == true) && ( strstr(tblFsName, MYSQL_TEMP_TABLE_PREFIX2) ) ) {
+		// if the table to be dropped is the second temp table, then we proceed to replicate to other nodes.
+		// if not, then we are rolling back an ALTER TABLE statement by removing the first temp table; 
+		// hence there is no need to send ALTER TABLE statements to other nodes
+		bool bAlterTableReady = sendStmtToOtherNodes(sdbDbId_, thd->query, false, false);
+		if (!bAlterTableReady)
+			retCode = ALTER_TABLE_FAILED_IN_CLUSTER;
 	}
 
+	// For both DROP TABLE and ALTER TABLE, primary node needs to release lockMetaInfo and table level lock
+	SDBCommit(sdbUserId_);
+	pSdbMysqlTxn_->setDdlFlag(0);	// Bug1039: reset the flag as a subsequent statement may check this flag
+	pSdbMysqlTxn_->setActiveTrn( false );	// mark the end of long implicit transaction
 
 	errorNum = convertToMysqlErrorCode( retCode );
 
