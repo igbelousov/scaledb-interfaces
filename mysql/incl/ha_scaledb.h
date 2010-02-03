@@ -135,6 +135,7 @@ private:
 	unsigned short initializeDbTableId(char* pDbName=NULL, char* pTblName=NULL, 
 										bool isFileName=false, bool allowTableClosed=false);
 
+	int has_overflow_fields(THD* thd, TABLE *table_arg);
 
 public:
 	ha_scaledb(handlerton *hton, TABLE_SHARE *table_arg);

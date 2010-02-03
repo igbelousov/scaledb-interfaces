@@ -174,7 +174,7 @@ unsigned short SDBValidateInitDatabaseTable(const char *dbName, const char *tabl
 
 // Create new user table. Return newly created table id
 unsigned short SDBCreateTable(unsigned int userId, unsigned short dbId, char* tableName, unsigned long long autoIncrBaseValue, 
-							  char *tableFsName=0, bool virtualTable = false, unsigned short ddlFlag=0);
+							  char *tableFsName=0, bool virtualTable = false, bool hasOverflow = false, unsigned short ddlFlag=0);
 
 // Drop a table
 unsigned short SDBDeleteTable(unsigned int userId, unsigned short dbId, 
@@ -284,6 +284,7 @@ unsigned int SDBGetMaxColumnLengthInBaseFile();
 bool SDBIsFieldAutoIncrement(unsigned short dbId, unsigned short tableId, unsigned short fieldId);
 char* SDBGetFileDataField(unsigned short userId, unsigned short tableId, unsigned short fieldId);
 void SDBSetAutoIncrBaseValue(unsigned short dbId, unsigned short tableId, unsigned long long value);
+void SDBSetOverflowFlag(unsigned short dbId, unsigned short tableId, bool ovfFlag);
 
 /*
 //////////////////////////////////////////////////////////////////////////////

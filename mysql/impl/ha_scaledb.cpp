@@ -3721,13 +3721,19 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 		}
 	}
 
-	sdbTableNumber_ = SDBCreateTable(sdbUserId_, sdbDbId_, pTableName, create_info->auto_increment_value, tblFsName, virtualTableFlag_, ddlFlag);
+	// find out if we will have overflows
+	bool hasOverflow = has_overflow_fields(thd, table_arg);
+
+	sdbTableNumber_ = SDBCreateTable(sdbUserId_, sdbDbId_, pTableName, create_info->auto_increment_value, tblFsName, virtualTableFlag_, hasOverflow, ddlFlag);
 	if ( sdbTableNumber_ == 0 ) {	// createTable fails, need to rollback
 		SDBRollBack(sdbUserId_);
 		SDBCommit(sdbUserId_);
 		RELEASE_MEMORY( pCreateTableStmt );
 		DBUG_RETURN(HA_ERR_GENERIC);
 	}
+
+	if (hasOverflow)
+		SDBSetOverflowFlag(sdbDbId_, sdbTableNumber_, true); // this table will now have over flows.
 
 	// Second we add column information to metadata memory
 	errorNum = add_columns_to_table(thd, table_arg, ddlFlag);
@@ -3853,6 +3859,55 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 	DBUG_RETURN(errorNum);
 }
 
+// add columns to a table, part of create table
+int ha_scaledb::has_overflow_fields(THD* thd, TABLE *table_arg){
+	Field*	pField;
+	enum_field_types fieldType;
+	unsigned char sdbFieldType;
+	unsigned short sdbFieldSize;
+	unsigned int sdbMaxDataLength; 
+	unsigned int maxColumnLengthInBaseFile = SDBGetMaxColumnLengthInBaseFile();
+
+	for (unsigned short i=0; i < (int) table_arg->s->fields; ++i) {
+		pField = table_arg->field[i];
+		fieldType = pField->type();
+		switch ( fieldType ) {
+		case MYSQL_TYPE_VARCHAR:  
+		case MYSQL_TYPE_VAR_STRING: 
+		case MYSQL_TYPE_TINY_BLOB:  // tiny	blob applies to to TEXT as well
+			if( pField->field_length > maxColumnLengthInBaseFile )
+				sdbFieldSize = maxColumnLengthInBaseFile;
+			else
+				sdbFieldSize = pField->field_length;
+			sdbMaxDataLength = pField->field_length;
+			
+			if (sdbMaxDataLength > sdbFieldSize)
+				return true; // this table will have overflows
+			break;
+
+		case MYSQL_TYPE_BLOB:	// These 3 data types apply to to TEXT as well
+		case MYSQL_TYPE_MEDIUM_BLOB:  
+		case MYSQL_TYPE_LONG_BLOB: 
+			// We parse through the index keys, based on the participation of this field in the
+			// keys we decide how much of the field we want to store as part of the record and 
+			// how much in the overflow file. If field does not participate in any index then
+			// we do not store anything as part of the record.
+			sdbFieldSize = get_field_key_participation_length(thd, table_arg, pField);
+			if( sdbFieldSize > maxColumnLengthInBaseFile )
+				sdbFieldSize = maxColumnLengthInBaseFile; // can not exceed maxColumnLengthInBaseFile under any circumstances)
+
+			sdbMaxDataLength = pField->field_length;
+			if (sdbMaxDataLength > sdbFieldSize)
+				return true; // this table will have overflows
+			break;
+
+		default:
+			break;
+		}
+
+	}
+	return false;
+}
 
 // add columns to a table, part of create table
 int ha_scaledb::add_columns_to_table(THD* thd, TABLE *table_arg, unsigned short ddlFlag){
