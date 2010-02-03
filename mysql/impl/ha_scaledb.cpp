@@ -592,11 +592,13 @@ static int scaledb_commit(
 #ifdef SDB_DEBUG_LIGHT
 	if (ha_scaledb::mysqlInterfaceDebugLevel_) {
 		SDBDebugStart();
-		SDBDebugPrintHeader("MySQL Interface: executing scaledb_commit(");
-		SDBDebugPrintString("hton=");
+		SDBDebugPrintHeader("MySQL Interface: executing scaledb_commit(hton=");
 		SDBDebugPrint8ByteUnsignedLong((uint64)hton);
+		SDBDebugPrintString(", thd=");
+		SDBDebugPrint8ByteUnsignedLong((uint64)thd);
 		SDBDebugPrintString(", all=");
 		SDBDebugPrintString(all ? "true" : "false");
+		SDBDebugPrintString(")");
 		SDBDebugFlush();
 		SDBDebugEnd();
 	}
@@ -745,6 +747,7 @@ char* fetchDatabaseName(char* pathName) {
 
 	return dbName;
 }
+
 
 // drop a user database.
 // parameter hton is the ScaleDB handlerton. 
@@ -967,7 +970,6 @@ void rollback_last_stmt_trx(THD *thd, handlerton *hton)
 // We will also use this function to communicate to ScaleDB that a new SQL statement has started 
 // and that we must store a savepoint to our transaction handler, so that we are able to roll back
 // the SQL statement in case of an error. */
-
 int ha_scaledb::external_lock(
 							  THD*	thd,	/* handle to the user thread */
 							  int	lock_type)	/* lock type */
@@ -1406,13 +1408,29 @@ int ha_scaledb::open(const char *name, int mode, uint test_if_locked) {
 // When we close a table, we also remove table information from metadata cache for DDL and FLUSH statements.
 int ha_scaledb::close(void) {
 	DBUG_ENTER("ha_scaledb::close");
-	print_header_thread_info("MySQL Interface: executing ha_scaledb::close(...) ");
+	THD* thd = ha_thd();	// need to use this function in order to get the correct user query in a multi-user environment
+
+#ifdef SDB_DEBUG_LIGHT
+	if (mysqlInterfaceDebugLevel_) {
+		SDBDebugStart();
+		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::close(void) ");
+		SDBDebugPrintString(", handler=");
+		SDBDebugPrint8ByteUnsignedLong((unsigned long long)this);
+		SDBDebugPrintString(", thd=");
+		SDBDebugPrint8ByteUnsignedLong((unsigned long long)thd);
+		if (thd) {
+			SDBDebugPrintString(", Query:");
+			SDBDebugPrintString(thd->query);
+		}
+		SDBDebugEnd();
+	}
+#endif
+
 	unsigned int userId = 0;
 	bool needToRemoveFromScaledbCache = false;
 	bool needToCommit = false;
 	unsigned short ddlFlag = 0;
 
-	THD* thd = ha_thd();
 	if (thd) {
 		// thd is defined.  In this case, a user executes a DDL.
 		placeSdbMysqlTxnInfo( thd );
@@ -1437,14 +1455,14 @@ int ha_scaledb::close(void) {
 			|| sqlCommand==SQLCOM_RENAME_TABLE || sqlCommand==SQLCOM_ALTER_TABLESPACE )
 			needToRemoveFromScaledbCache = true;
 
-		if (isAlterTableStmt) {
+		//if (isAlterTableStmt) {
 			if (pSdbMysqlTxn_->getDdlFlag() & SDBFLAG_ALTER_TABLE_CREATE)
 				// For regular ALTER TABLE, primary node will commit in delete_table method which is at very end of processing.
 				needToCommit = false;
 			else	// statement such as  ALTER TABLE t1 DISABLE KEYS;
 				needToCommit = true;
-		} else if (sqlCommand==SQLCOM_FLUSH)
-			needToCommit = true;
+		//} else if (sqlCommand==SQLCOM_FLUSH)
+		//	needToCommit = true;
 
 		userId = sdbUserId_;
 	}
@@ -1460,7 +1478,8 @@ int ha_scaledb::close(void) {
 	// MySQL remembers how many handler objects it creates for a given table.  It will call this method one time
 	// for each instantiated table handler.  Hence we remove table information from metainfo for DDL/FLUSH statements only
 	// or this method is called from a system thread (such as mysqladmin shutdown command).
-	if ( (needToRemoveFromScaledbCache) || (thd == NULL) ) {
+	//if ( (needToRemoveFromScaledbCache) || (thd == NULL) ) {	// should always remove table from scaledb cache
+
 		if (ddlFlag & SDBFLAG_DDL_SECOND_NODE)
 			SDBCloseTable(userId, sdbDbId_, table->s->table_name.str, false);
 		else
@@ -1470,7 +1489,8 @@ int ha_scaledb::close(void) {
 		// Need to call SDBCommit rather than scaledb_commit because the request does not come from a normal MySQL user.
 		if (needToCommit)
 			SDBCommit( userId );
-	}
+
+	//}
 #ifdef SDB_DEBUG
 	if (mysqlInterfaceDebugLevel_ > 4) {
 		// print user lock status on the primary node
@@ -1548,7 +1568,6 @@ MysqlTxn* ha_scaledb::placeSdbMysqlTxnInfo(THD* thd, bool isTransient /*=false*/
 unsigned short ha_scaledb::placeMysqlRowInEngineBuffer(unsigned char* rowBuf1, unsigned char* rowBuf2, unsigned short groupType, 
 													   bool checkAutoIncField, bool &needToUpdateAutoIncrement) {
 
-
 	unsigned short retCode = 0;
 	if ( (sdbTableNumber_ == 0) && (!virtualTableFlag_) ) 
 		retCode = initializeDbTableId();
@@ -1611,7 +1630,6 @@ unsigned short ha_scaledb::placeMysqlRowInEngineBuffer(unsigned char* rowBuf1, u
 					SDBPrepareNumberField(sdbUserId_, sdbDbId_, sdbTableNumber_, fieldId, pFieldValue, groupType);
 				break;
 
-
 			case MYSQL_TYPE_ENUM:
 			case MYSQL_TYPE_BIT:
 			case MYSQL_TYPE_SET:
@@ -1626,7 +1644,6 @@ unsigned short ha_scaledb::placeMysqlRowInEngineBuffer(unsigned char* rowBuf1, u
 			case MYSQL_TYPE_NEWDECIMAL:
 				SDBPrepareStrField(sdbUserId_, sdbDbId_, sdbTableNumber_, fieldId, (char*) pFieldValue, ((Field_new_decimal*)pField)->bin_size, groupType);
 				break;
-
 
 			case MYSQL_TYPE_STRING:
 				SDBPrepareStrField(sdbUserId_, sdbDbId_, sdbTableNumber_, fieldId, (char*) pFieldValue, pField->pack_length(), groupType);
@@ -1665,7 +1682,6 @@ unsigned short ha_scaledb::placeMysqlRowInEngineBuffer(unsigned char* rowBuf1, u
 				}
 				break;
 
-
 			default:
 
 #ifdef SDB_DEBUG_LIGHT
@@ -1688,7 +1704,6 @@ Parameter buf is a byte array of data in MySQL format with a size of table->s->r
 You can use the field information to extract the data from the native byte array type.  
 table->s->fields: gives the number of column in the current open table.
 */
-
 int ha_scaledb::write_row(unsigned char* buf)
 {
 	DBUG_ENTER("ha_scaledb::write_row");
@@ -1761,6 +1776,7 @@ int ha_scaledb::write_row(unsigned char* buf)
 	dbug_tmp_restore_column_map(table->read_set, org_bitmap);
 	DBUG_RETURN( errorNum );
 }
+
 
 // this function should be called when the latest auto increment value has changed so that
 // it can be returned in calls to last_insert_id() function
@@ -1962,6 +1978,7 @@ int ha_scaledb::delete_row(const unsigned char* buf) {
 	DBUG_RETURN( errorNum );
 }
 
+
 // This method deletes all records of a ScaleDB table.
 // On a cluster system, it involves 4 steps:
 // 1. the primary node needs to impose a table-level-write-lock.
@@ -2071,6 +2088,7 @@ int ha_scaledb::fetchRowByPosition(unsigned char* buf, unsigned int pos) {
 	DBUG_RETURN( errorNum );
 }
 
+
 // This method fetches a single row using next() method
 int ha_scaledb::fetchSingleRow(unsigned char* buf) {
 
@@ -2129,6 +2147,7 @@ retryFetch:
 
 	DBUG_RETURN( retValue );
 }
+
 
 // copy scaledb engine row to mysql row.. should be called after fetch
 int ha_scaledb::copyRowToMySQLBuffer(unsigned char* buf) {
@@ -2299,9 +2318,9 @@ int ha_scaledb::copyRowToMySQLBuffer(unsigned char* buf) {
 		sdbRowIdInScan_ = 0;
 	}
 
-
 	return errorNum;
 }
+
 
 // -------------------------------------------------------------------------------------------
 //	Place a ScaleDB field in a MySQL buffer
@@ -2453,13 +2472,13 @@ int ha_scaledb::fetchVirtualRow(unsigned char* buf) {
 	DBUG_RETURN( errorNum );
 }
 
+
 // -------------------------------------------------------------------------------------------
 //	Maps designators to position in MySQL buffer.
 //	For example: If ScaleDB structure is A->B->C (C subordinated to B, B subordinated to A)
 //	and all rows are 100 bytes long, A would be maped to position 0 in the MySQL buffer, B to
 //	position 100 and C to position 200.
 // -------------------------------------------------------------------------------------------
-
 unsigned short ha_scaledb::getOffsetByDesignator(unsigned short designator) {
 
 	print_header_thread_info("MySQL Interface: executing ha_scaledb::getOffsetByDesignator(...) ");
@@ -2471,6 +2490,7 @@ unsigned short ha_scaledb::getOffsetByDesignator(unsigned short designator) {
 	}
 	return offset;
 }
+
 
 // prepare query manager
 void ha_scaledb::prepareIndexOrSequentialQueryManager()
@@ -2502,9 +2522,9 @@ void ha_scaledb::prepareIndexOrSequentialQueryManager()
 		SDBSetActiveQueryManager(sdbQueryMgrId_); // cache the object for performance
 
 		retValue = SDBPrepareSequentialScan(sdbUserId_, sdbQueryMgrId_, sdbDbId_, table->s->table_name.str, ((THD*)ha_thd())->query_id);
-
 	}
 }
+
 
 // prepare primary or first-key query manager
 void ha_scaledb::prepareFirstKeyQueryManager()
@@ -2536,6 +2556,7 @@ void ha_scaledb::prepareFirstKeyQueryManager()
 	sdbDesignatorName_ = pSdbMysqlTxn_->getDesignatorNameByQueryMrgId(sdbQueryMgrId_);
 	sdbDesignatorId_ = pSdbMysqlTxn_->getDesignatorIdByQueryMrgId(sdbQueryMgrId_);
 }
+
 
 // prepare query manager for index reads
 void ha_scaledb::prepareIndexQueryManager(unsigned int indexNum, const uchar* key, uint key_len) {
@@ -2587,6 +2608,7 @@ void ha_scaledb::prepareIndexQueryManager(unsigned int indexNum, const uchar* ke
 	SDBResetQuery( sdbQueryMgrId_ );  // remove the previously defined query
 	SDBSetActiveQueryManager(sdbQueryMgrId_); // cache the object for performance
 }
+
 
 // Prepare query by assinging key values to the corresponding key fields
 int ha_scaledb::prepareIndexKeyQuery(const uchar* key, uint key_len, enum ha_rkey_function find_flag) {
@@ -2801,10 +2823,7 @@ int ha_scaledb::index_read(uchar* buf, const uchar* key, uint key_len, enum ha_r
 		SDBDebugPrintString( table->s->table_name.str );
 		SDBDebugPrintString(", alias: ");
 		SDBDebugPrintString( table->alias );
-		SDBDebugPrintString(", handler=");
-		SDBDebugPrintPointer(this);
-		SDBDebugPrintString(", thread=");
-		SDBDebugPrintPointer(ha_thd());
+		outputHandleAndThd();
 		SDBDebugPrintString(", Query Manager ID #");
 		SDBDebugPrintInt(sdbQueryMgrId_);
 		SDBDebugPrintString(", Index read flag ");
@@ -2890,10 +2909,7 @@ int ha_scaledb::index_next(unsigned char* buf) {
 		SDBDebugPrintString( table->s->table_name.str );
 		SDBDebugPrintString(", alias: ");
 		SDBDebugPrintString( table->alias );
-		SDBDebugPrintString(", handler=");
-		SDBDebugPrintPointer(this);
-		SDBDebugPrintString(", thread=");
-		SDBDebugPrintPointer(ha_thd());
+		outputHandleAndThd();
 		SDBDebugPrintString(", Query Manager ID #");
 		SDBDebugPrintInt(sdbQueryMgrId_);
 		SDBDebugPrintString(" counter = ");
@@ -2924,6 +2940,7 @@ int ha_scaledb::index_next(unsigned char* buf) {
 	DBUG_RETURN(errorNum);
 }
 
+
 int ha_scaledb::index_next_same(uchar* buf, const uchar* key, uint keylen) {
 	DBUG_ENTER("ha_scaledb::index_next_same");
 #ifdef SDB_DEBUG_LIGHT
@@ -2934,10 +2951,7 @@ int ha_scaledb::index_next_same(uchar* buf, const uchar* key, uint keylen) {
 		SDBDebugPrintString( table->s->table_name.str );
 		SDBDebugPrintString(", alias: ");
 		SDBDebugPrintString( table->alias );
-		SDBDebugPrintString(", handler=");
-		SDBDebugPrintPointer(this);
-		SDBDebugPrintString(", thread=");
-		SDBDebugPrintPointer(ha_thd());
+		outputHandleAndThd();
 		SDBDebugPrintString(", Query Manager ID #");
 		SDBDebugPrintInt(sdbQueryMgrId_);
 		SDBDebugEnd();			// synchronize threads printout	
@@ -3056,10 +3070,7 @@ int ha_scaledb::rnd_init(bool scan) {
 		SDBDebugPrintString( table->s->table_name.str );
 		SDBDebugPrintString(", alias: ");
 		SDBDebugPrintString( table->alias );
-		SDBDebugPrintString(", handler=");
-		SDBDebugPrintPointer(this);
-		SDBDebugPrintString(", thread=");
-		SDBDebugPrintPointer(ha_thd());
+		outputHandleAndThd();
 		SDBDebugEnd();			// synchronize threads printout
 	}
 #endif
@@ -3145,10 +3156,7 @@ int ha_scaledb::rnd_end() {
 		SDBDebugPrintString(table->s->table_name.str );
 		SDBDebugPrintString(", alias: ");
 		SDBDebugPrintString( table->alias );
-		SDBDebugPrintString(", thread=");
-		SDBDebugPrintPointer(ha_thd());
-		SDBDebugPrintString(", handler=");
-		SDBDebugPrintPointer(this);
+		outputHandleAndThd();
 		SDBDebugEnd();			// synchronize threads printout	
 	}
 #endif
@@ -3173,10 +3181,7 @@ int ha_scaledb::rnd_next(uchar* buf) {
 		SDBDebugPrintString( table->s->table_name.str );
 		SDBDebugPrintString(", alias: ");
 		SDBDebugPrintString( table->alias );
-		SDBDebugPrintString(", handler=");
-		SDBDebugPrintPointer(this);
-		SDBDebugPrintString(", thread=");
-		SDBDebugPrintPointer(ha_thd());
+		outputHandleAndThd();
 		SDBDebugEnd();			// synchronize threads printout	
 	}
 #endif
@@ -4866,10 +4871,7 @@ int ha_scaledb::index_end(void)
 		SDBDebugPrintString( table->s->table_name.str );
 		SDBDebugPrintString(", alias: ");
 		SDBDebugPrintString( table->alias );
-		SDBDebugPrintString(", handler=");
-		SDBDebugPrintPointer(this);
-		SDBDebugPrintString(", thread=");
-		SDBDebugPrintPointer(ha_thd());
+		outputHandleAndThd();
 		SDBDebugPrintString(", Query Manager ID #");
 		SDBDebugPrintInt(sdbQueryMgrId_);
 		SDBDebugPrintString(" counter = ");
@@ -5046,10 +5048,7 @@ ha_rows ha_scaledb::records() {
 		SDBDebugPrintString( table->s->table_name.str );
 		SDBDebugPrintString(", alias: ");
 		SDBDebugPrintString( table->alias );
-		SDBDebugPrintString(", handler=");
-		SDBDebugPrintPointer(this);
-		SDBDebugPrintString(", thread=");
-		SDBDebugPrintPointer(ha_thd());
+		outputHandleAndThd();
 		SDBDebugEnd();			// synchronize threads printout	
 	}
 #endif
