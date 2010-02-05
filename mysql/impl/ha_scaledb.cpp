@@ -1451,8 +1451,8 @@ int ha_scaledb::close(void) {
 				DBUG_RETURN(free_share(share));
 		}
 
-		if ( isAlterTableStmt || sqlCommand==SQLCOM_DROP_TABLE || sqlCommand==SQLCOM_DROP_DB || sqlCommand==SQLCOM_FLUSH
-			|| sqlCommand==SQLCOM_RENAME_TABLE || sqlCommand==SQLCOM_ALTER_TABLESPACE )
+		if ( isAlterTableStmt || sqlCommand==SQLCOM_CREATE_TABLE || sqlCommand==SQLCOM_DROP_TABLE || sqlCommand==SQLCOM_DROP_DB 
+			|| sqlCommand==SQLCOM_FLUSH || sqlCommand==SQLCOM_RENAME_TABLE || sqlCommand==SQLCOM_ALTER_TABLESPACE )
 			needToRemoveFromScaledbCache = true;
 
 		//if (isAlterTableStmt) {
@@ -1478,7 +1478,7 @@ int ha_scaledb::close(void) {
 	// MySQL remembers how many handler objects it creates for a given table.  It will call this method one time
 	// for each instantiated table handler.  Hence we remove table information from metainfo for DDL/FLUSH statements only
 	// or this method is called from a system thread (such as mysqladmin shutdown command).
-	//if ( (needToRemoveFromScaledbCache) || (thd == NULL) ) {	// should always remove table from scaledb cache
+	if ( (needToRemoveFromScaledbCache) || (thd == NULL) ) {
 
 		if (ddlFlag & SDBFLAG_DDL_SECOND_NODE)
 			SDBCloseTable(userId, sdbDbId_, table->s->table_name.str, false);
@@ -1490,7 +1490,7 @@ int ha_scaledb::close(void) {
 		if (needToCommit)
 			SDBCommit( userId );
 
-	//}
+	}
 #ifdef SDB_DEBUG
 	if (mysqlInterfaceDebugLevel_ > 4) {
 		// print user lock status on the primary node
