@@ -141,9 +141,6 @@ public:
 	ha_scaledb(handlerton *hton, TABLE_SHARE *table_arg);
 	~ha_scaledb() {}
 
-	//static SDBengine* pSdbEngine;  // only one pSdbEngine pointer
-	
-
 	static unsigned char mysqlInterfaceDebugLevel_;		// defines the debug level for Interface component
 	// You need to set up debug level in parameter 'debug_string' in scaledb.ini
 	// Any positive debug level means all printouts from level 1 up to the specified level.
