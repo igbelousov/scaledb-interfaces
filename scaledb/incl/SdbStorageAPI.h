@@ -128,7 +128,7 @@ void SDBTerminateEngine(int errCode, const char *msg, char *file, int line);
 //
 //////////////////////////////////////////////////////////////////////////////
 */
-unsigned short SDBOpenDatabase(unsigned int userId, char *databaseName, char *databaseFsName=0, unsigned short ddlFlag=0);
+unsigned short SDBOpenDatabase(unsigned int userId, char *databaseName, char *databaseFsName=0, char *databaseCsName=0, unsigned short ddlFlag=0);
 void SDBOpenDatabaseById(unsigned int userId, unsigned short databaseId);
 void SDBOpenAllDatabases();
 unsigned short SDBGetDatabaseNumberByName(unsigned short userId, char *databaseName, bool openTables=false);
@@ -174,7 +174,7 @@ unsigned short SDBValidateInitDatabaseTable(const char *dbName, const char *tabl
 
 // Create new user table. Return newly created table id
 unsigned short SDBCreateTable(unsigned int userId, unsigned short dbId, char* tableName, unsigned long long autoIncrBaseValue, 
-							  char *tableFsName=0, bool virtualTable = false, bool hasOverflow = false, unsigned short ddlFlag=0);
+							  char *tableFsName=0, char *tableCsName=0, bool virtualTable = false, bool hasOverflow = false, unsigned short ddlFlag=0);
 
 // Drop a table
 unsigned short SDBDeleteTable(unsigned int userId, unsigned short dbId, 
@@ -186,7 +186,7 @@ unsigned short SDBDeleteTableById(unsigned int userId, unsigned short dbId, unsi
 // Rename a table
 unsigned short SDBRenameTable(unsigned int userId, unsigned short dbId, 
 							  char* fromTableName, char *fromTableFsName, 
-							  char* toTableName, char *toTableFsName, 
+							  char* toTableName, char *toTableFsName, char *toTableCsName,
 							  bool useTableNameInDesignator = false, unsigned short ddlFlag=0);
 
 // Truncate a table
@@ -209,6 +209,7 @@ unsigned short SDBCloseTable(unsigned short userId, unsigned short dbId, char *p
 unsigned short SDBGetTableNumberByName(unsigned short userId, unsigned short dbId, const char *tableName);
 unsigned short SDBGetTableNumberByFileSystemName(unsigned short userId, unsigned short dbId, const char *tableName);
 char * SDBGetTableNameByNumber(unsigned short userId, unsigned short dbId, unsigned short tableNumber);
+char * SDBGetTableCaseSensitiveNameByNumber(unsigned short userId, unsigned short dbId, unsigned short tableNumber);
 
 bool SDBTableIsVirtual(const char *tableName);
 

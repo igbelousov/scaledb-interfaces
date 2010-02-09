@@ -1345,7 +1345,7 @@ int ha_scaledb::open(const char *name, int mode, uint test_if_locked) {
 		}
 
 		if (sdbDbId_ == 0) {
-			sdbDbId_ = SDBOpenDatabase(userIdforOpen, table->s->db.str, dbFsName, pSdbMysqlTxn_->getDdlFlag());
+			sdbDbId_ = SDBOpenDatabase(userIdforOpen, table->s->db.str, dbFsName, table->s->db.str, pSdbMysqlTxn_->getDdlFlag());
 		} else
 			SDBOpenDatabaseById(userIdforOpen, sdbDbId_);
 
@@ -3670,7 +3670,7 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 		DBUG_RETURN( convertToMysqlErrorCode(retCode) );
 	}
 
-	sdbDbId_ = SDBOpenDatabase(sdbUserId_, pDbName, dbFsName, ddlFlag);
+	sdbDbId_ = SDBOpenDatabase(sdbUserId_, pDbName, dbFsName, pDbName, ddlFlag);
 	pSdbMysqlTxn_->setScaledbDbId( sdbDbId_ );
 
 	virtualTableFlag_ = SDBTableIsVirtual(tblFsName);
@@ -3733,7 +3733,7 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 	// find out if we will have overflows
 	bool hasOverflow = has_overflow_fields(thd, table_arg);
 
-	sdbTableNumber_ = SDBCreateTable(sdbUserId_, sdbDbId_, pTableName, create_info->auto_increment_value, tblFsName, virtualTableFlag_, hasOverflow, ddlFlag);
+	sdbTableNumber_ = SDBCreateTable(sdbUserId_, sdbDbId_, pTableName, create_info->auto_increment_value, tblFsName, pTableName, virtualTableFlag_, hasOverflow, ddlFlag);
 	if ( sdbTableNumber_ == 0 ) {	// createTable fails, need to rollback
 		SDBRollBack(sdbUserId_);
 		RELEASE_MEMORY( pCreateTableStmt );
@@ -4442,7 +4442,7 @@ int ha_scaledb::delete_table(const char* name)
 			DBUG_RETURN( convertToMysqlErrorCode(retCode) );
 	}
 
-	sdbDbId_ = SDBOpenDatabase(sdbUserId_, dbName, dbName, ddlFlag);
+	sdbDbId_ = SDBOpenDatabase(sdbUserId_, dbName, dbName, dbName, ddlFlag);
 	pSdbMysqlTxn_->setScaledbDbId( sdbDbId_ );
 
 	sdbTableNumber_ = SDBGetTableNumberByFileSystemName(sdbUserId_, sdbDbId_, tblFsName);
@@ -4491,7 +4491,8 @@ int ha_scaledb::delete_table(const char* name)
 				// a time.  MySQL allows multiple table names specified in a DROP TABLE statement.
 				// For DROP DATABASE statement, MySQL calls this method to drop individual table first.
 				// Hence we need to generate a DROP TABLE statement in this case.
-				char* dropTableStmt = SDBUtilAppendString("drop table ", pTableName);
+				char * caseSensitiveTableName = SDBGetTableCaseSensitiveNameByNumber(sdbUserId_, sdbDbId_, sdbTableNumber_);
+				char* dropTableStmt = SDBUtilAppendString("drop table ", caseSensitiveTableName);
 				dropTableReady = sendStmtToOtherNodes(sdbDbId_, dropTableStmt, false, false);
 				RELEASE_MEMORY(dropTableStmt);
 			}
@@ -4627,7 +4628,7 @@ int ha_scaledb::rename_table(const char* fromTable, const char* toTable) {
 			DBUG_RETURN( convertToMysqlErrorCode(retCode) );
 	}
 
-	sdbDbId_ = SDBOpenDatabase(sdbUserId_, fromDbName, fromDbName, ddlFlag);
+	sdbDbId_ = SDBOpenDatabase(sdbUserId_, fromDbName, fromDbName, fromDbName, ddlFlag);
 	pSdbMysqlTxn_->setScaledbDbId( sdbDbId_ );
 
 	sdbTableNumber_ = SDBGetTableNumberByFileSystemName(sdbUserId_, sdbDbId_, fromTblFsName);
@@ -4672,7 +4673,7 @@ int ha_scaledb::rename_table(const char* fromTable, const char* toTable) {
 		//}
 
 		retCode = SDBRenameTable(sdbUserId_, sdbDbId_, userFromTblName, fromTblFsName, 
-			userToTblName, toTblFsName, true, ddlFlag);
+			userToTblName, toTblFsName, userToTblName, true, ddlFlag);
 	}
 	else retCode = METAINFO_UNDEFINED_DATA_TABLE;
 
