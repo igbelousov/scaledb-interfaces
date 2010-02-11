@@ -116,6 +116,10 @@ private:
 	MysqlTxn* placeSdbMysqlTxnInfo(THD* thd, bool isTransient=false);
 	bool addSdbKeyFields();
 
+	// This method is outside of a user transaction.  It opens a user database and saves value in sdbDbId_.
+	// It does not open individual table files.
+	unsigned short openUserDatabase(char* pDbName, char *pDbFsName, bool bIsPrimaryNode, bool bIsAlterTableStmt, unsigned short ddlFlag=0);
+
     // prepare index query
     int prepareIndexKeyQuery(const uchar* key, uint key_len, enum ha_rkey_function find_flag);
 
