@@ -204,7 +204,7 @@ unsigned short SDBOpenTable(unsigned short userId, unsigned short dbId, char *pT
 void SDBOpenTableFiles(unsigned short userId, unsigned short dbId, unsigned short tableId);
 // close an open table based on table name (not its file-system-safe name)
 // the calling method needs to decide if we need to lock table before closing it.
-unsigned short SDBCloseTable(unsigned short userId, unsigned short dbId, char *pTableName, bool bLockTable=true);
+unsigned short SDBCloseTable(unsigned short userId, unsigned short dbId, char *pTableName, bool bLockTable, bool bNeedToCommit);
 
 unsigned short SDBGetTableNumberByName(unsigned short userId, unsigned short dbId, const char *tableName);
 unsigned short SDBGetTableNumberByFileSystemName(unsigned short userId, unsigned short dbId, const char *tableName);

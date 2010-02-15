@@ -1084,8 +1084,8 @@ int ha_scaledb::external_lock(
 				if ( lock_type > F_RDLCK )
 					lockLevel = REFERENCE_LOCK_EXCLUSIVE;	// table level write lock
 
-				bool getLock = SDBLockTable(sdbUserId_, sdbDbId_, sdbTableNumber_, lockLevel);
-				if (getLock == false)	// failed to lock the table
+				bool bGetLock = SDBLockTable(sdbUserId_, sdbDbId_, sdbTableNumber_, lockLevel);
+				if (bGetLock == false)	// failed to lock the table
 					DBUG_RETURN(HA_ERR_LOCK_WAIT_TIMEOUT);
 
 				pSdbMysqlTxn_->addLockTableName( table->s->table_name.str );
@@ -1117,8 +1117,16 @@ int ha_scaledb::external_lock(
 					pSdbMysqlTxn_->setScaleDbTxnId( txnId );
 					pSdbMysqlTxn_->setActiveTrn( true );
 				}
-				// TODO: heavy function call.  Need to remove it.  read lock on our table
-				//SDBLockMetaInfoForTable(sdbUserId_, sdbDbId_, sdbTableNumber_, RESOURCE_LOCK_SHARED);
+			}
+
+			// Because ::close method first impose exclusive table level lock and then remove all metadata information from memory,
+			// we need to impose a table level shared lock in order to protect the memory metadata to be used in DML. 
+			// For TRUNCATE TABLE, secondary node should not impose lock as primary node already imposes an exclusive table level lock.
+			// For all other cases, we should impose a table level shared lock.
+			if ( (sqlCommand_ != SQLCOM_TRUNCATE) || (strstr(thd->query, SCALEDB_HINT_PREFIX) == NULL) ) {
+				bool bGetLock = SDBLockTable(sdbUserId_, sdbDbId_, sdbTableNumber_, DEFAULT_REFERENCE_LOCK_LEVEL);
+				if (bGetLock == false)	// failed to lock the table
+					DBUG_RETURN(HA_ERR_LOCK_WAIT_TIMEOUT);
 			}
 
 			// increment the count of table locks in a statement.
@@ -1504,19 +1512,13 @@ int ha_scaledb::close(void) {
 	// for each instantiated table handler.  Hence we remove table information from metainfo for DDL/FLUSH statements only
 	// or this method is called from a system thread (such as mysqladmin shutdown command).
 	if (needToRemoveFromScaledbCache) {
-
-		if (ddlFlag & SDBFLAG_DDL_SECOND_NODE)
-			errorCode = SDBCloseTable(userId, sdbDbId_, table->s->table_name.str, false);
+		if (ddlFlag & SDBFLAG_DDL_SECOND_NODE)	// TODO: need to evaluate DROP TABLE on non-primary nodes
+			errorCode = SDBCloseTable(userId, sdbDbId_, table->s->table_name.str, false, false);
 		else
-			errorCode = SDBCloseTable(userId, sdbDbId_, table->s->table_name.str, true);
+			errorCode = SDBCloseTable(userId, sdbDbId_, table->s->table_name.str, true, needToCommit);
 
 		if (errorCode)
 			DBUG_RETURN(convertToMysqlErrorCode(errorCode));
-
-		// For mysqladmin shutdown command, we need to commit because we have some pending locks made in SDBCloseTable call.
-		// Need to call SDBCommit rather than scaledb_commit because the request does not come from a normal MySQL user.
-		if (needToCommit)
-			SDBCommit( userId );
 	}
 
 #ifdef SDB_DEBUG
@@ -3813,7 +3815,7 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 	// In order to fix this bug, we need to open and create the table files. Then we can rename the table files.
 	//if ( sqlCommand == SQLCOM_CREATE_TABLE ) {
 		SDBOpenTableFiles(sdbUserId_, sdbDbId_, sdbTableNumber_);
-		SDBCloseTable(sdbUserId_, sdbDbId_, pTableName, true);
+		SDBCloseTable(sdbUserId_, sdbDbId_, pTableName, true, true);
 	//}
 
 #ifdef SDB_DEBUG_LIGHT
@@ -4450,7 +4452,7 @@ int ha_scaledb::delete_table(const char* name)
 		// when we process its child table.  Hence, we need to close it if it is still open.
 		if (sdbTableNumber_) {
 			pTableName = SDBGetTableNameByNumber(sdbUserId_, sdbDbId_, sdbTableNumber_);
-			SDBCloseTable(sdbUserId_, sdbDbId_, pTableName, false);
+			SDBCloseTable(sdbUserId_, sdbDbId_, pTableName, false, false);
 		}
 
 		// Because we implement close(), secondary node should exit early on all the situations. 
@@ -4673,7 +4675,7 @@ int ha_scaledb::rename_table(const char* fromTable, const char* toTable) {
 		// when we process its child table.  Hence, we need to close it if it is still open.
 		if (sdbTableNumber_) {
 			userFromTblName = SDBGetTableNameByNumber(sdbUserId_, sdbDbId_, sdbTableNumber_);
-			SDBCloseTable(sdbUserId_, sdbDbId_, userFromTblName, false);
+			SDBCloseTable(sdbUserId_, sdbDbId_, userFromTblName, false, false);
 		}
 
 		// Because we implement close(), secondary node should exit early on all the situations. 

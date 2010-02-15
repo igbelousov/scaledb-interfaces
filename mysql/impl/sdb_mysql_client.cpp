@@ -59,7 +59,7 @@ int SdbMysqlClient::executeQuery(char* query, unsigned long length, bool bEngine
 	int retCode = 0;
 
 	if (bEngineOption == true) {
-		retCode = sendQuery( SET_STORAGE_ENGINE_SCALEDB, strlen(SET_STORAGE_ENGINE_SCALEDB) );
+		retCode = sendQuery( SET_STORAGE_ENGINE_SCALEDB, (unsigned long)strlen(SET_STORAGE_ENGINE_SCALEDB) );
 		if (retCode)
 			return retCode;
 	}
