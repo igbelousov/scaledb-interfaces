@@ -449,6 +449,7 @@ void SDBDebugPrintNewLine(int lines=1);
 void SDBDebugPrintHexByteArray(char data[], int position, int size);
 void SDBDebugPrintPointer(void *ptr);
 void SDBDebugFlush();
+void SDBLogSqlStmt(unsigned int userId, char* pStatement, unsigned long long stmtId);
 
 /*
 //////////////////////////////////////////////////////////////////////////////

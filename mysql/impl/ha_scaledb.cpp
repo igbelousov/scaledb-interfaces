@@ -1074,6 +1074,7 @@ int ha_scaledb::external_lock(
 
 	if (lock_type != F_UNLCK) {
 
+		SDBLogSqlStmt(sdbUserId_, thd->query, thd->query_id);	// inform engine to log user query for DML
 		bool all_tx = false;
 
 		// lock the table if the user has an explicit lock tables statement
@@ -2472,7 +2473,6 @@ int ha_scaledb::fetchVirtualRow(unsigned char* buf) {
 	unsigned char* pFieldBuf;	// pointer to the buffer location holding the field value
 
 	// Now we start from level 1 and go down
-	//
 
 	unsigned short totalLevel =  SDBGetIndexLevel(sdbDbId_, designatorLastLevel);
 	for (int currLevel=0; currLevel<totalLevel; ++currLevel) {
@@ -2664,7 +2664,6 @@ int ha_scaledb::prepareIndexKeyQuery(const uchar* key, uint key_len, enum ha_rke
 
 	KEY* pKey = table->key_info + active_index;  // find out which index to use
 	int numOfKeyFields = (int) pKey->key_parts;
-	//char** pkeyValuePtr = DataUtil::getStrArray(numOfKeyFields);
 
 	prepareIndexQueryManager(active_index, key, key_len);
 
@@ -2707,29 +2706,25 @@ int ha_scaledb::prepareIndexKeyQuery(const uchar* key, uint key_len, enum ha_rke
 
 			switch ( fieldType ) {  // byte-flip integer field, TBD: only for windows?
 			case MYSQL_TYPE_SHORT:
-				columnLen = 2;
-				//DataUtil::integerConversion(keyOffset, 2);  // no need to flip byte here.  The engine should do it.
+				columnLen = 2;	// no need to flip byte here.  The engine should do it.
 				break;
 
 			case MYSQL_TYPE_INT24:
 			case MYSQL_TYPE_DATE:	// DATE is treated as an 3-byte integer
 			case MYSQL_TYPE_TIME:		// TIME is treated as a 3-byte integer
 				columnLen = 3;
-				//DataUtil::integerConversion(keyOffset, 3);  // no need to flip byte here.  The engine should do it.
 				break;
 
 			case MYSQL_TYPE_LONG:	
 			case MYSQL_TYPE_TIMESTAMP:	// TIMESTAMP is treated as a 4-byte integer
 			case MYSQL_TYPE_FLOAT:		// FLOAT is treated as a 4-byte number
-				columnLen = 4;
-				//DataUtil::integerConversion(keyOffset, 4); 
+				columnLen = 4;	// no need to flip byte here.  The engine should do it.
 				break;
 
 			case MYSQL_TYPE_LONGLONG:	
 			case MYSQL_TYPE_DATETIME:	// DATETIME is treated as an 8-byte integer
 			case MYSQL_TYPE_DOUBLE:		// DOUBLE is treated as a 8-byte number
 				columnLen = 8;
-				//DataUtil::integerConversion(keyOffset, 8); 
 				break;
 
 			case MYSQL_TYPE_TINY:  case MYSQL_TYPE_YEAR:
@@ -2775,8 +2770,6 @@ int ha_scaledb::prepareIndexKeyQuery(const uchar* key, uint key_len, enum ha_rke
 			}	// switch
 
 			keyOffset = keyOffset + offsetLength; 
-			//if (keyValueIsNull==false)
-			//	pkeyValuePtr[i] = keyOffset;
 			keyLengthLeft = keyLengthLeft - offsetLength;
 		}	// if ( (keyOffset != NULL) && (keyLengthLeft >= 0) ) 
 
@@ -2842,6 +2835,7 @@ int ha_scaledb::prepareIndexKeyQuery(const uchar* key, uint key_len, enum ha_rke
 	//RELEASE_MEMORY( pkeyValuePtr );
 	return retValue;
 }
+
 
 // This method retrieves a record based on index/key 
 int ha_scaledb::index_read(uchar* buf, const uchar* key, uint key_len, enum ha_rkey_function find_flag) {
@@ -2909,7 +2903,6 @@ int ha_scaledb::index_read(uchar* buf, const uchar* key, uint key_len, enum ha_r
 
 // this function is called at the end of the query and can be used to clear state for that query
 int ha_scaledb::reset() {
-
 	print_header_thread_info("MySQL Interface: executing ha_scaledb::reset()");
 	SDBFreeQueryManagerBuffers(sdbQueryMgrId_);
 	return 0;
@@ -3028,7 +3021,6 @@ int ha_scaledb::index_first(uchar* buf) {
 	int errorNum = index_read(buf, NULL, 0, HA_READ_AFTER_KEY);
 
 	/* MySQL does not allow return value HA_ERR_KEY_NOT_FOUND */
-
 	if (errorNum == HA_ERR_KEY_NOT_FOUND) {
 		errorNum = HA_ERR_END_OF_FILE;
 	}
@@ -3054,14 +3046,11 @@ int ha_scaledb::index_last(uchar * buf) {
 	int errorNum = index_read(buf, NULL, 0, HA_READ_BEFORE_KEY);
 
 	/* MySQL does not allow return value HA_ERR_KEY_NOT_FOUND */
-
 	if (errorNum == HA_ERR_KEY_NOT_FOUND) {
 		errorNum = HA_ERR_END_OF_FILE;
 	}
 
 	DBUG_RETURN(errorNum);
-
-
 }
 
 
@@ -3133,6 +3122,9 @@ int ha_scaledb::rnd_init(bool scan) {
 	}
 
 	if ( scan ) {  
+
+		// For SELECT and INSERT ... SELECT statements, we always use full table sequential scan (even there exists an index).
+		// For all other statements, we use the first available index if an index exists.
 		if ( !(sqlCommand_ == SQLCOM_SELECT || sqlCommand_ == SQLCOM_INSERT_SELECT) && (SDBIsTableWithIndexes(sdbDbId_, sdbTableNumber_)) ) {
 			prepareFirstKeyQueryManager();
 		}
@@ -3647,6 +3639,7 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 	unsigned int errorNum = 0;
 	THD* thd = ha_thd();
 	placeSdbMysqlTxnInfo( thd );	
+	SDBLogSqlStmt(sdbUserId_, thd->query, thd->query_id);	// inform engine to log user query for DDL
 
 	unsigned short ddlFlag = 0;
 	// use this flag to decide if we want to create entries on metatables.
@@ -4429,6 +4422,7 @@ int ha_scaledb::delete_table(const char* name)
 	bool bIsAlterTableStmt = false;
 	THD* thd = ha_thd();
 	placeSdbMysqlTxnInfo( thd );	
+	SDBLogSqlStmt(sdbUserId_, thd->query, thd->query_id);	// inform engine to log user query for DDL
 
 	unsigned int sqlCommand = thd_sql_command(thd);
 	if (sqlCommand==SQLCOM_ALTER_TABLE || sqlCommand==SQLCOM_CREATE_INDEX || sqlCommand==SQLCOM_DROP_INDEX) 
@@ -4477,7 +4471,7 @@ int ha_scaledb::delete_table(const char* name)
 
 	// DROP TABLE: Primary node needs to lock the metadata of the master dbms before opening a user database
 	// DROP TABLE: Secondary nodes do NOT need to lock the metadata any more.
-	// ALTER TABLE and equivalent: primary node imposed lockMetaInfo in ::create()
+	// ALTER TABLE and equivalent: primary node imposed lockMetaInfo in ::create
 	if ( (!(ddlFlag & SDBFLAG_DDL_SECOND_NODE)) && ((sqlCommand==SQLCOM_DROP_TABLE) || (sqlCommand==SQLCOM_DROP_DB)) ) {
 		retCode = SDBLockMetaInfo(sdbUserId_, sdbDbId_);
 		if (retCode)
@@ -4631,31 +4625,25 @@ int ha_scaledb::rename_table(const char* fromTable, const char* toTable) {
 	bool bIsAlterTableStmt = false;
 	THD* thd = ha_thd();
 	placeSdbMysqlTxnInfo( thd );	
+	SDBLogSqlStmt(sdbUserId_, thd->query, thd->query_id);	// inform engine to log user query for DDL
+
 	unsigned int sqlCommand = thd_sql_command(thd);
 	if (sqlCommand==SQLCOM_ALTER_TABLE || sqlCommand==SQLCOM_CREATE_INDEX || sqlCommand==SQLCOM_DROP_INDEX) 
 		bIsAlterTableStmt = true;
 
 	// For statement "ALTER TABLE t1 RENAME [TO] t2", need to set sqlCommand to SQLCOM_RENAME_TABLE.
-	// TODO: the following condition is not enough.  Need to check if ::create method is called.
-	// May also check if there are temporary tables in the arguments.
-	//if (sqlCommand==SQLCOM_ALTER_TABLE) {
-	//	char* pAlterTableStmt = (char*) GET_MEMORY( thd->query_length + 1 );
-	//	// convert LF to space, remove extra space, convert to lower case letters 
-	//	convertSeparatorLowerCase( pAlterTableStmt, thd->query);
-	//	char* pRename = strstr(pAlterTableStmt, "rename ");
-	//	char* pRenameTo = strstr(pAlterTableStmt, "rename to ");
-	//	int bytesForKeyWords = 7;	// for "rename "
-	//	if (pRenameTo)
-	//		bytesForKeyWords = 10;	// for "rename to "
+	// If this is a true ALTER TABLE statement, then the flag SDBFLAG_ALTER_TABLE_CREATE must be turned on.
+	// Also there is a temp table in the arguments.  If both condition fails, then it is actually a RENAME TABLE statement.
+	if (sqlCommand==SQLCOM_ALTER_TABLE) {
+		bool bExistsTempTable = false;
+		if ( strstr(fromTblFsName, MYSQL_TEMP_TABLE_PREFIX) || strstr(toTblFsName, MYSQL_TEMP_TABLE_PREFIX) )
+			bExistsTempTable = true;
 
-	//	char* pNewTableName = strstr(pAlterTableStmt, toTblFsName);
-	//	if ( pRename && pNewTableName && (pNewTableName - pRename ==bytesForKeyWords) ) {	// Actually this is a RENAME TABLE command
-	//		bIsAlterTableStmt = false;
-	//		sqlCommand = SQLCOM_RENAME_TABLE;
-	//	}
-
-	//	RELEASE_MEMORY((void*) pAlterTableStmt);
-	//}
+		if ( (!bExistsTempTable) && (!(pSdbMysqlTxn_->getDdlFlag() & SDBFLAG_ALTER_TABLE_CREATE)) ) {	
+			bIsAlterTableStmt = false;
+			sqlCommand = SQLCOM_RENAME_TABLE;
+		}
+	}
 
 
 	// If the ddl statement has the key word defined in SCALEDB_HINT_PASS_DDL,
@@ -4690,7 +4678,7 @@ int ha_scaledb::rename_table(const char* fromTable, const char* toTable) {
 
 	// RENAME TABLE: Primary node needs to lock the metadata of the master dbms before opening a user database
 	// RENAME TABLE: Secondary nodes do NOT need to lock the metadata any more.
-	// ALTER TABLE: primary node already imposed lockMetaInfo in ::create()
+	// ALTER TABLE: primary node already imposed lockMetaInfo in ::create
 	if ( (!(ddlFlag & SDBFLAG_DDL_SECOND_NODE)) && (sqlCommand==SQLCOM_RENAME_TABLE) ) {
 		retCode = SDBLockMetaInfo(sdbUserId_, sdbDbId_);
 		if (retCode)
@@ -4743,7 +4731,7 @@ int ha_scaledb::rename_table(const char* fromTable, const char* toTable) {
 	else retCode = METAINFO_UNDEFINED_DATA_TABLE;
 
 	// RENAME TABLE: primary node needs to release lock on MetaInfo
-	// ALTER TABLE: primary node releases lockMetaInfo in ::delete_table()
+	// ALTER TABLE: primary node releases lockMetaInfo in ::delete_table
 	if ( (!(ddlFlag & SDBFLAG_DDL_SECOND_NODE))  && (sqlCommand==SQLCOM_RENAME_TABLE) ) {
 		if ( (SDBNodeIsCluster() == TRUE) && (retCode == SUCCESS) ) {
 			renameTableReady = sendStmtToOtherNodes(sdbDbId_, thd->query, false, false);
@@ -4971,6 +4959,7 @@ int ha_scaledb::index_read_last(uchar * buf, const uchar * key, uint key_len)
 	return index_read(buf, key, key_len, HA_READ_PREFIX_LAST);
 }
 
+
 // return last key which actually resulted in an error (duplicate error)
 unsigned short ha_scaledb::get_last_index_error_key()
 {
@@ -4990,6 +4979,9 @@ unsigned short ha_scaledb::get_last_index_error_key()
 		short mySqlFieldType = table->field[last_errkey]->type();
 		short length = 1;
 		switch (mySqlFieldType) {
+			case MYSQL_TYPE_TINY:
+				length = 1;
+				break;
 			case MYSQL_TYPE_SHORT:
 				length = 2;
 				break;
@@ -5012,6 +5004,7 @@ unsigned short ha_scaledb::get_last_index_error_key()
 	}
 	return last_errkey;
 }
+
 
 //extra information passed by the handler
 int ha_scaledb::extra( enum ha_extra_function operation )
@@ -5159,7 +5152,6 @@ ha_rows ha_scaledb::records() {
 
 	DBUG_RETURN( (ha_rows)totalRows );
 }
-
 
 
 //  Return actual upper bound of number of records in the table.
