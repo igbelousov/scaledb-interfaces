@@ -3632,7 +3632,7 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 	fetchIdentifierName(name, dbFsName, tblFsName, pathName); 
 
 	char* pDbName = table_arg->s->db.str;				// points to user-defined database name
-	char* pTableName = table_arg->s->table_name.str;	// points to user-defined table name
+	char* pTableName = table_arg->s->table_name.str;	// points to user-defined table name.  This name is case sensitive
 
 	int retCode = SUCCESS;
 	bool bIsAlterTableStmt = false;
@@ -4524,10 +4524,21 @@ int ha_scaledb::delete_table(const char* name)
 				// a time.  MySQL allows multiple table names specified in a DROP TABLE statement.
 				// For DROP DATABASE statement, MySQL calls this method to drop individual table first.
 				// Hence we need to generate a DROP TABLE statement in this case.
-				char * caseSensitiveTableName = SDBGetTableCaseSensitiveNameByNumber(sdbUserId_, sdbDbId_, sdbTableNumber_);
-				char* dropTableStmt = SDBUtilAppendString("drop table ", caseSensitiveTableName);
-				dropTableReady = sendStmtToOtherNodes(sdbDbId_, dropTableStmt, false, false);
-				RELEASE_MEMORY(dropTableStmt);
+				char* pTableCsName = SDBGetTableCaseSensitiveNameByNumber(sdbUserId_, sdbDbId_, sdbTableNumber_);
+
+				// Bug 1066, always enclose table name with backtick so that we can handle special character. 
+				// If the table name has a backtick, we need to double the backtick character
+				char* pDropTableStmtTemp = NULL;
+				if ( strstr(pTableCsName, "`") ) {
+					pTableCsName = SDBUtilDoubleSpecialCharInString(pTableCsName, '`');
+					pDropTableStmtTemp = SDBUtilAppendString("drop table `", pTableCsName);
+					RELEASE_MEMORY(pTableCsName);
+				} else {
+					pDropTableStmtTemp = SDBUtilAppendString("drop table `", pTableCsName);
+				}
+				char* pDropTableStmt = SDBUtilAppendStringFreeFirstParam(pDropTableStmtTemp, "` ");
+				dropTableReady = sendStmtToOtherNodes(sdbDbId_, pDropTableStmt, false, false);
+				RELEASE_MEMORY(pDropTableStmt);
 			}
 		}
 

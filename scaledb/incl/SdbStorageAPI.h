@@ -471,6 +471,7 @@ char *SDBUtilAppendStringFreeFirstParam(char *ptr1, char *ptr2);
 
 unsigned short SDBUtilGetStrLength(char *ptr);
 char *SDBUtilDuplicateString(char *ptr);
+char *SDBUtilDoubleSpecialCharInString(char* pName, char specialChar);
 char *SDBUtilGetStrInLower(char *ptr);
 bool SDBUtilCompareStrings(const char *str1, const char *str2, bool inLower, unsigned short length = 0);
 char *SDBUtilDecodeCharsInStrings(char *before);
