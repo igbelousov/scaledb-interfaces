@@ -111,6 +111,12 @@ typedef enum SdbKeySearchDirection {
 #define SDB_COMMAND_INSERT		0
 #define SDB_COMMAND_LOAD		1
 
+// Transaction Isolation Level
+#define SDB_ISOLATION_READ_UNCOMMITTED		0
+#define SDB_ISOLATION_READ_COMMITTED		1
+#define SDB_ISOLATION_REPEATABLE_READ		2
+#define SDB_ISOLATION_SERIALIZABLE			3
+
 // Reference locks
 #define REFERENCE_LOCK_EXCLUSIVE 3
 #define DEFAULT_REFERENCE_LOCK_LEVEL 2

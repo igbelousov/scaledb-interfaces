@@ -305,9 +305,10 @@ unsigned short SDBRollBack(unsigned int userId, char *savePointName = NULL);
 
 unsigned short SDBSetSavePoint(unsigned short userId, char *savePointName);
 bool SDBRemoveSavePoint(unsigned int userId, char *savePoinName);
-
 unsigned short SDBRollBackToSavePointId(unsigned int userId, unsigned long long savePointId);
 unsigned long long SDBGetSavePointId(unsigned int userId);
+
+void SDBSetIsolationLevel(unsigned int userId, unsigned short isolationLevel);
 
 /*
 //////////////////////////////////////////////////////////////////////////////

@@ -3502,7 +3502,35 @@ THR_LOCK_DATA **ha_scaledb::store_lock(THD *thd,
 	}
 #endif
 
-	// TBD: We may save transaction isolation level here
+	// We save transaction isolation level here for a given user thread (save into User object).
+	// Note that transaction isolation level is set for a user, not for a table handler.
+	placeSdbMysqlTxnInfo( thd );
+	if (lock_type != TL_IGNORE) {
+		enum_tx_isolation level = (enum_tx_isolation) thd_tx_isolation(thd);
+		switch(level) {
+			// the following cases are listed in the descending order of frequency
+			case ISO_READ_COMMITTED: 
+				SDBSetIsolationLevel(sdbUserId_, SDB_ISOLATION_READ_COMMITTED);
+				break;
+
+			case ISO_REPEATABLE_READ:
+				SDBSetIsolationLevel(sdbUserId_, SDB_ISOLATION_REPEATABLE_READ);
+				break;
+
+			case ISO_READ_UNCOMMITTED: 
+				SDBSetIsolationLevel(sdbUserId_, SDB_ISOLATION_READ_UNCOMMITTED);
+				break;
+
+			case ISO_SERIALIZABLE: 
+				SDBSetIsolationLevel(sdbUserId_, SDB_ISOLATION_SERIALIZABLE);
+				break;
+
+			default: 
+				SDBSetIsolationLevel(sdbUserId_, SDB_ISOLATION_READ_COMMITTED);
+				break;
+		}
+
+	}
 
 
 	// MySQL's default lock level is at table level.  It is very restrictive and has low conncurrency.
