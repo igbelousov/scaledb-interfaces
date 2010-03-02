@@ -793,7 +793,7 @@ static void scaledb_drop_database(handlerton* hton, char* path) {
 	// then we need to update memory metadata only.  (NOT the metadata on disk).
 	unsigned short ddlFlag = SDBFLAG_DDL_META_TABLES;
 	if (SDBNodeIsCluster() == true)
-		if ( strstr(thd->query, SCALEDB_HINT_PASS_DDL) != NULL )
+		if ( strstr(thd->query(), SCALEDB_HINT_PASS_DDL) != NULL )
 			ddlFlag |= SDBFLAG_DDL_SECOND_NODE;
 
 	// First we fetch database name from the path
@@ -807,7 +807,7 @@ static void scaledb_drop_database(handlerton* hton, char* path) {
 	unsigned int sqlCommand = thd_sql_command(thd);
 	if ( (SDBNodeIsCluster() == true) && ( !(ddlFlag & SDBFLAG_DDL_SECOND_NODE)) )
 		if (sqlCommand == SQLCOM_DROP_DB) {
-			dropDbReady = sendStmtToOtherNodes(dbId, thd->query, true, false);
+			dropDbReady = sendStmtToOtherNodes(dbId, thd->query(), true, false);
 		}
 
 	if (dropDbReady)
@@ -868,7 +868,7 @@ void ha_scaledb::outputHandleAndThd() {
 	SDBDebugPrint8ByteUnsignedLong((unsigned long long)thd);
 	if (thd) {
 		SDBDebugPrintString(", Query:");
-		SDBDebugPrintString(thd->query);
+		SDBDebugPrintString(thd->query());
 	}
 }
 
@@ -1020,7 +1020,7 @@ int ha_scaledb::external_lock(
 	if (SDBNodeIsCluster() == true) {	// it is a cluster system
 		if (sqlCommand_==SQLCOM_CREATE_TABLE || sqlCommand_==SQLCOM_ALTER_TABLE 
 			|| sqlCommand_==SQLCOM_CREATE_INDEX || sqlCommand_==SQLCOM_DROP_INDEX) {
-			if ( thd->query && strstr(thd->query, SCALEDB_HINT_PASS_DDL) != NULL ) { // must be last comparison as it is expensive
+			if ( thd->query() && strstr(thd->query(), SCALEDB_HINT_PASS_DDL) != NULL ) { // must be last comparison as it is expensive
 				// this is secondary node
 				if (lock_type != F_UNLCK)
 					// set up ddlFlag_ for subsequent use between the pair of external_lock method calls.
@@ -1074,7 +1074,7 @@ int ha_scaledb::external_lock(
 
 	if (lock_type != F_UNLCK) {
 
-		SDBLogSqlStmt(sdbUserId_, thd->query, thd->query_id);	// inform engine to log user query for DML
+		SDBLogSqlStmt(sdbUserId_, thd->query(), thd->query_id);	// inform engine to log user query for DML
 		bool all_tx = false;
 
 		// lock the table if the user has an explicit lock tables statement
@@ -1124,7 +1124,7 @@ int ha_scaledb::external_lock(
 			// we need to impose a table level shared lock in order to protect the memory metadata to be used in DML. 
 			// For TRUNCATE TABLE, secondary node should not impose lock as primary node already imposes an exclusive table level lock.
 			// For all other cases, we should impose a table level shared lock.
-			if ( (sqlCommand_ != SQLCOM_TRUNCATE) || (strstr(thd->query, SCALEDB_HINT_PREFIX) == NULL) ) {
+			if ( (sqlCommand_ != SQLCOM_TRUNCATE) || (strstr(thd->query(), SCALEDB_HINT_PREFIX) == NULL) ) {
 				bool bGetLock = SDBLockTable(sdbUserId_, sdbDbId_, sdbTableNumber_, DEFAULT_REFERENCE_LOCK_LEVEL);
 				if (bGetLock == false)	// failed to lock the table
 					DBUG_RETURN(HA_ERR_LOCK_WAIT_TIMEOUT);
@@ -1199,7 +1199,7 @@ int ha_scaledb::start_stmt(THD* thd, thr_lock_type lock_type) {
 		sdbCommandType_ = SDB_COMMAND_LOAD;
 
 	if (sqlCommand_==SQLCOM_ALTER_TABLE || sqlCommand_==SQLCOM_CREATE_INDEX || sqlCommand_==SQLCOM_DROP_INDEX) {
-		if ( (SDBNodeIsCluster() == true) && (thd->query) && (strstr(thd->query, SCALEDB_HINT_PASS_DDL) == NULL) )
+		if ( (SDBNodeIsCluster() == true) && (thd->query()) && (strstr(thd->query(), SCALEDB_HINT_PASS_DDL) == NULL) )
 		{	// This is the primary node in a cluster system
 			if (strstr(table->s->table_name.str, MYSQL_TEMP_TABLE_PREFIX)==NULL)  
 				// We can find the alter-table name (same logic used in the first external_lock when there is no LOCK TABLES)
@@ -1355,7 +1355,7 @@ int ha_scaledb::open(const char *name, int mode, uint test_if_locked) {
 
 	bool bIsPrimaryNode = true;
 	if (SDBNodeIsCluster() == true)	{	// if this is a cluster machine
-		if ( strstr(thd->query, SCALEDB_HINT_PASS_DDL) != NULL ) {		// if this is a non-primary node
+		if ( strstr(thd->query(), SCALEDB_HINT_PASS_DDL) != NULL ) {		// if this is a non-primary node
 			bIsPrimaryNode = false;
 
 			// For ALTER TABLE, secondary node should NOT open table file.
@@ -1452,7 +1452,7 @@ int ha_scaledb::close(void) {
 		SDBDebugPrint8ByteUnsignedLong((unsigned long long)thd);
 		if (thd) {
 			SDBDebugPrintString(", Query:");
-			SDBDebugPrintString(thd->query);
+			SDBDebugPrintString(thd->query());
 		}
 		SDBDebugEnd();
 	}
@@ -1472,7 +1472,7 @@ int ha_scaledb::close(void) {
 		bool bIsAlterTableStmt = false;
 		if (sqlCommand==SQLCOM_ALTER_TABLE || sqlCommand==SQLCOM_CREATE_INDEX || sqlCommand==SQLCOM_DROP_INDEX)
 			bIsAlterTableStmt = true;
-		if ( strstr(thd->query, SCALEDB_HINT_PASS_DDL) )
+		if ( strstr(thd->query(), SCALEDB_HINT_PASS_DDL) )
 			ddlFlag |= SDBFLAG_DDL_SECOND_NODE;		// this flag is used locally.
 
 		// For ALTER TABLE, CREATE/DROP INDEX, secondary node should not close table because the temp table
@@ -2036,11 +2036,11 @@ int ha_scaledb::delete_all_rows()
 		if ( sqlCommand_ == SQLCOM_TRUNCATE ) {
 			unsigned short stmtFlag = 0;
 			if (SDBNodeIsCluster() == true) {
-				if ( strstr(thd->query, SCALEDB_HINT_PREFIX) != NULL )
+				if ( strstr(thd->query(), SCALEDB_HINT_PREFIX) != NULL )
 					stmtFlag |= SDBFLAG_DDL_SECOND_NODE;
-				if ( strstr(thd->query, SCALEDB_HINT_CLOSEFILE) != NULL )
+				if ( strstr(thd->query(), SCALEDB_HINT_CLOSEFILE) != NULL )
 					stmtFlag |= SDBFLAG_CMD_CLOSE_FILE;
-				if ( strstr(thd->query, SCALEDB_HINT_OPENFILE) != NULL )
+				if ( strstr(thd->query(), SCALEDB_HINT_OPENFILE) != NULL )
 					stmtFlag |= SDBFLAG_CMD_OPEN_FILE;
 			}
 
@@ -2058,7 +2058,7 @@ int ha_scaledb::delete_all_rows()
 			// all the non-primary nodes will close the table files
 			if ((SDBNodeIsCluster() == true) && 
 				!(stmtFlag & SDBFLAG_DDL_SECOND_NODE) ) {
-					char* stmtWithHint = SDBUtilAppendString(thd->query, SCALEDB_HINT_CLOSEFILE);
+					char* stmtWithHint = SDBUtilAppendString(thd->query(), SCALEDB_HINT_CLOSEFILE);
 					truncateTableReady = sqlStmt(sdbDbId_, stmtWithHint);
 					RELEASE_MEMORY(stmtWithHint);
 			}
@@ -2071,7 +2071,7 @@ int ha_scaledb::delete_all_rows()
 			// all the non-primary nodes will open the table files.
 			if ((SDBNodeIsCluster() == true) && 
 				!(stmtFlag & SDBFLAG_DDL_SECOND_NODE) ) {
-					char* stmtWithHint = SDBUtilAppendString(thd->query, SCALEDB_HINT_OPENFILE);
+					char* stmtWithHint = SDBUtilAppendString(thd->query(), SCALEDB_HINT_OPENFILE);
 					truncateTableReady = sqlStmt(sdbDbId_, stmtWithHint);
 					RELEASE_MEMORY(stmtWithHint);
 			}
@@ -3496,7 +3496,7 @@ THR_LOCK_DATA **ha_scaledb::store_lock(THD *thd,
 			SDBDebugPrintString(", handler=");
 			SDBDebugPrint8ByteUnsignedLong((uint64)this);
 			SDBDebugPrintString(", Query:");
-			SDBDebugPrintString(thd->query);
+			SDBDebugPrintString(thd->query());
 		}
 		SDBDebugEnd();			// synchronize threads printout	
 	}
@@ -3667,14 +3667,14 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 	unsigned int errorNum = 0;
 	THD* thd = ha_thd();
 	placeSdbMysqlTxnInfo( thd );	
-	SDBLogSqlStmt(sdbUserId_, thd->query, thd->query_id);	// inform engine to log user query for DDL
+	SDBLogSqlStmt(sdbUserId_, thd->query(), thd->query_id);	// inform engine to log user query for DDL
 
 	unsigned short ddlFlag = 0;
 	// use this flag to decide if we want to create entries on metatables.
 	// When set to true, we need to read metadata information into memory from metatables.
 
 	if (SDBNodeIsCluster() == true)
-		if ( strstr(thd->query, SCALEDB_HINT_PASS_DDL) != NULL ) {
+		if ( strstr(thd->query(), SCALEDB_HINT_PASS_DDL) != NULL ) {
 		ddlFlag |= SDBFLAG_DDL_SECOND_NODE;		// this flag is used locally.
 
 		// For CREATE TABLE t1 SELECT 1, 'hello'; there is no select-from table.
@@ -3725,7 +3725,7 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 		// If we are creating a virtual view, then we can have an early exit.
 		if ((SDBNodeIsCluster() == true) && (errorNum == 0))
 			if ((sqlCommand == SQLCOM_CREATE_TABLE) && ( !(ddlFlag & SDBFLAG_DDL_SECOND_NODE) ) ) {
-				sendStmtToOtherNodes(sdbDbId_, thd->query, false, true);
+				sendStmtToOtherNodes(sdbDbId_, thd->query(), false, true);
 			}
 
 			DBUG_RETURN(errorNum);
@@ -3737,9 +3737,9 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 	// On a cluster system, primary node needs to send FLUSH TABLE statement to secondary nodes here
 	// in order to close the table files of the table to be altered.  The DDL is sent after primary node finishes processing.
 	bool bCreateTableSelect = false;
-	char* pCreateTableStmt = (char*) GET_MEMORY( thd->query_length + 1 );
+	char* pCreateTableStmt = (char*) GET_MEMORY( thd->query_length() + 1 );
 	// convert LF to space, remove extra space, convert to lower case letters 
-	convertSeparatorLowerCase( pCreateTableStmt, thd->query);
+	convertSeparatorLowerCase( pCreateTableStmt, thd->query());
 	char* pSelect = strstr(pCreateTableStmt, "select ");
 	if ( (sqlCommand==SQLCOM_CREATE_TABLE) && (pSelect) )	// DDL contains key word 'select'
 		bCreateTableSelect = true;
@@ -3878,7 +3878,7 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 				// Now we pass the CREATE TABLE statement to other nodes
 				// need to send statement "SET SESSION STORAGE_ENGINE=SCALEDB" before CREATE TABLE
 				bool createTableReady = true;
-				createTableReady = sendStmtToOtherNodes(sdbDbId_, thd->query, false, true); 
+				createTableReady = sendStmtToOtherNodes(sdbDbId_, thd->query(), false, true); 
 
 				if ( createTableReady == false )
 					retCode = CREATE_TABLE_FAILED_IN_CLUSTER;
@@ -4217,7 +4217,7 @@ int ha_scaledb::create_fks(THD* thd, TABLE *table_arg, char* tblName, SdbDynamic
 	unsigned int errorNum = 0;
 	int numOfKeys = (int) table_arg->s->keys ;
 
-	if ( thd->query_length > 0 ) {
+	if ( thd->query_length() > 0 ) {
 
 		// foreign key constraint syntax:
 		// [CONSTRAINT [symbol]] FOREIGN KEY [index_name] (index_col_name, ...) 
@@ -4282,7 +4282,7 @@ int ha_scaledb::create_fks(THD* thd, TABLE *table_arg, char* tblName, SdbDynamic
 			pForeignKeyClause = strstr( pOffset, "foreign key ");
 		}	// while ( pForeignKeyClause != NULL )
 
-	}	// if ( thd->query_length > 0 )
+	}	// if ( thd->query_length() > 0 )
 
 	return errorNum;
 }
@@ -4450,7 +4450,7 @@ int ha_scaledb::delete_table(const char* name)
 	bool bIsAlterTableStmt = false;
 	THD* thd = ha_thd();
 	placeSdbMysqlTxnInfo( thd );	
-	SDBLogSqlStmt(sdbUserId_, thd->query, thd->query_id);	// inform engine to log user query for DDL
+	SDBLogSqlStmt(sdbUserId_, thd->query(), thd->query_id);	// inform engine to log user query for DDL
 
 	unsigned int sqlCommand = thd_sql_command(thd);
 	if (sqlCommand==SQLCOM_ALTER_TABLE || sqlCommand==SQLCOM_CREATE_INDEX || sqlCommand==SQLCOM_DROP_INDEX) 
@@ -4463,7 +4463,7 @@ int ha_scaledb::delete_table(const char* name)
 	// then we need to update memory metadata only.  (NOT the metadata on disk).
 	unsigned short ddlFlag = 0;
 	if (SDBNodeIsCluster() == true) {
-		if ( strstr(thd->query, SCALEDB_HINT_PASS_DDL) != NULL ) 
+		if ( strstr(thd->query(), SCALEDB_HINT_PASS_DDL) != NULL ) 
 			ddlFlag |= SDBFLAG_DDL_SECOND_NODE;
 	}
 
@@ -4592,7 +4592,7 @@ int ha_scaledb::delete_table(const char* name)
 		// if the table to be dropped is the second temp table, then we proceed to replicate to other nodes.
 		// if not, then we are rolling back an ALTER TABLE statement by removing the first temp table; 
 		// hence there is no need to send ALTER TABLE statements to other nodes
-		bool bAlterTableReady = sendStmtToOtherNodes(sdbDbId_, thd->query, false, false);
+		bool bAlterTableReady = sendStmtToOtherNodes(sdbDbId_, thd->query(), false, false);
 		if (!bAlterTableReady)
 			retCode = ALTER_TABLE_FAILED_IN_CLUSTER;
 	}
@@ -4664,7 +4664,7 @@ int ha_scaledb::rename_table(const char* fromTable, const char* toTable) {
 	bool bIsAlterTableStmt = false;
 	THD* thd = ha_thd();
 	placeSdbMysqlTxnInfo( thd );	
-	SDBLogSqlStmt(sdbUserId_, thd->query, thd->query_id);	// inform engine to log user query for DDL
+	SDBLogSqlStmt(sdbUserId_, thd->query(), thd->query_id);	// inform engine to log user query for DDL
 
 	unsigned int sqlCommand = thd_sql_command(thd);
 	if (sqlCommand==SQLCOM_ALTER_TABLE || sqlCommand==SQLCOM_CREATE_INDEX || sqlCommand==SQLCOM_DROP_INDEX) 
@@ -4689,7 +4689,7 @@ int ha_scaledb::rename_table(const char* fromTable, const char* toTable) {
 	// then we need to update memory metadata only.  (NOT the metadata on disk).
 	unsigned short ddlFlag = 0;
 	if (SDBNodeIsCluster() == true) {
-		if ( strstr(thd->query, SCALEDB_HINT_PASS_DDL) != NULL ) 
+		if ( strstr(thd->query(), SCALEDB_HINT_PASS_DDL) != NULL ) 
 			ddlFlag |= SDBFLAG_DDL_SECOND_NODE;
 	}
 
@@ -4773,7 +4773,7 @@ int ha_scaledb::rename_table(const char* fromTable, const char* toTable) {
 	// ALTER TABLE: primary node releases lockMetaInfo in ::delete_table
 	if ( (!(ddlFlag & SDBFLAG_DDL_SECOND_NODE))  && (sqlCommand==SQLCOM_RENAME_TABLE) ) {
 		if ( (SDBNodeIsCluster() == TRUE) && (retCode == SUCCESS) ) {
-			renameTableReady = sendStmtToOtherNodes(sdbDbId_, thd->query, false, false);
+			renameTableReady = sendStmtToOtherNodes(sdbDbId_, thd->query(), false, false);
 			if (!renameTableReady)
 				retCode = METAINFO_UNDEFINED_DATA_TABLE;
 		}
