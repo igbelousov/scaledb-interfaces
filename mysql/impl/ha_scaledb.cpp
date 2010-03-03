@@ -589,12 +589,8 @@ static int scaledb_commit(
 						  bool	all)	/* true if it is a real commit, false if it is an end of statement */
 {
 	DBUG_ENTER("scaledb_commit");
-
-		//SDBDebugStart();
-		//SDBDebugPrintHeader("MySQL called commit for user: ");
-		//SDBDebugPrintInt( userTxn->getScaleDbUserId() );
-		//SDBDebugEnd();
-
+	MysqlTxn* userTxn = (MysqlTxn *) *thd_ha_data(thd, hton);
+	unsigned int userId = userTxn->getScaleDbUserId();
 
 #ifdef SDB_DEBUG_LIGHT
 	if (ha_scaledb::mysqlInterfaceDebugLevel_) {
@@ -606,16 +602,15 @@ static int scaledb_commit(
 		SDBDebugPrintString(", all=");
 		SDBDebugPrintString(all ? "true" : "false");
 		SDBDebugPrintString(")");
+		SDBDebugPrintString("; ScaleDbUserId:");
+		SDBDebugPrintInt( userId );
+		SDBDebugPrintString("; Query:");
+		SDBDebugPrintString(thd->query());
 		SDBDebugFlush();
 		SDBDebugEnd();
 	}
 #endif
 
-	MysqlTxn* userTxn = (MysqlTxn *) *thd_ha_data(thd, hton);
-
-	unsigned int userId = userTxn->getScaleDbUserId();
-
-	
 	unsigned int sqlCommand = thd_sql_command(thd);
 	if (sqlCommand == SQLCOM_LOCK_TABLES)
 		DBUG_RETURN(0);		// do nothing if it is a LOCK TABLES statement. 
@@ -1080,7 +1075,8 @@ int ha_scaledb::external_lock(
 		// in a transaction.
 		if ( retValue && (pSdbMysqlTxn_->numberOfLockTables_ == 0) && (pSdbMysqlTxn_->getActiveTxn() == false) ) {
 			pSdbMysqlTxn_->freeAllQueryManagerIds(mysqlInterfaceDebugLevel_);
-			scaledb_commit(ht, thd, true);
+			SDBCommit( sdbUserId_ );	// call engine to commit directly
+			//scaledb_commit(ht, thd, true);
 		}
 
 		DBUG_RETURN(0);
@@ -1182,7 +1178,9 @@ int ha_scaledb::external_lock(
 				// We should commit for SELECT statement in order for ScaleDB engine to release the right locks.
 				// if ( pSdbMysqlTxn_->getActiveTxn() )	// 2008-10-18: this condition is not needed
 				if ( sqlCommand_ == SQLCOM_SELECT )
-					scaledb_commit(ht, thd, false);
+					SDBCommit( sdbUserId_ );	// call engine to commit directly
+					//scaledb_commit(ht, thd, false);
+
 			}
 
 			//if (pSdbMysqlTxn_->stmt != NULL) {
@@ -2806,6 +2804,7 @@ int ha_scaledb::prepareIndexKeyQuery(const uchar* key, uint key_len, enum ha_rke
 			retValue = SDBDefineQuery(sdbQueryMgrId_, sdbDbId_, sdbDesignatorId_, pFieldName, pCurrentKeyValue);
 		}
 
+		//unsigned int endRangeLen = end_range->length;	// TBD: Bug 1103 enable for HA_READ_KEY_OR_NEXT only
 		switch (find_flag) {
 			case HA_READ_KEY_OR_NEXT:
 				SDBQueryCursorSetFlags(sdbQueryMgrId_, sdbDesignatorId_, false,SDB_KEY_SEARCH_DIRECTION_GE, false, true);
@@ -3612,7 +3611,7 @@ bool hasEngineEqualScaledb(char* sqlStatement) {
 
 /* 
 Create a table. You do not want to leave the table open after a call to
-this (the database will call ::open() if it needs to).
+this (the database will call ::open if it needs to).
 Parameter name contains database name and table name that are file system compliant names.
 The user-defined table name is saved in table_arg->s->table_name.str
 */
