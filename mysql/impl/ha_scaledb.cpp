@@ -590,6 +590,12 @@ static int scaledb_commit(
 {
 	DBUG_ENTER("scaledb_commit");
 
+		//SDBDebugStart();
+		//SDBDebugPrintHeader("MySQL called commit for user: ");
+		//SDBDebugPrintInt( userTxn->getScaleDbUserId() );
+		//SDBDebugEnd();
+
+
 #ifdef SDB_DEBUG_LIGHT
 	if (ha_scaledb::mysqlInterfaceDebugLevel_) {
 		SDBDebugStart();
@@ -608,6 +614,8 @@ static int scaledb_commit(
 	MysqlTxn* userTxn = (MysqlTxn *) *thd_ha_data(thd, hton);
 
 	unsigned int userId = userTxn->getScaleDbUserId();
+
+	
 	unsigned int sqlCommand = thd_sql_command(thd);
 	if (sqlCommand == SQLCOM_LOCK_TABLES)
 		DBUG_RETURN(0);		// do nothing if it is a LOCK TABLES statement. 
@@ -666,6 +674,12 @@ static int scaledb_rollback(
 							bool	all )
 {
 	DBUG_ENTER("scaledb_rollback");
+
+		//SDBDebugStart();
+		//SDBDebugPrintHeader("MySQL called rollback for user: ");
+		//SDBDebugPrintInt( userTxn->getScaleDbUserId() );
+		//SDBDebugEnd();
+
 
 #ifdef SDB_DEBUG_LIGHT
 	if (ha_scaledb::mysqlInterfaceDebugLevel_) {
