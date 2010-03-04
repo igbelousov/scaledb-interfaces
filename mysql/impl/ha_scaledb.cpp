@@ -1655,12 +1655,12 @@ unsigned short ha_scaledb::placeMysqlRowInEngineBuffer(unsigned char* rowBuf1, u
 		fieldType = pField->type();
 
 		switch (fieldType) {
-
-			case MYSQL_TYPE_SHORT:
-			case MYSQL_TYPE_INT24:
+			// the case statement should be listed based on the decending use frequency
 			case MYSQL_TYPE_LONG:
-			case MYSQL_TYPE_LONGLONG:
+			case MYSQL_TYPE_SHORT:
 			case MYSQL_TYPE_TINY:
+			case MYSQL_TYPE_LONGLONG:
+			case MYSQL_TYPE_INT24:
 			case MYSQL_TYPE_FLOAT:
 			case MYSQL_TYPE_DOUBLE:
 				if ( checkAutoIncField && pAutoIncrField && !setNull) {	// check to see if this table has an auto_increment column
@@ -1675,23 +1675,23 @@ unsigned short ha_scaledb::placeMysqlRowInEngineBuffer(unsigned char* rowBuf1, u
 					SDBPrepareNumberField(sdbUserId_, sdbDbId_, sdbTableNumber_, fieldId, pFieldValue, groupType);
 				break;
 
+			case MYSQL_TYPE_STRING:
+				SDBPrepareStrField(sdbUserId_, sdbDbId_, sdbTableNumber_, fieldId, (char*) pFieldValue, pField->pack_length(), groupType);
+				break;
+
+			case MYSQL_TYPE_DATE:
+			case MYSQL_TYPE_DATETIME:
+			case MYSQL_TYPE_TIME:
+			case MYSQL_TYPE_TIMESTAMP:
+			case MYSQL_TYPE_YEAR:
 			case MYSQL_TYPE_ENUM:
 			case MYSQL_TYPE_BIT:
 			case MYSQL_TYPE_SET:
-			case MYSQL_TYPE_DATE:
-			case MYSQL_TYPE_TIME:
-			case MYSQL_TYPE_DATETIME:
-			case MYSQL_TYPE_TIMESTAMP:
-			case MYSQL_TYPE_YEAR:
 				SDBPrepareNumberField(sdbUserId_, sdbDbId_, sdbTableNumber_, fieldId, pFieldValue, groupType);
 				break;
 
 			case MYSQL_TYPE_NEWDECIMAL:
 				SDBPrepareStrField(sdbUserId_, sdbDbId_, sdbTableNumber_, fieldId, (char*) pFieldValue, ((Field_new_decimal*)pField)->bin_size, groupType);
-				break;
-
-			case MYSQL_TYPE_STRING:
-				SDBPrepareStrField(sdbUserId_, sdbDbId_, sdbTableNumber_, fieldId, (char*) pFieldValue, pField->pack_length(), groupType);
 				break;
 
 			case MYSQL_TYPE_VARCHAR:
@@ -2237,8 +2237,8 @@ int ha_scaledb::copyRowToMySQLBuffer(unsigned char* buf) {
 		bool varCharType = false;
 		bool blobType = false;
 		switch (mySqlFieldType){
-				case MYSQL_TYPE_TINY_BLOB:
 				case MYSQL_TYPE_BLOB:
+				case MYSQL_TYPE_TINY_BLOB:
 				case MYSQL_TYPE_MEDIUM_BLOB:
 				case MYSQL_TYPE_LONG_BLOB:
 					blobType = true;	
@@ -2375,25 +2375,25 @@ void ha_scaledb::placeEngineFieldInMysqlBuffer(unsigned char* destBuff, char* pt
 	short mySqlFieldType = pField->type();
 
 	switch (mySqlFieldType) {
-
-		case MYSQL_TYPE_SHORT:
-			memcpy(destBuff, ptrToField, 2);
-			break;
-
-		case MYSQL_TYPE_INT24:	
-		case MYSQL_TYPE_DATE:
-		case MYSQL_TYPE_TIME:
-			memcpy(destBuff, ptrToField, 3);
-			break;
-
+		// the case statement should be listed based on the decending use frequency
 		case MYSQL_TYPE_LONG:
 		case MYSQL_TYPE_TIMESTAMP:
 		case MYSQL_TYPE_FLOAT:
 			memcpy(destBuff, ptrToField, 4);
 			break;
 
-		case MYSQL_TYPE_LONGLONG:
+		case MYSQL_TYPE_SHORT:
+			memcpy(destBuff, ptrToField, 2);
+			break;
+
+		case MYSQL_TYPE_DATE:
+		case MYSQL_TYPE_TIME:
+		case MYSQL_TYPE_INT24:	
+			memcpy(destBuff, ptrToField, 3);
+			break;
+
 		case MYSQL_TYPE_DATETIME:
+		case MYSQL_TYPE_LONGLONG:
 		case MYSQL_TYPE_DOUBLE:
 			memcpy(destBuff, ptrToField, 8);
 			break;
@@ -2716,21 +2716,22 @@ int ha_scaledb::prepareIndexKeyQuery(const uchar* key, uint key_len, enum ha_rke
 				}
 			}
 
-			switch ( fieldType ) {  // byte-flip integer field, TBD: only for windows?
-			case MYSQL_TYPE_SHORT:
-				columnLen = 2;	// no need to flip byte here.  The engine should do it.
-				break;
-
-			case MYSQL_TYPE_INT24:
-			case MYSQL_TYPE_DATE:	// DATE is treated as an 3-byte integer
-			case MYSQL_TYPE_TIME:		// TIME is treated as a 3-byte integer
-				columnLen = 3;
-				break;
-
+			switch ( fieldType ) {  // byte-flip integer field, 
+			// case statements should be listed in the decending use frequency
 			case MYSQL_TYPE_LONG:	
 			case MYSQL_TYPE_TIMESTAMP:	// TIMESTAMP is treated as a 4-byte integer
 			case MYSQL_TYPE_FLOAT:		// FLOAT is treated as a 4-byte number
 				columnLen = 4;	// no need to flip byte here.  The engine should do it.
+				break;
+
+			case MYSQL_TYPE_SHORT:
+				columnLen = 2;	// no need to flip byte here.  The engine should do it.
+				break;
+
+			case MYSQL_TYPE_DATE:	// DATE is treated as an 3-byte integer
+			case MYSQL_TYPE_TIME:		// TIME is treated as a 3-byte integer
+			case MYSQL_TYPE_INT24:
+				columnLen = 3;
 				break;
 
 			case MYSQL_TYPE_LONGLONG:	
@@ -2806,16 +2807,21 @@ int ha_scaledb::prepareIndexKeyQuery(const uchar* key, uint key_len, enum ha_rke
 
 		//unsigned int endRangeLen = end_range->length;	// TBD: Bug 1103 enable for HA_READ_KEY_OR_NEXT only
 		switch (find_flag) {
+			// case statements are listed in decending use frequency
+			case HA_READ_KEY_EXACT:
+				SDBQueryCursorSetFlags(sdbQueryMgrId_, sdbDesignatorId_, false,SDB_KEY_SEARCH_DIRECTION_EQ, true, true);
+				break;
+
+			case HA_READ_AFTER_KEY:
+				SDBQueryCursorSetFlags(sdbQueryMgrId_, sdbDesignatorId_, true,SDB_KEY_SEARCH_DIRECTION_GT, false, true);
+				break;
+
 			case HA_READ_KEY_OR_NEXT:
 				SDBQueryCursorSetFlags(sdbQueryMgrId_, sdbDesignatorId_, false,SDB_KEY_SEARCH_DIRECTION_GE, false, true);
 				break;
 
 			case HA_READ_BEFORE_KEY:
 				SDBQueryCursorSetFlags(sdbQueryMgrId_, sdbDesignatorId_, true,SDB_KEY_SEARCH_DIRECTION_LT, false, true);
-				break;
-
-			case HA_READ_AFTER_KEY:
-				SDBQueryCursorSetFlags(sdbQueryMgrId_, sdbDesignatorId_, true,SDB_KEY_SEARCH_DIRECTION_GT, false, true);
 				break;
 
 			case HA_READ_PREFIX_LAST:
