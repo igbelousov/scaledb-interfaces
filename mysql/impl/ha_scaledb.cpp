@@ -3824,7 +3824,7 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 	int numOfKeys = (int) table_arg->s->keys ;
 
 	// store info about foreign keys so the foreign key index can be created properly when designator is created
-	SdbDynamicArray *fkInfoArray = SDBArrayInit(IDENTIFIER_INTERFACE + ERRORNUM_INTERFACE_MYSQL + 1, 10, sizeof(void*));
+	SdbDynamicArray *fkInfoArray = SDBArrayInit(10, 10, sizeof(void*));
 
 	if ( numOfKeys > 0 ) {  // index/designator exists
 		// create the foreign key metadata

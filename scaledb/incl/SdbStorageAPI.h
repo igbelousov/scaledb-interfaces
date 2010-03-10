@@ -496,7 +496,7 @@ void SDBSetThreadName(char *szThreadName, unsigned int threadId=-1);
 //////////////////////////////////////////////////////////////////////////////
 */
 
-SdbDynamicArray *SDBArrayInit(unsigned int id, unsigned int initialElements, short elementSize, bool adjustable = true);
+SdbDynamicArray *SDBArrayInit(unsigned int initialElements, unsigned int addedElements, unsigned char elementSize);
 void SDBArrayFree(SdbDynamicArray *ptr);
 void SDBArrayFreeWithMembers(SdbDynamicArray *ptr);
 void SDBArrayPutPtr(SdbDynamicArray *array, unsigned int pos, void *ptr);
