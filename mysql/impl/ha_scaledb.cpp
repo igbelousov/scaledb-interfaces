@@ -3414,12 +3414,14 @@ int ha_scaledb::info(uint flag)
 			DBUG_RETURN(0);
 	}
 
-	char *tabName = table->s->table_name.str;
+	char* tabName = table->s->table_name.str;
 	if ( sdbTableNumber_ == 0 ) {	// make it conditional to avoid unnecessary string comparison
 		// in this case, info method is called before external_lock
 		if ( SDBTableIsVirtual(tabName) )
 			DBUG_RETURN(0);
 	}
+	else 
+		sdbTableNumber_ = SDBGetTableNumberByName(sdbUserId_, sdbDbId_, tabName);
 
 	if (flag & HA_STATUS_ERRKEY) {
 		errkey = get_last_index_error_key();
@@ -3433,15 +3435,15 @@ int ha_scaledb::info(uint flag)
 	if ( (flag & HA_STATUS_VARIABLE) || // update the 'variable' part of the info:
 		(flag & HA_STATUS_NO_LOCK) )
 	{  
-		stats.records = (ulong) SDBGetTableStats(sdbDbId_, tabName, SDB_STATS_INFO_FILE_RECORDS);
-		stats.deleted = (ulong) SDBGetTableStats(sdbDbId_, tabName, SDB_STATS_INFO_FILE_DELETED);
-		stats.data_file_length = (ulong) SDBGetTableStats(sdbDbId_, tabName, SDB_STATS_INFO_FILE_LENGTH);
-		stats.index_file_length = SDBGetTableStats(sdbDbId_, tabName, SDB_STATS_INDEX_FILE_LENGTH) / 2;
+		stats.records = (ulong) SDBGetTableStats(sdbDbId_, sdbTableNumber_, SDB_STATS_INFO_FILE_RECORDS);
+		stats.deleted = (ulong) SDBGetTableStats(sdbDbId_, sdbTableNumber_, SDB_STATS_INFO_FILE_DELETED);
+		stats.data_file_length = (ulong) SDBGetTableStats(sdbDbId_, sdbTableNumber_, SDB_STATS_INFO_FILE_LENGTH);
+		stats.index_file_length = SDBGetTableStats(sdbDbId_, sdbTableNumber_, SDB_STATS_INDEX_FILE_LENGTH) / 2;
 
 		//if (stats.index_file_length == 0)
 		//    stats.index_file_length = 1;
 
-		stats.mean_rec_length = (ulong)(stats.records == 0 ? 0 : SDBGetTableStats(sdbDbId_, tabName, SDB_STATS_INFO_REC_LENGTH));
+		stats.mean_rec_length = (ulong)(stats.records == 0 ? 0 : SDBGetTableStats(sdbDbId_, sdbTableNumber_, SDB_STATS_INFO_REC_LENGTH));
 	}
 
 #if 0
@@ -3824,7 +3826,7 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 	int numOfKeys = (int) table_arg->s->keys ;
 
 	// store info about foreign keys so the foreign key index can be created properly when designator is created
-	SdbDynamicArray *fkInfoArray = SDBArrayInit(10, 10, sizeof(void*));
+	SdbDynamicArray *fkInfoArray = SDBArrayInit(numOfKeys+1, numOfKeys+1, sizeof(void*)); //+1 because we use the locations 1,2,3 rather than 0,1,2
 
 	if ( numOfKeys > 0 ) {  // index/designator exists
 		// create the foreign key metadata
@@ -5240,7 +5242,7 @@ double ha_scaledb::scan_time() {
 #endif
 
 	// TODO: this should be stored in file handle; auto updated during dictionary change..
-	int64 seekLength = SDBGetTableStats(sdbDbId_, table->s->table_name.str, SDB_STATS_INFO_SEEK_LENGTH);
+	int64 seekLength = SDBGetTableStats(sdbDbId_, sdbTableNumber_, SDB_STATS_INFO_SEEK_LENGTH);
 
 	if (seekLength == 0)
 		return 1;
