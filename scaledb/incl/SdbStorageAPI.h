@@ -208,8 +208,8 @@ unsigned short SDBCloseTable(unsigned short userId, unsigned short dbId, char *p
 
 unsigned short SDBGetTableNumberByName(unsigned short userId, unsigned short dbId, const char *tableName);
 unsigned short SDBGetTableNumberByFileSystemName(unsigned short userId, unsigned short dbId, const char *tableName);
-char * SDBGetTableNameByNumber(unsigned short userId, unsigned short dbId, unsigned short tableNumber);
-char * SDBGetTableCaseSensitiveNameByNumber(unsigned short userId, unsigned short dbId, unsigned short tableNumber);
+char* SDBGetTableNameByNumber(unsigned short userId, unsigned short dbId, unsigned short tableNumber);
+char* SDBGetTableCaseSensitiveNameByNumber(unsigned short userId, unsigned short dbId, unsigned short tableNumber);
 
 bool SDBTableIsVirtual(const char *tableName);
 

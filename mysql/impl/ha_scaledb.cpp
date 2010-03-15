@@ -1130,11 +1130,11 @@ int ha_scaledb::external_lock(
 				}
 			}
 
-			// Because ::close method first impose exclusive table level lock and then remove all metadata information from memory,
+			// Because the close method first imposes exclusive table level lock and then removes all metadata information from memory,
 			// we need to impose a table level shared lock in order to protect the memory metadata to be used in DML. 
 			// For TRUNCATE TABLE, secondary node should not impose lock as primary node already imposes an exclusive table level lock.
 			// For all other cases, we should impose a table level shared lock.
-			if ( (sqlCommand_ != SQLCOM_TRUNCATE) || (strstr(thd->query(), SCALEDB_HINT_PREFIX) == NULL) ) {
+			if ( ((sqlCommand_ != SQLCOM_TRUNCATE) || (strstr(thd->query(), SCALEDB_HINT_PREFIX) == NULL)) && (!virtualTableFlag_) ) {
 				bool bGetLock = SDBLockTable(sdbUserId_, sdbDbId_, sdbTableNumber_, DEFAULT_REFERENCE_LOCK_LEVEL);
 				if (bGetLock == false)	// failed to lock the table
 					DBUG_RETURN(HA_ERR_LOCK_WAIT_TIMEOUT);
@@ -3487,7 +3487,7 @@ int ha_scaledb::info(uint flag)
 		unpack_filename(path,path);
 		struct stat	statinfo;
 		if (!stat(path, &statinfo))
-			stats.create_time = statinfo.st_ctime;
+			stats.create_time = (ulong) statinfo.st_ctime;
 	}
 
 	if ( (flag & HA_STATUS_AUTO) && table->found_next_number_field && pSdbMysqlTxn_) {
@@ -3940,7 +3940,6 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 int ha_scaledb::has_overflow_fields(THD* thd, TABLE *table_arg){
 	Field*	pField;
 	enum_field_types fieldType;
-	unsigned char sdbFieldType;
 	unsigned short sdbFieldSize;
 	unsigned int sdbMaxDataLength; 
 	unsigned int maxColumnLengthInBaseFile = SDBGetMaxColumnLengthInBaseFile();
@@ -5241,11 +5240,16 @@ double ha_scaledb::scan_time() {
 	}
 #endif
 
-	// TODO: this should be stored in file handle; auto updated during dictionary change..
-	int64 seekLength = SDBGetTableStats(sdbDbId_, sdbTableNumber_, SDB_STATS_INFO_SEEK_LENGTH);
+	unsigned long long seekLength = 1000;
+	if (virtualTableFlag_)		// return a large number for virtual table scan because it should use index
+		return (double) seekLength;
+
+	// TODO: this should be stored in file handle; auto updated during dictionary change.
+	// Compute disk seek length for normal tables.
+	seekLength = SDBGetTableStats(sdbDbId_, sdbTableNumber_, SDB_STATS_INFO_SEEK_LENGTH);
 
 	if (seekLength == 0)
-		return 1;
+		seekLength = 1;
 
 	return (double) seekLength;
 }
