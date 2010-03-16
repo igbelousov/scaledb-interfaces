@@ -1130,11 +1130,11 @@ int ha_scaledb::external_lock(
 				}
 			}
 
-			// Because the close method first imposes exclusive table level lock and then removes all metadata information from memory,
+			// Because ::close method first impose exclusive table level lock and then remove all metadata information from memory,
 			// we need to impose a table level shared lock in order to protect the memory metadata to be used in DML. 
 			// For TRUNCATE TABLE, secondary node should not impose lock as primary node already imposes an exclusive table level lock.
 			// For all other cases, we should impose a table level shared lock.
-			if ( ((sqlCommand_ != SQLCOM_TRUNCATE) || (strstr(thd->query(), SCALEDB_HINT_PREFIX) == NULL)) && (!virtualTableFlag_) ) {
+			if ( (sqlCommand_ != SQLCOM_TRUNCATE) || (strstr(thd->query(), SCALEDB_HINT_PREFIX) == NULL) ) {
 				bool bGetLock = SDBLockTable(sdbUserId_, sdbDbId_, sdbTableNumber_, DEFAULT_REFERENCE_LOCK_LEVEL);
 				if (bGetLock == false)	// failed to lock the table
 					DBUG_RETURN(HA_ERR_LOCK_WAIT_TIMEOUT);
@@ -1391,14 +1391,6 @@ int ha_scaledb::open(const char *name, int mode, uint test_if_locked) {
 		DBUG_RETURN(convertToMysqlErrorCode(retCode));
 
 
-	char* pTblFsName = &tblFsName[0];	// points to the beginning of tblFsName
-	virtualTableFlag_ = SDBTableIsVirtual(pTblFsName);
-	if (virtualTableFlag_) {
-		pTblFsName = pTblFsName + SDB_VIRTUAL_VIEW_PREFIX_BYTES;
-		char* pUnderscores = strstr(pTblFsName, "___");
-		*pUnderscores = 0;	//  make pTblFsName stop at the beginning of "___"
-	}
-
 	// Because MySQL calls this method outside of a normal user transaction,
 	// hence we use a different user id to open database and table in order to avoid commit issue.
 	unsigned int userIdforOpen = SDBGetNewUserId();
@@ -1406,7 +1398,7 @@ int ha_scaledb::open(const char *name, int mode, uint test_if_locked) {
 	// Second, we open the specified table for either single node or primary node of a cluster.
 	// Also need to open non-temp table files on secondary nodes for later processing.
 
-	sdbTableNumber_ = SDBGetTableNumberByFileSystemName(sdbUserId_, sdbDbId_, pTblFsName);
+	sdbTableNumber_ = SDBGetTableNumberByFileSystemName(sdbUserId_, sdbDbId_, tblFsName);
 	if (sdbTableNumber_ == 0) {
 
 		if (SDBNodeIsCluster() == true)	{	// if this is a cluster machine
@@ -1415,11 +1407,11 @@ int ha_scaledb::open(const char *name, int mode, uint test_if_locked) {
 			// If we open a temp file for ALTER TABLE, then do not lockMetaInfo as it is inside a user transaction.
 			if ( bIsPrimaryNode ) {
 				if (bIsAlterTableStmt && openTempFile)	// inside ALTER TABLE
-					sdbTableNumber_ = SDBOpenTable(sdbUserId_, sdbDbId_, pTblFsName);
+					sdbTableNumber_ = SDBOpenTable(sdbUserId_, sdbDbId_, tblFsName);
 				else {	// outside of a user transaction
 					retCode = SDBLockMetaInfo(userIdforOpen, sdbDbId_);
 					if (retCode == SUCCESS)
-						sdbTableNumber_ = SDBOpenTable(userIdforOpen, sdbDbId_, pTblFsName);	
+						sdbTableNumber_ = SDBOpenTable(userIdforOpen, sdbDbId_, tblFsName);	
 				}
 			}
 
@@ -1427,15 +1419,15 @@ int ha_scaledb::open(const char *name, int mode, uint test_if_locked) {
 			// Secondary node should NOT open the new table which is inside of external_lock pair.
 			if ( (sqlCommand==SQLCOM_CREATE_TABLE) && (bIsPrimaryNode==false)
 				&& (pSdbMysqlTxn_->getDdlFlag() == 0) )		// this condition says the to-be-opened table is outside external_lock pair
-				sdbTableNumber_ = SDBOpenTable(userIdforOpen, sdbDbId_, pTblFsName);
+				sdbTableNumber_ = SDBOpenTable(userIdforOpen, sdbDbId_, tblFsName);
 		}
 		else {	// on a single node solution
 			if (bIsAlterTableStmt && openTempFile)	// this is inside ALTER TABLE
-				sdbTableNumber_ = SDBOpenTable(sdbUserId_, sdbDbId_, pTblFsName);
+				sdbTableNumber_ = SDBOpenTable(sdbUserId_, sdbDbId_, tblFsName);
 			else {	// outside of a user transaction
 				retCode = SDBLockMetaInfo(userIdforOpen, sdbDbId_);
 				if (retCode == SUCCESS)
-					sdbTableNumber_ = SDBOpenTable(userIdforOpen, sdbDbId_, pTblFsName);	
+					sdbTableNumber_ = SDBOpenTable(userIdforOpen, sdbDbId_, tblFsName);	
 			}
 		}
 	}
@@ -1483,10 +1475,6 @@ int ha_scaledb::close(void) {
 	bool needToRemoveFromScaledbCache = false;
 	bool needToCommit = false;
 	unsigned short ddlFlag = 0;
-	if (virtualTableFlag_) {	// do nothing for virtual table
-		sdbTableNumber_ = 0;
-		DBUG_RETURN(free_share(share));
-	}
 
 	if (thd) {
 		// thd is defined.  In this case, a user executes a DDL.
@@ -2619,14 +2607,8 @@ void ha_scaledb::prepareIndexQueryManager(unsigned int indexNum, const uchar* ke
 
 	if (!sdbQueryMgrId_) {
 		KEY* pKey = table->key_info + indexNum;
-
-		char* designatorName = NULL;
-		if (virtualTableFlag_)
-			designatorName = SDBUtilGetStrInLower(table->s->table_name.str + SDB_VIRTUAL_VIEW_PREFIX_BYTES);
-		else {
-			char* pTableFsName = SDBGetTableFileSystemNameByTableNumber(sdbDbId_, sdbTableNumber_);
-			designatorName = SDBUtilFindDesignatorName(pTableFsName, pKey->name, indexNum);
-		}
+		char* pTableFsName = SDBGetTableFileSystemNameByTableNumber(sdbDbId_, sdbTableNumber_);
+		char* designatorName = SDBUtilFindDesignatorName(pTableFsName, pKey->name, indexNum);
 
 		sdbQueryMgrId_ = pSdbMysqlTxn_->findQueryManagerId(designatorName, (void*) this, (char*) key, key_len, virtualTableFlag_);
 		if ( !sdbQueryMgrId_ ) {  // need to get a new one and save sdbQueryMgrId_ into MysqlTxn object
@@ -3432,9 +3414,14 @@ int ha_scaledb::info(uint flag)
 			DBUG_RETURN(0);
 	}
 
-	if ( sdbTableNumber_ == 0 ) {
-		sdbTableNumber_ = SDBGetTableNumberByName(sdbUserId_, sdbDbId_, table->s->table_name.str);
+	char* tabName = table->s->table_name.str;
+	if ( sdbTableNumber_ == 0 ) {	// make it conditional to avoid unnecessary string comparison
+		// in this case, info method is called before external_lock
+		if ( SDBTableIsVirtual(tabName) )
+			DBUG_RETURN(0);
 	}
+	else 
+		sdbTableNumber_ = SDBGetTableNumberByName(sdbUserId_, sdbDbId_, tabName);
 
 	if (flag & HA_STATUS_ERRKEY) {
 		errkey = get_last_index_error_key();
@@ -3500,7 +3487,7 @@ int ha_scaledb::info(uint flag)
 		unpack_filename(path,path);
 		struct stat	statinfo;
 		if (!stat(path, &statinfo))
-			stats.create_time = (ulong) statinfo.st_ctime;
+			stats.create_time = statinfo.st_ctime;
 	}
 
 	if ( (flag & HA_STATUS_AUTO) && table->found_next_number_field && pSdbMysqlTxn_) {
@@ -3953,6 +3940,7 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 int ha_scaledb::has_overflow_fields(THD* thd, TABLE *table_arg){
 	Field*	pField;
 	enum_field_types fieldType;
+	unsigned char sdbFieldType;
 	unsigned short sdbFieldSize;
 	unsigned int sdbMaxDataLength; 
 	unsigned int maxColumnLengthInBaseFile = SDBGetMaxColumnLengthInBaseFile();
@@ -4388,19 +4376,8 @@ int ha_scaledb::add_indexes_to_table(THD* thd, TABLE *table_arg, char* tblName, 
 			}
 			keyFields[numOfKeyFields] = NULL;  // must end with NULL to signal the end of pointer list
 
-			MysqlForeignKey* fKeyInfo = (MysqlForeignKey*)SDBArrayGetPtr(fkInfoArray, i+1);
-
-			char** parentKeyColumns = fKeyInfo ? fKeyInfo->getParentColumnNames() : NULL;
-			char* parent = SDBGetParentIndexByForeignFields(sdbDbId_, tblName, keyFields, parentKeyColumns);
-
-			// a foreign key and we can't find the parent designator
-			if (fKeyInfo && !parent){
-				errorNum = HA_ERR_CANNOT_ADD_FOREIGN;
-				return errorNum;
-			}
-
 			unsigned short retValue = SDBCreateIndex(sdbUserId_, sdbDbId_, sdbTableNumber_, designatorName, 
-				keyFields, keySizes, true, false, parent, ddlFlag, 0, isHashIndex);
+				keyFields, keySizes, true, false, NULL, ddlFlag, 0, isHashIndex);
 			// Need to free keyFields, but not the field names used by MySQL.
 			RELEASE_MEMORY( keyFields );
 			RELEASE_MEMORY( keySizes );
@@ -5264,16 +5241,11 @@ double ha_scaledb::scan_time() {
 	}
 #endif
 
-	unsigned long long seekLength = 1000;
-	if (virtualTableFlag_)		// return a large number for virtual table scan because it should use index
-		return (double) seekLength;
-
-	// TODO: this should be stored in file handle; auto updated during dictionary change.
-	// Compute disk seek length for normal tables.
-	seekLength = SDBGetTableStats(sdbDbId_, sdbTableNumber_, SDB_STATS_INFO_SEEK_LENGTH);
+	// TODO: this should be stored in file handle; auto updated during dictionary change..
+	int64 seekLength = SDBGetTableStats(sdbDbId_, sdbTableNumber_, SDB_STATS_INFO_SEEK_LENGTH);
 
 	if (seekLength == 0)
-		seekLength = 1;
+		return 1;
 
 	return (double) seekLength;
 }
