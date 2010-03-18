@@ -402,6 +402,8 @@ unsigned short SDBDefineQuery(unsigned short queryMgrId, unsigned short dbId, un
 							  char* key);
 unsigned short SDBDefineQueryPrefix(unsigned short queryMgrId, unsigned short dbId, unsigned short indexId, char *fieldName, 
 									char* key, bool useStarForPrefixEnd, int keyPrefixSize, bool usePoundSign);
+unsigned short SDBDefineRangeQuery(unsigned short queryMgrId, unsigned short dbId, unsigned short indexId, char *fieldName, 
+								bool includeStartValue, char* startKey, bool includeEndValue, char* endKey);
 unsigned short SDBQueryCursorNextSequential(unsigned int userId, unsigned short queryMgrId);
 unsigned short SDBQueryCursorNext(unsigned int userId, unsigned short queryMgrId);
 bool SDBQueryCursorFieldIsNull(unsigned short queryMgrId, unsigned short fieldId);

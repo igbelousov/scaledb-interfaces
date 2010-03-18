@@ -87,7 +87,6 @@ private:
 	unsigned int sdbUserId_;			// user id assigned by ScaleDB storage engine
 	unsigned short sdbQueryMgrId_;	// current query Manager ID
 	MysqlTxn* pSdbMysqlTxn_;		// pointer to MysqlTxn object
-	bool virtualTableFlag_;			// flag to show if it is a virtual table
 	//	String fieldBuf;			// the buffer to hold a field of a response record
 	char* sdbDesignatorName_;		// current designator name
 	unsigned short sdbDesignatorId_;	// current designator id
@@ -99,6 +98,9 @@ private:
 	int sqlCommand_;		// SQL command defined in ::external_lock.  Use this variable to avoid repetitively calling
 							// thd_sql_command() function.  Example: DATA LOAD command
 	unsigned short sdbCommandType_;	// specifies command to be passed to ScaleDB engine
+	bool virtualTableFlag_;			// flag to show if it is a virtual table
+	bool bRangeQuery_;				// flag is set to true if range condition is specified.  
+									// This flag is set in ::records_in_range method
 
 	unsigned short getOffsetByDesignator(unsigned short designator);
 	// This method packs a MySQL row into ScaleDB engine row buffer 

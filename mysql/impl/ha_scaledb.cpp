@@ -859,12 +859,13 @@ ha_scaledb::ha_scaledb(handlerton *hton, TABLE_SHARE *table_arg)
 	sdbQueryMgrId_ = 0;
 	//pQm_ = NULL;
 	pSdbMysqlTxn_ = NULL;
-	virtualTableFlag_ = false;
 	beginningOfScan_ = false;
 	deleteAllRows_ = false;
 	sdbRowIdInScan_ = 0;
 	extraChecks_ = 0;
 	sdbCommandType_ = 0;
+	virtualTableFlag_ = false;
+	bRangeQuery_ = false;
 }
 
 
@@ -1018,6 +1019,7 @@ int ha_scaledb::external_lock(
 #endif
 
 	int retValue = 0;
+	bRangeQuery_ = false;	// this flag is set to true between the pair of external_lock calls.
 	placeSdbMysqlTxnInfo( thd );
 
 	this->sqlCommand_ = thd_sql_command(thd);
@@ -2676,8 +2678,8 @@ void ha_scaledb::prepareIndexQueryManager(unsigned int indexNum, const uchar* ke
 int ha_scaledb::prepareIndexKeyQuery(const uchar* key, uint key_len, enum ha_rkey_function find_flag) {
 
 	// now we prepare query by assigning key values to the corresponding key fields
-	char* keyOffset = (char*) key;
-	char* pCurrentKeyValue;
+	char* keyOffset = (char*) key;	// points to key value (may include additional bytes for NULL or variable string.
+	char* pCurrentKeyValue;			// points to key value only (already skip the additional bytes for NULL or variale string.
 	KEY_PART_INFO* pKeyPart;
 	enum_field_types fieldType;
 	Field* pField;
@@ -2708,6 +2710,14 @@ int ha_scaledb::prepareIndexKeyQuery(const uchar* key, uint key_len, enum ha_rke
 			SDBQueryCursorDefineQueryAllValues(sdbQueryMgrId_, sdbDbId_, sdbDesignatorId_, false);
 			return SDBPrepareQuery(sdbUserId_, sdbQueryMgrId_, 0,((THD*)ha_thd())->query_id, releaseLocksAfterRead_);	
 		}
+	}
+
+	// keep track of the end key
+	char* pEndKeyOffset = NULL;
+	char* pCurrentEndKeyValue;
+	bRangeQuery_ = false;	// TODO: remove this line after Moshe implements QueryManager::defineRangeQuery
+	if (bRangeQuery_) {
+		pEndKeyOffset = (char*) end_range->key;
 	}
 
 	for ( int i=0; i < numOfKeyFields; ++i ) {
@@ -2808,8 +2818,11 @@ int ha_scaledb::prepareIndexKeyQuery(const uchar* key, uint key_len, enum ha_rke
 
 		if ( keyValueIsNull )	// user specifies "column is NULL" in SQL statement
 			pCurrentKeyValue = NULL;
-		else
+		else {
 			pCurrentKeyValue = keyOffset+mysqlVarLengthBytes;
+			if (bRangeQuery_)
+				pCurrentEndKeyValue = pEndKeyOffset+mysqlVarLengthBytes;
+		}
 
 		pFieldName = (char*) pField->field_name;
 		if ( virtualTableFlag_ )
@@ -2820,7 +2833,19 @@ int ha_scaledb::prepareIndexKeyQuery(const uchar* key, uint key_len, enum ha_rke
 			retValue =SDBDefineQueryPrefix(sdbQueryMgrId_, sdbDbId_, sdbDesignatorId_, pFieldName, pCurrentKeyValue, false, realVarLength, false);
 		}
 		else{
-			retValue = SDBDefineQuery(sdbQueryMgrId_, sdbDbId_, sdbDesignatorId_, pFieldName, pCurrentKeyValue);
+			if (bRangeQuery_) {	// Example: SELECT * FROM t1 WHERE c1 BETWEEN 5 AND 8;
+				bool bIncludeStartValue = false;
+				if (find_flag == HA_READ_KEY_OR_NEXT)
+					bIncludeStartValue = true;		// Example: SELECT * FROM t1 WHERE c1>=5 AND c1<8;
+				bool bIncludeEndValue = true;
+				if (end_range->flag == HA_READ_BEFORE_KEY)
+					bIncludeEndValue = false;		// Example: SELECT * FROM t1 WHERE c1>=5 AND c1<8;
+
+				retValue = SDBDefineRangeQuery(sdbQueryMgrId_, sdbDbId_, sdbDesignatorId_, pFieldName, 
+							bIncludeStartValue, pCurrentKeyValue, bIncludeEndValue, pCurrentEndKeyValue);
+			}
+			else
+				retValue = SDBDefineQuery(sdbQueryMgrId_, sdbDbId_, sdbDesignatorId_, pFieldName, pCurrentKeyValue);
 		}
 
 		//unsigned int endRangeLen = end_range->length;	// TBD: Bug 1103 enable for HA_READ_KEY_OR_NEXT only
@@ -2858,6 +2883,9 @@ int ha_scaledb::prepareIndexKeyQuery(const uchar* key, uint key_len, enum ha_rke
 		//        }  // if ( !virtualTableFlag_ )
 
 		keyOffset = keyOffset + columnLen; 
+		if (bRangeQuery_)
+			pEndKeyOffset = pEndKeyOffset + columnLen; 
+
 		keyLengthLeft = keyLengthLeft - columnLen;
 		if ( keyLengthLeft == 0 ) 
 			break;
@@ -2869,7 +2897,6 @@ int ha_scaledb::prepareIndexKeyQuery(const uchar* key, uint key_len, enum ha_rke
 	// we execute the query
 	retValue = SDBPrepareQuery(sdbUserId_, sdbQueryMgrId_, 0,((THD*)ha_thd())->query_id, releaseLocksAfterRead_);	
 
-	//RELEASE_MEMORY( pkeyValuePtr );
 	return retValue;
 }
 
@@ -5393,6 +5420,9 @@ ha_rows ha_scaledb::records_in_range(uint inx, key_range* min_key, key_range* ma
 		// And info method is usually called before records_in_range. 
 		DBUG_RETURN( stats.records );
 	}
+
+	if (min_key && max_key) 
+		bRangeQuery_ = true;	// set the flag when the range conditions are fully specified.
 
 	// TODO: The following code is disabled until we have a new design in estimating record statistics using histogram
 #ifdef ENABLE_RANGE_COUNT
