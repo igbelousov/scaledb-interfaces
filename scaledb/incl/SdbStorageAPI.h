@@ -373,7 +373,7 @@ void SDBCloseQueryManager(unsigned int queryManagerId);
 void SDBFreeQueryManagerBuffers(unsigned int queryManagerId);
 
 unsigned short SDBPrepareSequentialScan(unsigned int userId, unsigned short queryMgrId, unsigned short dbId, char *tableName, 
-										unsigned long long queryId);
+										unsigned long long queryId, bool releaseLocksAfterRead);
 
 //unsigned short SDBNextSequential(unsigned short queryMgrId);
 

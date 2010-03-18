@@ -864,6 +864,7 @@ ha_scaledb::ha_scaledb(handlerton *hton, TABLE_SHARE *table_arg)
 	sdbRowIdInScan_ = 0;
 	extraChecks_ = 0;
 	sdbCommandType_ = 0;
+	releaseLocksAfterRead_ = false;
 	virtualTableFlag_ = false;
 	bRangeQuery_ = false;
 }
@@ -2579,7 +2580,8 @@ void ha_scaledb::prepareIndexOrSequentialQueryManager()
 		SDBResetQuery( sdbQueryMgrId_ );  // remove the previously defined query
 		SDBSetActiveQueryManager(sdbQueryMgrId_); // cache the object for performance
 
-		retValue = SDBPrepareSequentialScan(sdbUserId_, sdbQueryMgrId_, sdbDbId_, table->s->table_name.str, ((THD*)ha_thd())->query_id);
+		retValue = SDBPrepareSequentialScan(sdbUserId_, sdbQueryMgrId_, sdbDbId_, table->s->table_name.str, 
+					((THD*)ha_thd())->query_id, releaseLocksAfterRead_);
 	}
 }
 
@@ -2945,7 +2947,7 @@ int ha_scaledb::index_read(uchar* buf, const uchar* key, uint key_len, enum ha_r
 	}
 
 #ifdef SDB_DEBUG_LIGHT
-	if (mysqlInterfaceDebugLevel_) {
+	if (mysqlInterfaceDebugLevel_ > 1) {
 		SDBDebugStart();			// synchronize threads printout	
 
 		if (!retValue){
@@ -3305,7 +3307,8 @@ int ha_scaledb::rnd_next(uchar* buf) {
 			sdbDesignatorId_ = 0;	// no index is used.
 
 			SDBResetQuery( sdbQueryMgrId_ );  // remove the previously defined query
-			retValue = (int) SDBPrepareSequentialScan(sdbUserId_, sdbQueryMgrId_, sdbDbId_, table->s->table_name.str, ((THD*)ha_thd())->query_id);
+			retValue = (int) SDBPrepareSequentialScan(sdbUserId_, sdbQueryMgrId_, sdbDbId_, table->s->table_name.str, 
+						((THD*)ha_thd())->query_id, releaseLocksAfterRead_);
 
 			// We fetch the result record and save it into buf
 			if ( retValue == 0 ) {
@@ -3411,7 +3414,8 @@ int ha_scaledb::rnd_pos(uchar * buf, uchar *pos)
 			active_index = old_active_index;
 		}
 		SDBResetQuery(sdbQueryMgrId_);  // remove the previously defined query
-		retValue = (int) SDBPrepareSequentialScan(sdbUserId_, sdbQueryMgrId_, sdbDbId_, table->s->table_name.str, ((THD*)ha_thd())->query_id);
+		retValue = (int) SDBPrepareSequentialScan(sdbUserId_, sdbQueryMgrId_, sdbDbId_, table->s->table_name.str, 
+					((THD*)ha_thd())->query_id, releaseLocksAfterRead_);
 		beginningOfScan_ = false;
         pSdbMysqlTxn_->setScanType(sdbQueryMgrId_, true);
 	}
