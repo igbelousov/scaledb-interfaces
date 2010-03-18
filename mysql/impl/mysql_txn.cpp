@@ -61,7 +61,7 @@ MysqlTxn::MysqlTxn() {  //constructor
 	}
 
     // use a vector to save all lock table names
-	pLockTablesArray_ = SDBArrayInit(IDENTIFIER_INTERFACE + ERRORNUM_INTERFACE_MYSQL_TXN + 1, 10, sizeof (void *));
+	pLockTablesArray_ = SDBArrayInit( 10, 10, sizeof (void *));
 }
 
 
