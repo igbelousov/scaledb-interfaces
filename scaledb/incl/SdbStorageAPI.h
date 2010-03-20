@@ -208,8 +208,8 @@ unsigned short SDBCloseTable(unsigned short userId, unsigned short dbId, char *p
 
 unsigned short SDBGetTableNumberByName(unsigned short userId, unsigned short dbId, const char *tableName);
 unsigned short SDBGetTableNumberByFileSystemName(unsigned short userId, unsigned short dbId, const char *tableName);
-char* SDBGetTableNameByNumber(unsigned short userId, unsigned short dbId, unsigned short tableNumber);
-char* SDBGetTableCaseSensitiveNameByNumber(unsigned short userId, unsigned short dbId, unsigned short tableNumber);
+char * SDBGetTableNameByNumber(unsigned short userId, unsigned short dbId, unsigned short tableNumber);
+char * SDBGetTableCaseSensitiveNameByNumber(unsigned short userId, unsigned short dbId, unsigned short tableNumber);
 
 bool SDBTableIsVirtual(const char *tableName);
 
@@ -220,9 +220,6 @@ bool SDBIsTableWithIndexes(unsigned short dbId, unsigned short tableId);
 
 char *SDBGetTableFileSystemNameByTableNumber(unsigned short dbId, unsigned short tableId);
 unsigned char SDBGetTableLockLevel(unsigned short userId, unsigned short dbId, unsigned short tableId);
-
-// the fast version to avoid resolving table name again
-unsigned long long SDBGetTableStats(unsigned short dbId, unsigned short tableId, SDB_TABLE_STAT_INFO stat); 
 unsigned long long SDBGetTableStats(unsigned short dbId, char* tableName, SDB_TABLE_STAT_INFO stat); 
 
 /*
@@ -373,7 +370,7 @@ void SDBCloseQueryManager(unsigned int queryManagerId);
 void SDBFreeQueryManagerBuffers(unsigned int queryManagerId);
 
 unsigned short SDBPrepareSequentialScan(unsigned int userId, unsigned short queryMgrId, unsigned short dbId, char *tableName, 
-										unsigned long long queryId, bool releaseLocksAfterRead);
+										unsigned long long queryId);
 
 //unsigned short SDBNextSequential(unsigned short queryMgrId);
 
@@ -402,8 +399,6 @@ unsigned short SDBDefineQuery(unsigned short queryMgrId, unsigned short dbId, un
 							  char* key);
 unsigned short SDBDefineQueryPrefix(unsigned short queryMgrId, unsigned short dbId, unsigned short indexId, char *fieldName, 
 									char* key, bool useStarForPrefixEnd, int keyPrefixSize, bool usePoundSign);
-unsigned short SDBDefineRangeQuery(unsigned short queryMgrId, unsigned short dbId, unsigned short indexId, char *fieldName, 
-								bool includeStartValue, char* startKey, bool includeEndValue, char* endKey);
 unsigned short SDBQueryCursorNextSequential(unsigned int userId, unsigned short queryMgrId);
 unsigned short SDBQueryCursorNext(unsigned int userId, unsigned short queryMgrId);
 bool SDBQueryCursorFieldIsNull(unsigned short queryMgrId, unsigned short fieldId);
@@ -501,7 +496,7 @@ void SDBSetThreadName(char *szThreadName, unsigned int threadId=-1);
 //////////////////////////////////////////////////////////////////////////////
 */
 
-SdbDynamicArray *SDBArrayInit(unsigned int initialElements, unsigned int addedElements, unsigned char elementSize);
+SdbDynamicArray *SDBArrayInit(unsigned int id, unsigned int initialElements, short elementSize, bool adjustable = true);
 void SDBArrayFree(SdbDynamicArray *ptr);
 void SDBArrayFreeWithMembers(SdbDynamicArray *ptr);
 void SDBArrayPutPtr(SdbDynamicArray *array, unsigned int pos, void *ptr);
