@@ -31,7 +31,6 @@
 #ifdef SDB_MYSQL
 
 #include "../incl/mysql_foreign_key.h"
-#include "../../../cengine/engine_util/incl/debug_class.h"
 
 bool isSeparator(char c) {
     char separatorArray[] = METAINFO_TOKEN_SEPARATORS;

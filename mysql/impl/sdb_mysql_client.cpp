@@ -16,16 +16,12 @@
 
 #include "../incl/sdb_mysql_client.h"
 #include "../../scaledb/incl/SdbStorageAPI.h"
-#include "../../../cengine/engine_util/incl/debug_class.h"
 
 SdbMysqlClient::SdbMysqlClient(char* host, char* user, char* password, char* dbName, char* socket, 
 							   unsigned int port, unsigned char debugLevel) : 
 	mysql_(0), host_(host), user_(user), password_(password), dbName_(dbName), socket_(socket), 
 							port_(port), connected_(false), debugLevel_(debugLevel) {
 
-#ifdef __DEBUG_CLASS_CALLS
-	DebugClass::countClass("SdbMysqlClient");
-#endif
 	mysql_ = mysql_init(NULL);
 	mysql_->reconnect= 1;
 }

@@ -36,7 +36,6 @@
 
 #include "../incl/sdb_mysql_client.h" // this should be included before ha_scaledb.h
 #include "../incl/ha_scaledb.h"
-#include "../../../cengine/engine_util/incl/debug_class.h"
 
 #include <sys/stat.h>
 
@@ -845,10 +844,6 @@ void ha_scaledb::print_header_thread_info(const char *msg) {
 ha_scaledb::ha_scaledb(handlerton *hton, TABLE_SHARE *table_arg)
 :handler(hton, table_arg) {
 
-#ifdef __DEBUG_CLASS_CALLS
-	DebugClass::countClass("ha_scaledb");
-#endif
-
 #ifdef SDB_DEBUG_LIGHT
 	if (ha_scaledb::mysqlInterfaceDebugLevel_) {
 		print_header_thread_info("MySQL Interface: executing ha_scaledb::ha_scaledb(...) ");
@@ -1092,9 +1087,7 @@ int ha_scaledb::external_lock(
 
 	if (lock_type != F_UNLCK) {
 
-#ifdef SDB_DEBUG
 		SDBLogSqlStmt(sdbUserId_, thd->query(), thd->query_id);	// inform engine to log user query for DML
-#endif
 		bool all_tx = false;
 
 		// lock the table if the user has an explicit lock tables statement
@@ -1818,13 +1811,14 @@ int ha_scaledb::write_row(unsigned char* buf)
 	}
 
 #ifdef __DEBUG_CLASS_CALLS  // can enable it to check memory leak
-	static int localCounter = 0;
-	localCounter++;
-	if ( localCounter % 10000 == 0 ) { // the number can be set to meet the need
+	pSdbEngine->manager(sdbUserId_)->incrCounter();
+	if ( pSdbEngine->manager(sdbUserId_)->getCounter() % 100000 == 0 ) { // the number can be set to meet the need
 		SDBDebugPrintHeader("After inserting ");
-		SDBDebugPrintInt(localCounter );
+		SDBDebugPrintInt((int) pSdbEngine->manager(sdbUserId_)->getCounter() );
 		SDBDebugPrintString(" records: \n");
 		DebugClass::printClassCalls();
+		SDBShowSdbMemory();
+		SDBPrintMemoryAllocation();
 	}
 #endif
 
@@ -3738,9 +3732,7 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 	unsigned int errorNum = 0;
 	THD* thd = ha_thd();
 	placeSdbMysqlTxnInfo( thd );	
-#ifdef SDB_DEBUG
 	SDBLogSqlStmt(sdbUserId_, thd->query(), thd->query_id);	// inform engine to log user query for DDL
-#endif
 
 	unsigned short ddlFlag = 0;
 	// use this flag to decide if we want to create entries on metatables.
@@ -4533,9 +4525,7 @@ int ha_scaledb::delete_table(const char* name)
 	bool bIsAlterTableStmt = false;
 	THD* thd = ha_thd();
 	placeSdbMysqlTxnInfo( thd );	
-#ifdef SDB_DEBUG
 	SDBLogSqlStmt(sdbUserId_, thd->query(), thd->query_id);	// inform engine to log user query for DDL
-#endif
 
 	unsigned int sqlCommand = thd_sql_command(thd);
 	if (sqlCommand==SQLCOM_ALTER_TABLE || sqlCommand==SQLCOM_CREATE_INDEX || sqlCommand==SQLCOM_DROP_INDEX) 
@@ -4749,9 +4739,7 @@ int ha_scaledb::rename_table(const char* fromTable, const char* toTable) {
 	bool bIsAlterTableStmt = false;
 	THD* thd = ha_thd();
 	placeSdbMysqlTxnInfo( thd );	
-#ifdef SDB_DEBUG
 	SDBLogSqlStmt(sdbUserId_, thd->query(), thd->query_id);	// inform engine to log user query for DDL
-#endif
 
 	unsigned int sqlCommand = thd_sql_command(thd);
 	if (sqlCommand==SQLCOM_ALTER_TABLE || sqlCommand==SQLCOM_CREATE_INDEX || sqlCommand==SQLCOM_DROP_INDEX) 
