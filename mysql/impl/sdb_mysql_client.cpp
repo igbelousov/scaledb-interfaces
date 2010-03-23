@@ -16,7 +16,9 @@
 
 #include "../incl/sdb_mysql_client.h"
 #include "../../scaledb/incl/SdbStorageAPI.h"
+#ifdef __DEBUG_CLASS_CALLS
 #include "../../../cengine/engine_util/incl/debug_class.h"
+#endif
 
 SdbMysqlClient::SdbMysqlClient(char* host, char* user, char* password, char* dbName, char* socket, 
 							   unsigned int port, unsigned char debugLevel) : 

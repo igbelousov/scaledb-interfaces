@@ -36,7 +36,9 @@
 
 #include "../incl/sdb_mysql_client.h" // this should be included before ha_scaledb.h
 #include "../incl/ha_scaledb.h"
+#ifdef  __DEBUG_CLASS_CALLS
 #include "../../../cengine/engine_util/incl/debug_class.h"
+#endif
 
 #include <sys/stat.h>
 
