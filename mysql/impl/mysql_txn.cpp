@@ -34,6 +34,7 @@
 
 #include "../incl/mysql_txn.h"
 #include <string.h>
+#include "../../../cengine/engine_util/incl/debug_class.h"
 
 MysqlTxn::MysqlTxn() {  //constructor
 #ifdef __DEBUG_CLASS_CALLS
@@ -61,7 +62,7 @@ MysqlTxn::MysqlTxn() {  //constructor
 	}
 
     // use a vector to save all lock table names
-	pLockTablesArray_ = SDBArrayInit(IDENTIFIER_INTERFACE + ERRORNUM_INTERFACE_MYSQL_TXN + 1, 10, sizeof (void *));
+	pLockTablesArray_ = SDBArrayInit( 10, 10, sizeof (void *));
 }
 
 

@@ -36,6 +36,7 @@
 
 #include "../incl/sdb_mysql_client.h" // this should be included before ha_scaledb.h
 #include "../incl/ha_scaledb.h"
+#include "../../../cengine/engine_util/incl/debug_class.h"
 
 #include <sys/stat.h>
 
@@ -589,6 +590,8 @@ static int scaledb_commit(
 						  bool	all)	/* true if it is a real commit, false if it is an end of statement */
 {
 	DBUG_ENTER("scaledb_commit");
+	MysqlTxn* userTxn = (MysqlTxn *) *thd_ha_data(thd, hton);
+	unsigned int userId = userTxn->getScaleDbUserId();
 
 #ifdef SDB_DEBUG_LIGHT
 	if (ha_scaledb::mysqlInterfaceDebugLevel_) {
@@ -600,14 +603,15 @@ static int scaledb_commit(
 		SDBDebugPrintString(", all=");
 		SDBDebugPrintString(all ? "true" : "false");
 		SDBDebugPrintString(")");
+		SDBDebugPrintString("; ScaleDbUserId:");
+		SDBDebugPrintInt( userId );
+		SDBDebugPrintString("; Query:");
+		SDBDebugPrintString(thd->query());
 		SDBDebugFlush();
 		SDBDebugEnd();
 	}
 #endif
 
-	MysqlTxn* userTxn = (MysqlTxn *) *thd_ha_data(thd, hton);
-
-	unsigned int userId = userTxn->getScaleDbUserId();
 	unsigned int sqlCommand = thd_sql_command(thd);
 	if (sqlCommand == SQLCOM_LOCK_TABLES)
 		DBUG_RETURN(0);		// do nothing if it is a LOCK TABLES statement. 
@@ -666,6 +670,12 @@ static int scaledb_rollback(
 							bool	all )
 {
 	DBUG_ENTER("scaledb_rollback");
+
+		//SDBDebugStart();
+		//SDBDebugPrintHeader("MySQL called rollback for user: ");
+		//SDBDebugPrintInt( userTxn->getScaleDbUserId() );
+		//SDBDebugEnd();
+
 
 #ifdef SDB_DEBUG_LIGHT
 	if (ha_scaledb::mysqlInterfaceDebugLevel_) {
@@ -835,6 +845,10 @@ void ha_scaledb::print_header_thread_info(const char *msg) {
 ha_scaledb::ha_scaledb(handlerton *hton, TABLE_SHARE *table_arg)
 :handler(hton, table_arg) {
 
+#ifdef __DEBUG_CLASS_CALLS
+	DebugClass::countClass("ha_scaledb");
+#endif
+
 #ifdef SDB_DEBUG_LIGHT
 	if (ha_scaledb::mysqlInterfaceDebugLevel_) {
 		print_header_thread_info("MySQL Interface: executing ha_scaledb::ha_scaledb(...) ");
@@ -850,12 +864,14 @@ ha_scaledb::ha_scaledb(handlerton *hton, TABLE_SHARE *table_arg)
 	sdbQueryMgrId_ = 0;
 	//pQm_ = NULL;
 	pSdbMysqlTxn_ = NULL;
-	virtualTableFlag_ = false;
 	beginningOfScan_ = false;
 	deleteAllRows_ = false;
 	sdbRowIdInScan_ = 0;
 	extraChecks_ = 0;
 	sdbCommandType_ = 0;
+	releaseLocksAfterRead_ = false;
+	virtualTableFlag_ = false;
+	bRangeQuery_ = false;
 }
 
 
@@ -1009,6 +1025,7 @@ int ha_scaledb::external_lock(
 #endif
 
 	int retValue = 0;
+	bRangeQuery_ = false;	// this flag is set to true between the pair of external_lock calls.
 	placeSdbMysqlTxnInfo( thd );
 
 	this->sqlCommand_ = thd_sql_command(thd);
@@ -1066,7 +1083,8 @@ int ha_scaledb::external_lock(
 		// in a transaction.
 		if ( retValue && (pSdbMysqlTxn_->numberOfLockTables_ == 0) && (pSdbMysqlTxn_->getActiveTxn() == false) ) {
 			pSdbMysqlTxn_->freeAllQueryManagerIds(mysqlInterfaceDebugLevel_);
-			scaledb_commit(ht, thd, true);
+			SDBCommit( sdbUserId_ );	// call engine to commit directly
+			//scaledb_commit(ht, thd, true);
 		}
 
 		DBUG_RETURN(0);
@@ -1074,7 +1092,9 @@ int ha_scaledb::external_lock(
 
 	if (lock_type != F_UNLCK) {
 
+#ifdef SDB_DEBUG
 		SDBLogSqlStmt(sdbUserId_, thd->query(), thd->query_id);	// inform engine to log user query for DML
+#endif
 		bool all_tx = false;
 
 		// lock the table if the user has an explicit lock tables statement
@@ -1120,11 +1140,11 @@ int ha_scaledb::external_lock(
 				}
 			}
 
-			// Because ::close method first impose exclusive table level lock and then remove all metadata information from memory,
+			// Because the close method first imposes exclusive table level lock and then removes all metadata information from memory,
 			// we need to impose a table level shared lock in order to protect the memory metadata to be used in DML. 
 			// For TRUNCATE TABLE, secondary node should not impose lock as primary node already imposes an exclusive table level lock.
 			// For all other cases, we should impose a table level shared lock.
-			if ( (sqlCommand_ != SQLCOM_TRUNCATE) || (strstr(thd->query(), SCALEDB_HINT_PREFIX) == NULL) ) {
+			if ( ((sqlCommand_ != SQLCOM_TRUNCATE) || (strstr(thd->query(), SCALEDB_HINT_PREFIX) == NULL)) && (!virtualTableFlag_) ) {
 				bool bGetLock = SDBLockTable(sdbUserId_, sdbDbId_, sdbTableNumber_, DEFAULT_REFERENCE_LOCK_LEVEL);
 				if (bGetLock == false)	// failed to lock the table
 					DBUG_RETURN(HA_ERR_LOCK_WAIT_TIMEOUT);
@@ -1168,7 +1188,9 @@ int ha_scaledb::external_lock(
 				// We should commit for SELECT statement in order for ScaleDB engine to release the right locks.
 				// if ( pSdbMysqlTxn_->getActiveTxn() )	// 2008-10-18: this condition is not needed
 				if ( sqlCommand_ == SQLCOM_SELECT )
-					scaledb_commit(ht, thd, false);
+					SDBCommit( sdbUserId_ );	// call engine to commit directly
+					//scaledb_commit(ht, thd, false);
+
 			}
 
 			//if (pSdbMysqlTxn_->stmt != NULL) {
@@ -1379,6 +1401,14 @@ int ha_scaledb::open(const char *name, int mode, uint test_if_locked) {
 		DBUG_RETURN(convertToMysqlErrorCode(retCode));
 
 
+	char* pTblFsName = &tblFsName[0];	// points to the beginning of tblFsName
+	virtualTableFlag_ = SDBTableIsVirtual(pTblFsName);
+	if (virtualTableFlag_) {
+		pTblFsName = pTblFsName + SDB_VIRTUAL_VIEW_PREFIX_BYTES;
+		char* pUnderscores = strstr(pTblFsName, "___");
+		*pUnderscores = 0;	//  make pTblFsName stop at the beginning of "___"
+	}
+
 	// Because MySQL calls this method outside of a normal user transaction,
 	// hence we use a different user id to open database and table in order to avoid commit issue.
 	unsigned int userIdforOpen = SDBGetNewUserId();
@@ -1386,7 +1416,7 @@ int ha_scaledb::open(const char *name, int mode, uint test_if_locked) {
 	// Second, we open the specified table for either single node or primary node of a cluster.
 	// Also need to open non-temp table files on secondary nodes for later processing.
 
-	sdbTableNumber_ = SDBGetTableNumberByFileSystemName(sdbUserId_, sdbDbId_, tblFsName);
+	sdbTableNumber_ = SDBGetTableNumberByFileSystemName(sdbUserId_, sdbDbId_, pTblFsName);
 	if (sdbTableNumber_ == 0) {
 
 		if (SDBNodeIsCluster() == true)	{	// if this is a cluster machine
@@ -1395,11 +1425,11 @@ int ha_scaledb::open(const char *name, int mode, uint test_if_locked) {
 			// If we open a temp file for ALTER TABLE, then do not lockMetaInfo as it is inside a user transaction.
 			if ( bIsPrimaryNode ) {
 				if (bIsAlterTableStmt && openTempFile)	// inside ALTER TABLE
-					sdbTableNumber_ = SDBOpenTable(sdbUserId_, sdbDbId_, tblFsName);
+					sdbTableNumber_ = SDBOpenTable(sdbUserId_, sdbDbId_, pTblFsName);
 				else {	// outside of a user transaction
 					retCode = SDBLockMetaInfo(userIdforOpen, sdbDbId_);
 					if (retCode == SUCCESS)
-						sdbTableNumber_ = SDBOpenTable(userIdforOpen, sdbDbId_, tblFsName);	
+						sdbTableNumber_ = SDBOpenTable(userIdforOpen, sdbDbId_, pTblFsName);	
 				}
 			}
 
@@ -1407,15 +1437,15 @@ int ha_scaledb::open(const char *name, int mode, uint test_if_locked) {
 			// Secondary node should NOT open the new table which is inside of external_lock pair.
 			if ( (sqlCommand==SQLCOM_CREATE_TABLE) && (bIsPrimaryNode==false)
 				&& (pSdbMysqlTxn_->getDdlFlag() == 0) )		// this condition says the to-be-opened table is outside external_lock pair
-				sdbTableNumber_ = SDBOpenTable(userIdforOpen, sdbDbId_, tblFsName);
+				sdbTableNumber_ = SDBOpenTable(userIdforOpen, sdbDbId_, pTblFsName);
 		}
 		else {	// on a single node solution
 			if (bIsAlterTableStmt && openTempFile)	// this is inside ALTER TABLE
-				sdbTableNumber_ = SDBOpenTable(sdbUserId_, sdbDbId_, tblFsName);
+				sdbTableNumber_ = SDBOpenTable(sdbUserId_, sdbDbId_, pTblFsName);
 			else {	// outside of a user transaction
 				retCode = SDBLockMetaInfo(userIdforOpen, sdbDbId_);
 				if (retCode == SUCCESS)
-					sdbTableNumber_ = SDBOpenTable(userIdforOpen, sdbDbId_, tblFsName);	
+					sdbTableNumber_ = SDBOpenTable(userIdforOpen, sdbDbId_, pTblFsName);	
 			}
 		}
 	}
@@ -1463,6 +1493,10 @@ int ha_scaledb::close(void) {
 	bool needToRemoveFromScaledbCache = false;
 	bool needToCommit = false;
 	unsigned short ddlFlag = 0;
+	if (virtualTableFlag_) {	// do nothing for virtual table
+		sdbTableNumber_ = 0;
+		DBUG_RETURN(free_share(share));
+	}
 
 	if (thd) {
 		// thd is defined.  In this case, a user executes a DDL.
@@ -1643,12 +1677,12 @@ unsigned short ha_scaledb::placeMysqlRowInEngineBuffer(unsigned char* rowBuf1, u
 		fieldType = pField->type();
 
 		switch (fieldType) {
-
-			case MYSQL_TYPE_SHORT:
-			case MYSQL_TYPE_INT24:
+			// the case statement should be listed based on the decending use frequency
 			case MYSQL_TYPE_LONG:
-			case MYSQL_TYPE_LONGLONG:
+			case MYSQL_TYPE_SHORT:
 			case MYSQL_TYPE_TINY:
+			case MYSQL_TYPE_LONGLONG:
+			case MYSQL_TYPE_INT24:
 			case MYSQL_TYPE_FLOAT:
 			case MYSQL_TYPE_DOUBLE:
 				if ( checkAutoIncField && pAutoIncrField && !setNull) {	// check to see if this table has an auto_increment column
@@ -1663,23 +1697,23 @@ unsigned short ha_scaledb::placeMysqlRowInEngineBuffer(unsigned char* rowBuf1, u
 					SDBPrepareNumberField(sdbUserId_, sdbDbId_, sdbTableNumber_, fieldId, pFieldValue, groupType);
 				break;
 
+			case MYSQL_TYPE_STRING:
+				SDBPrepareStrField(sdbUserId_, sdbDbId_, sdbTableNumber_, fieldId, (char*) pFieldValue, pField->pack_length(), groupType);
+				break;
+
+			case MYSQL_TYPE_DATE:
+			case MYSQL_TYPE_DATETIME:
+			case MYSQL_TYPE_TIME:
+			case MYSQL_TYPE_TIMESTAMP:
+			case MYSQL_TYPE_YEAR:
 			case MYSQL_TYPE_ENUM:
 			case MYSQL_TYPE_BIT:
 			case MYSQL_TYPE_SET:
-			case MYSQL_TYPE_DATE:
-			case MYSQL_TYPE_TIME:
-			case MYSQL_TYPE_DATETIME:
-			case MYSQL_TYPE_TIMESTAMP:
-			case MYSQL_TYPE_YEAR:
 				SDBPrepareNumberField(sdbUserId_, sdbDbId_, sdbTableNumber_, fieldId, pFieldValue, groupType);
 				break;
 
 			case MYSQL_TYPE_NEWDECIMAL:
 				SDBPrepareStrField(sdbUserId_, sdbDbId_, sdbTableNumber_, fieldId, (char*) pFieldValue, ((Field_new_decimal*)pField)->bin_size, groupType);
-				break;
-
-			case MYSQL_TYPE_STRING:
-				SDBPrepareStrField(sdbUserId_, sdbDbId_, sdbTableNumber_, fieldId, (char*) pFieldValue, pField->pack_length(), groupType);
 				break;
 
 			case MYSQL_TYPE_VARCHAR:
@@ -1784,14 +1818,13 @@ int ha_scaledb::write_row(unsigned char* buf)
 	}
 
 #ifdef __DEBUG_CLASS_CALLS  // can enable it to check memory leak
-	pSdbEngine->manager(sdbUserId_)->incrCounter();
-	if ( pSdbEngine->manager(sdbUserId_)->getCounter() % 100000 == 0 ) { // the number can be set to meet the need
+	static int localCounter = 0;
+	localCounter++;
+	if ( localCounter % 10000 == 0 ) { // the number can be set to meet the need
 		SDBDebugPrintHeader("After inserting ");
-		SDBDebugPrintInt((int) pSdbEngine->manager(sdbUserId_)->getCounter() );
+		SDBDebugPrintInt(localCounter );
 		SDBDebugPrintString(" records: \n");
 		DebugClass::printClassCalls();
-		SDBShowSdbMemory();
-		SDBPrintMemoryAllocation();
 	}
 #endif
 
@@ -2225,8 +2258,8 @@ int ha_scaledb::copyRowToMySQLBuffer(unsigned char* buf) {
 		bool varCharType = false;
 		bool blobType = false;
 		switch (mySqlFieldType){
-				case MYSQL_TYPE_TINY_BLOB:
 				case MYSQL_TYPE_BLOB:
+				case MYSQL_TYPE_TINY_BLOB:
 				case MYSQL_TYPE_MEDIUM_BLOB:
 				case MYSQL_TYPE_LONG_BLOB:
 					blobType = true;	
@@ -2363,25 +2396,25 @@ void ha_scaledb::placeEngineFieldInMysqlBuffer(unsigned char* destBuff, char* pt
 	short mySqlFieldType = pField->type();
 
 	switch (mySqlFieldType) {
-
-		case MYSQL_TYPE_SHORT:
-			memcpy(destBuff, ptrToField, 2);
-			break;
-
-		case MYSQL_TYPE_INT24:	
-		case MYSQL_TYPE_DATE:
-		case MYSQL_TYPE_TIME:
-			memcpy(destBuff, ptrToField, 3);
-			break;
-
+		// the case statement should be listed based on the decending use frequency
 		case MYSQL_TYPE_LONG:
 		case MYSQL_TYPE_TIMESTAMP:
 		case MYSQL_TYPE_FLOAT:
 			memcpy(destBuff, ptrToField, 4);
 			break;
 
-		case MYSQL_TYPE_LONGLONG:
+		case MYSQL_TYPE_SHORT:
+			memcpy(destBuff, ptrToField, 2);
+			break;
+
+		case MYSQL_TYPE_DATE:
+		case MYSQL_TYPE_TIME:
+		case MYSQL_TYPE_INT24:	
+			memcpy(destBuff, ptrToField, 3);
+			break;
+
 		case MYSQL_TYPE_DATETIME:
+		case MYSQL_TYPE_LONGLONG:
 		case MYSQL_TYPE_DOUBLE:
 			memcpy(destBuff, ptrToField, 8);
 			break;
@@ -2553,7 +2586,8 @@ void ha_scaledb::prepareIndexOrSequentialQueryManager()
 		SDBResetQuery( sdbQueryMgrId_ );  // remove the previously defined query
 		SDBSetActiveQueryManager(sdbQueryMgrId_); // cache the object for performance
 
-		retValue = SDBPrepareSequentialScan(sdbUserId_, sdbQueryMgrId_, sdbDbId_, table->s->table_name.str, ((THD*)ha_thd())->query_id);
+		retValue = SDBPrepareSequentialScan(sdbUserId_, sdbQueryMgrId_, sdbDbId_, table->s->table_name.str, 
+					((THD*)ha_thd())->query_id, releaseLocksAfterRead_);
 	}
 }
 
@@ -2595,8 +2629,14 @@ void ha_scaledb::prepareIndexQueryManager(unsigned int indexNum, const uchar* ke
 
 	if (!sdbQueryMgrId_) {
 		KEY* pKey = table->key_info + indexNum;
-		char* pTableFsName = SDBGetTableFileSystemNameByTableNumber(sdbDbId_, sdbTableNumber_);
-		char* designatorName = SDBUtilFindDesignatorName(pTableFsName, pKey->name, indexNum);
+
+		char* designatorName = NULL;
+		if (virtualTableFlag_)
+			designatorName = SDBUtilGetStrInLower(table->s->table_name.str + SDB_VIRTUAL_VIEW_PREFIX_BYTES);
+		else {
+			char* pTableFsName = SDBGetTableFileSystemNameByTableNumber(sdbDbId_, sdbTableNumber_);
+			designatorName = SDBUtilFindDesignatorName(pTableFsName, pKey->name, indexNum);
+		}
 
 		sdbQueryMgrId_ = pSdbMysqlTxn_->findQueryManagerId(designatorName, (void*) this, (char*) key, key_len, virtualTableFlag_);
 		if ( !sdbQueryMgrId_ ) {  // need to get a new one and save sdbQueryMgrId_ into MysqlTxn object
@@ -2646,8 +2686,8 @@ void ha_scaledb::prepareIndexQueryManager(unsigned int indexNum, const uchar* ke
 int ha_scaledb::prepareIndexKeyQuery(const uchar* key, uint key_len, enum ha_rkey_function find_flag) {
 
 	// now we prepare query by assigning key values to the corresponding key fields
-	char* keyOffset = (char*) key;
-	char* pCurrentKeyValue;
+	char* keyOffset = (char*) key;	// points to key value (may include additional bytes for NULL or variable string.
+	char* pCurrentKeyValue;			// points to key value only (already skip the additional bytes for NULL or variale string.
 	KEY_PART_INFO* pKeyPart;
 	enum_field_types fieldType;
 	Field* pField;
@@ -2680,6 +2720,14 @@ int ha_scaledb::prepareIndexKeyQuery(const uchar* key, uint key_len, enum ha_rke
 		}
 	}
 
+	// keep track of the end key
+	char* pEndKeyOffset = NULL;
+	char* pCurrentEndKeyValue;
+	bRangeQuery_ = false;	// TODO: remove this line after Moshe implements QueryManager::defineRangeQuery
+	if (bRangeQuery_) {
+		pEndKeyOffset = (char*) end_range->key;
+	}
+
 	for ( int i=0; i < numOfKeyFields; ++i ) {
 		pKeyPart = pKey->key_part + i;
 		pField = pKeyPart->field;
@@ -2704,21 +2752,22 @@ int ha_scaledb::prepareIndexKeyQuery(const uchar* key, uint key_len, enum ha_rke
 				}
 			}
 
-			switch ( fieldType ) {  // byte-flip integer field, TBD: only for windows?
-			case MYSQL_TYPE_SHORT:
-				columnLen = 2;	// no need to flip byte here.  The engine should do it.
-				break;
-
-			case MYSQL_TYPE_INT24:
-			case MYSQL_TYPE_DATE:	// DATE is treated as an 3-byte integer
-			case MYSQL_TYPE_TIME:		// TIME is treated as a 3-byte integer
-				columnLen = 3;
-				break;
-
+			switch ( fieldType ) {  // byte-flip integer field, 
+			// case statements should be listed in the decending use frequency
 			case MYSQL_TYPE_LONG:	
 			case MYSQL_TYPE_TIMESTAMP:	// TIMESTAMP is treated as a 4-byte integer
 			case MYSQL_TYPE_FLOAT:		// FLOAT is treated as a 4-byte number
 				columnLen = 4;	// no need to flip byte here.  The engine should do it.
+				break;
+
+			case MYSQL_TYPE_SHORT:
+				columnLen = 2;	// no need to flip byte here.  The engine should do it.
+				break;
+
+			case MYSQL_TYPE_DATE:	// DATE is treated as an 3-byte integer
+			case MYSQL_TYPE_TIME:		// TIME is treated as a 3-byte integer
+			case MYSQL_TYPE_INT24:
+				columnLen = 3;
 				break;
 
 			case MYSQL_TYPE_LONGLONG:	
@@ -2777,8 +2826,11 @@ int ha_scaledb::prepareIndexKeyQuery(const uchar* key, uint key_len, enum ha_rke
 
 		if ( keyValueIsNull )	// user specifies "column is NULL" in SQL statement
 			pCurrentKeyValue = NULL;
-		else
+		else {
 			pCurrentKeyValue = keyOffset+mysqlVarLengthBytes;
+			if (bRangeQuery_)
+				pCurrentEndKeyValue = pEndKeyOffset+mysqlVarLengthBytes;
+		}
 
 		pFieldName = (char*) pField->field_name;
 		if ( virtualTableFlag_ )
@@ -2789,20 +2841,38 @@ int ha_scaledb::prepareIndexKeyQuery(const uchar* key, uint key_len, enum ha_rke
 			retValue =SDBDefineQueryPrefix(sdbQueryMgrId_, sdbDbId_, sdbDesignatorId_, pFieldName, pCurrentKeyValue, false, realVarLength, false);
 		}
 		else{
-			retValue = SDBDefineQuery(sdbQueryMgrId_, sdbDbId_, sdbDesignatorId_, pFieldName, pCurrentKeyValue);
+			if (bRangeQuery_) {	// Example: SELECT * FROM t1 WHERE c1 BETWEEN 5 AND 8;
+				bool bIncludeStartValue = false;
+				if (find_flag == HA_READ_KEY_OR_NEXT)
+					bIncludeStartValue = true;		// Example: SELECT * FROM t1 WHERE c1>=5 AND c1<8;
+				bool bIncludeEndValue = true;
+				if (end_range->flag == HA_READ_BEFORE_KEY)
+					bIncludeEndValue = false;		// Example: SELECT * FROM t1 WHERE c1>=5 AND c1<8;
+
+				retValue = SDBDefineRangeQuery(sdbQueryMgrId_, sdbDbId_, sdbDesignatorId_, pFieldName, 
+							bIncludeStartValue, pCurrentKeyValue, bIncludeEndValue, pCurrentEndKeyValue);
+			}
+			else
+				retValue = SDBDefineQuery(sdbQueryMgrId_, sdbDbId_, sdbDesignatorId_, pFieldName, pCurrentKeyValue);
 		}
 
+		//unsigned int endRangeLen = end_range->length;	// TBD: Bug 1103 enable for HA_READ_KEY_OR_NEXT only
 		switch (find_flag) {
+			// case statements are listed in decending use frequency
+			case HA_READ_KEY_EXACT:
+				SDBQueryCursorSetFlags(sdbQueryMgrId_, sdbDesignatorId_, false,SDB_KEY_SEARCH_DIRECTION_EQ, true, true);
+				break;
+
+			case HA_READ_AFTER_KEY:
+				SDBQueryCursorSetFlags(sdbQueryMgrId_, sdbDesignatorId_, true,SDB_KEY_SEARCH_DIRECTION_GT, false, true);
+				break;
+
 			case HA_READ_KEY_OR_NEXT:
 				SDBQueryCursorSetFlags(sdbQueryMgrId_, sdbDesignatorId_, false,SDB_KEY_SEARCH_DIRECTION_GE, false, true);
 				break;
 
 			case HA_READ_BEFORE_KEY:
 				SDBQueryCursorSetFlags(sdbQueryMgrId_, sdbDesignatorId_, true,SDB_KEY_SEARCH_DIRECTION_LT, false, true);
-				break;
-
-			case HA_READ_AFTER_KEY:
-				SDBQueryCursorSetFlags(sdbQueryMgrId_, sdbDesignatorId_, true,SDB_KEY_SEARCH_DIRECTION_GT, false, true);
 				break;
 
 			case HA_READ_PREFIX_LAST:
@@ -2821,6 +2891,9 @@ int ha_scaledb::prepareIndexKeyQuery(const uchar* key, uint key_len, enum ha_rke
 		//        }  // if ( !virtualTableFlag_ )
 
 		keyOffset = keyOffset + columnLen; 
+		if (bRangeQuery_)
+			pEndKeyOffset = pEndKeyOffset + columnLen; 
+
 		keyLengthLeft = keyLengthLeft - columnLen;
 		if ( keyLengthLeft == 0 ) 
 			break;
@@ -2832,7 +2905,6 @@ int ha_scaledb::prepareIndexKeyQuery(const uchar* key, uint key_len, enum ha_rke
 	// we execute the query
 	retValue = SDBPrepareQuery(sdbUserId_, sdbQueryMgrId_, 0,((THD*)ha_thd())->query_id, releaseLocksAfterRead_);	
 
-	//RELEASE_MEMORY( pkeyValuePtr );
 	return retValue;
 }
 
@@ -2881,7 +2953,7 @@ int ha_scaledb::index_read(uchar* buf, const uchar* key, uint key_len, enum ha_r
 	}
 
 #ifdef SDB_DEBUG_LIGHT
-	if (mysqlInterfaceDebugLevel_) {
+	if (mysqlInterfaceDebugLevel_ > 1) {
 		SDBDebugStart();			// synchronize threads printout	
 
 		if (!retValue){
@@ -3241,7 +3313,8 @@ int ha_scaledb::rnd_next(uchar* buf) {
 			sdbDesignatorId_ = 0;	// no index is used.
 
 			SDBResetQuery( sdbQueryMgrId_ );  // remove the previously defined query
-			retValue = (int) SDBPrepareSequentialScan(sdbUserId_, sdbQueryMgrId_, sdbDbId_, table->s->table_name.str, ((THD*)ha_thd())->query_id);
+			retValue = (int) SDBPrepareSequentialScan(sdbUserId_, sdbQueryMgrId_, sdbDbId_, table->s->table_name.str, 
+						((THD*)ha_thd())->query_id, releaseLocksAfterRead_);
 
 			// We fetch the result record and save it into buf
 			if ( retValue == 0 ) {
@@ -3347,7 +3420,8 @@ int ha_scaledb::rnd_pos(uchar * buf, uchar *pos)
 			active_index = old_active_index;
 		}
 		SDBResetQuery(sdbQueryMgrId_);  // remove the previously defined query
-		retValue = (int) SDBPrepareSequentialScan(sdbUserId_, sdbQueryMgrId_, sdbDbId_, table->s->table_name.str, ((THD*)ha_thd())->query_id);
+		retValue = (int) SDBPrepareSequentialScan(sdbUserId_, sdbQueryMgrId_, sdbDbId_, table->s->table_name.str, 
+					((THD*)ha_thd())->query_id, releaseLocksAfterRead_);
 		beginningOfScan_ = false;
         pSdbMysqlTxn_->setScanType(sdbQueryMgrId_, true);
 	}
@@ -3395,11 +3469,8 @@ int ha_scaledb::info(uint flag)
 			DBUG_RETURN(0);
 	}
 
-	char *tabName = table->s->table_name.str;
-	if ( sdbTableNumber_ == 0 ) {	// make it conditional to avoid unnecessary string comparison
-		// in this case, info method is called before external_lock
-		if ( SDBTableIsVirtual(tabName) )
-			DBUG_RETURN(0);
+	if ( sdbTableNumber_ == 0 ) {
+		sdbTableNumber_ = SDBGetTableNumberByName(sdbUserId_, sdbDbId_, table->s->table_name.str);
 	}
 
 	if (flag & HA_STATUS_ERRKEY) {
@@ -3414,15 +3485,15 @@ int ha_scaledb::info(uint flag)
 	if ( (flag & HA_STATUS_VARIABLE) || // update the 'variable' part of the info:
 		(flag & HA_STATUS_NO_LOCK) )
 	{  
-		stats.records = (ulong) SDBGetTableStats(sdbDbId_, tabName, SDB_STATS_INFO_FILE_RECORDS);
-		stats.deleted = (ulong) SDBGetTableStats(sdbDbId_, tabName, SDB_STATS_INFO_FILE_DELETED);
-		stats.data_file_length = (ulong) SDBGetTableStats(sdbDbId_, tabName, SDB_STATS_INFO_FILE_LENGTH);
-		stats.index_file_length = SDBGetTableStats(sdbDbId_, tabName, SDB_STATS_INDEX_FILE_LENGTH) / 2;
+		stats.records = (ulong) SDBGetTableStats(sdbDbId_, sdbTableNumber_, SDB_STATS_INFO_FILE_RECORDS);
+		stats.deleted = (ulong) SDBGetTableStats(sdbDbId_, sdbTableNumber_, SDB_STATS_INFO_FILE_DELETED);
+		stats.data_file_length = (ulong) SDBGetTableStats(sdbDbId_, sdbTableNumber_, SDB_STATS_INFO_FILE_LENGTH);
+		stats.index_file_length = SDBGetTableStats(sdbDbId_, sdbTableNumber_, SDB_STATS_INDEX_FILE_LENGTH) / 2;
 
 		//if (stats.index_file_length == 0)
 		//    stats.index_file_length = 1;
 
-		stats.mean_rec_length = (ulong)(stats.records == 0 ? 0 : SDBGetTableStats(sdbDbId_, tabName, SDB_STATS_INFO_REC_LENGTH));
+		stats.mean_rec_length = (ulong)(stats.records == 0 ? 0 : SDBGetTableStats(sdbDbId_, sdbTableNumber_, SDB_STATS_INFO_REC_LENGTH));
 	}
 
 #if 0
@@ -3466,7 +3537,7 @@ int ha_scaledb::info(uint flag)
 		unpack_filename(path,path);
 		struct stat	statinfo;
 		if (!stat(path, &statinfo))
-			stats.create_time = statinfo.st_ctime;
+			stats.create_time = (ulong) statinfo.st_ctime;
 	}
 
 	if ( (flag & HA_STATUS_AUTO) && table->found_next_number_field && pSdbMysqlTxn_) {
@@ -3598,7 +3669,7 @@ bool hasEngineEqualScaledb(char* sqlStatement) {
 
 /* 
 Create a table. You do not want to leave the table open after a call to
-this (the database will call ::open() if it needs to).
+this (the database will call ::open if it needs to).
 Parameter name contains database name and table name that are file system compliant names.
 The user-defined table name is saved in table_arg->s->table_name.str
 */
@@ -3667,7 +3738,9 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 	unsigned int errorNum = 0;
 	THD* thd = ha_thd();
 	placeSdbMysqlTxnInfo( thd );	
+#ifdef SDB_DEBUG
 	SDBLogSqlStmt(sdbUserId_, thd->query(), thd->query_id);	// inform engine to log user query for DDL
+#endif
 
 	unsigned short ddlFlag = 0;
 	// use this flag to decide if we want to create entries on metatables.
@@ -3805,7 +3878,7 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 	int numOfKeys = (int) table_arg->s->keys ;
 
 	// store info about foreign keys so the foreign key index can be created properly when designator is created
-	SdbDynamicArray *fkInfoArray = SDBArrayInit(IDENTIFIER_INTERFACE + ERRORNUM_INTERFACE_MYSQL + 1, 10, sizeof(void*));
+	SdbDynamicArray *fkInfoArray = SDBArrayInit(numOfKeys+1, numOfKeys+1, sizeof(void*)); //+1 because we use the locations 1,2,3 rather than 0,1,2
 
 	if ( numOfKeys > 0 ) {  // index/designator exists
 		// create the foreign key metadata
@@ -3919,7 +3992,6 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 int ha_scaledb::has_overflow_fields(THD* thd, TABLE *table_arg){
 	Field*	pField;
 	enum_field_types fieldType;
-	unsigned char sdbFieldType;
 	unsigned short sdbFieldSize;
 	unsigned int sdbMaxDataLength; 
 	unsigned int maxColumnLengthInBaseFile = SDBGetMaxColumnLengthInBaseFile();
@@ -4355,8 +4427,19 @@ int ha_scaledb::add_indexes_to_table(THD* thd, TABLE *table_arg, char* tblName, 
 			}
 			keyFields[numOfKeyFields] = NULL;  // must end with NULL to signal the end of pointer list
 
+			MysqlForeignKey* fKeyInfo = (MysqlForeignKey*)SDBArrayGetPtr(fkInfoArray, i+1);
+
+			char** parentKeyColumns = fKeyInfo ? fKeyInfo->getParentColumnNames() : NULL;
+			char* parent = SDBGetParentIndexByForeignFields(sdbDbId_, tblName, keyFields, parentKeyColumns);
+
+			// a foreign key and we can't find the parent designator
+			if (fKeyInfo && !parent){
+				errorNum = HA_ERR_CANNOT_ADD_FOREIGN;
+				return errorNum;
+			}
+
 			unsigned short retValue = SDBCreateIndex(sdbUserId_, sdbDbId_, sdbTableNumber_, designatorName, 
-				keyFields, keySizes, true, false, NULL, ddlFlag, 0, isHashIndex);
+				keyFields, keySizes, true, false, parent, ddlFlag, 0, isHashIndex);
 			// Need to free keyFields, but not the field names used by MySQL.
 			RELEASE_MEMORY( keyFields );
 			RELEASE_MEMORY( keySizes );
@@ -4450,7 +4533,9 @@ int ha_scaledb::delete_table(const char* name)
 	bool bIsAlterTableStmt = false;
 	THD* thd = ha_thd();
 	placeSdbMysqlTxnInfo( thd );	
+#ifdef SDB_DEBUG
 	SDBLogSqlStmt(sdbUserId_, thd->query(), thd->query_id);	// inform engine to log user query for DDL
+#endif
 
 	unsigned int sqlCommand = thd_sql_command(thd);
 	if (sqlCommand==SQLCOM_ALTER_TABLE || sqlCommand==SQLCOM_CREATE_INDEX || sqlCommand==SQLCOM_DROP_INDEX) 
@@ -4664,7 +4749,9 @@ int ha_scaledb::rename_table(const char* fromTable, const char* toTable) {
 	bool bIsAlterTableStmt = false;
 	THD* thd = ha_thd();
 	placeSdbMysqlTxnInfo( thd );	
+#ifdef SDB_DEBUG
 	SDBLogSqlStmt(sdbUserId_, thd->query(), thd->query_id);	// inform engine to log user query for DDL
+#endif
 
 	unsigned int sqlCommand = thd_sql_command(thd);
 	if (sqlCommand==SQLCOM_ALTER_TABLE || sqlCommand==SQLCOM_CREATE_INDEX || sqlCommand==SQLCOM_DROP_INDEX) 
@@ -5220,11 +5307,16 @@ double ha_scaledb::scan_time() {
 	}
 #endif
 
-	// TODO: this should be stored in file handle; auto updated during dictionary change..
-	int64 seekLength = SDBGetTableStats(sdbDbId_, table->s->table_name.str, SDB_STATS_INFO_SEEK_LENGTH);
+	unsigned long long seekLength = 1000;
+	if (virtualTableFlag_)		// return a large number for virtual table scan because it should use index
+		return (double) seekLength;
+
+	// TODO: this should be stored in file handle; auto updated during dictionary change.
+	// Compute disk seek length for normal tables.
+	seekLength = SDBGetTableStats(sdbDbId_, sdbTableNumber_, SDB_STATS_INFO_SEEK_LENGTH);
 
 	if (seekLength == 0)
-		return 1;
+		seekLength = 1;
 
 	return (double) seekLength;
 }
@@ -5344,6 +5436,9 @@ ha_rows ha_scaledb::records_in_range(uint inx, key_range* min_key, key_range* ma
 		// And info method is usually called before records_in_range. 
 		DBUG_RETURN( stats.records );
 	}
+
+	if (min_key && max_key) 
+		bRangeQuery_ = true;	// set the flag when the range conditions are fully specified.
 
 	// TODO: The following code is disabled until we have a new design in estimating record statistics using histogram
 #ifdef ENABLE_RANGE_COUNT
