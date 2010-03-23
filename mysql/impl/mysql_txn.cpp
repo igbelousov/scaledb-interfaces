@@ -34,6 +34,7 @@
 
 #include "../incl/mysql_txn.h"
 #include <string.h>
+#include "../../../cengine/engine_util/incl/debug_class.h"
 
 MysqlTxn::MysqlTxn() {  //constructor
 #ifdef __DEBUG_CLASS_CALLS
