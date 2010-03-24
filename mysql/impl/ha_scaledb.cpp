@@ -1109,7 +1109,7 @@ int ha_scaledb::external_lock(
 
 				bool bGetLock = SDBLockTable(sdbUserId_, sdbDbId_, sdbTableNumber_, lockLevel);
 				if (bGetLock == false)	// failed to lock the table
-					DBUG_RETURN(HA_ERR_LOCK_WAIT_TIMEOUT);
+					DBUG_RETURN(convertToMysqlErrorCode(LOCK_TABLE_FAILED));
 
 				pSdbMysqlTxn_->addLockTableName( table->s->table_name.str );
 
@@ -1147,9 +1147,12 @@ int ha_scaledb::external_lock(
 			// For TRUNCATE TABLE, secondary node should not impose lock as primary node already imposes an exclusive table level lock.
 			// For all other cases, we should impose a table level shared lock.
 			if ( ((sqlCommand_ != SQLCOM_TRUNCATE) || (strstr(thd->query(), SCALEDB_HINT_PREFIX) == NULL)) && (!virtualTableFlag_) ) {
-				bool bGetLock = SDBLockTable(sdbUserId_, sdbDbId_, sdbTableNumber_, DEFAULT_REFERENCE_LOCK_LEVEL);
+				unsigned char lockLevel = DEFAULT_REFERENCE_LOCK_LEVEL;
+				if ( (sqlCommand_ == SQLCOM_LOAD) && (lock_type > F_RDLCK) )
+					lockLevel = REFERENCE_LOCK_EXCLUSIVE;	// impose table level write lock for LOAD DATA statement
+				bool bGetLock = SDBLockTable(sdbUserId_, sdbDbId_, sdbTableNumber_, lockLevel);
 				if (bGetLock == false)	// failed to lock the table
-					DBUG_RETURN(HA_ERR_LOCK_WAIT_TIMEOUT);
+					DBUG_RETURN(convertToMysqlErrorCode(LOCK_TABLE_FAILED));
 			}
 
 			// increment the count of table locks in a statement.
@@ -1932,7 +1935,7 @@ int ha_scaledb::update_row(const unsigned char* old_row, unsigned char* new_row)
 		retValue = placeMysqlRowInEngineBuffer( new_row, new_row, 1, false, funcRetValue );    // place new row into ScaleDB buffer 2 for comparison
 	if (retValue > 0) {
 		dbug_tmp_restore_column_map(table->read_set, org_bitmap);
-		DBUG_RETURN( HA_ERR_GENERIC );
+		DBUG_RETURN( convertToMysqlErrorCode(retValue) );
 	}
 
 	uint64 queryId = ((THD*)ha_thd())->query_id;
@@ -2084,7 +2087,7 @@ int ha_scaledb::delete_all_rows()
 			// For non-cluster solution, we also need to impose a table-level-write-lock.
 			if ( !(stmtFlag & SDBFLAG_DDL_SECOND_NODE) ) {
 				if (SDBLockTable(sdbUserId_, sdbDbId_, sdbTableNumber_, REFERENCE_LOCK_EXCLUSIVE) == false)
-					DBUG_RETURN(HA_ERR_LOCK_WAIT_TIMEOUT);
+					DBUG_RETURN(convertToMysqlErrorCode(LOCK_TABLE_FAILED));
 			}
 
 			bool truncateTableReady = true;
@@ -2189,8 +2192,7 @@ retryFetch:
 	if (retValue != SUCCESS) {
 		// no row
 		table->status = STATUS_NOT_FOUND;
-		retValue = convertToMysqlErrorCode( retValue );
-		DBUG_RETURN( retValue );
+		DBUG_RETURN( convertToMysqlErrorCode( retValue ) );
 	}
 
 	// has row, copy the row data
@@ -3171,7 +3173,7 @@ int ha_scaledb::rnd_init(bool scan) {
 #endif
 
 	DBUG_ENTER("ha_scaledb::rnd_init");
-	int errorNum = 0;
+	int errorCode = SUCCESS;
 	THD* thd = ha_thd();
 	sqlCommand_ = thd_sql_command(thd);
 
@@ -3180,7 +3182,7 @@ int ha_scaledb::rnd_init(bool scan) {
 	// This method utilizees a different handler object than external_lock.
 	if (SDBNodeIsCluster() == true) {
 		if ( pSdbMysqlTxn_->getDdlFlag() & SDBFLAG_DDL_SECOND_NODE )
-			DBUG_RETURN( errorNum );
+			DBUG_RETURN( convertToMysqlErrorCode(errorCode) );
 	}
 
 	// For select statement, we use the sequential scan since full table scan is faster in this case.
@@ -3192,7 +3194,7 @@ int ha_scaledb::rnd_init(bool scan) {
 	beginningOfScan_ = true;
 	if ( virtualTableFlag_ ) {
 		prepareFirstKeyQueryManager();	// have to use multi-table index for virtual view
-		DBUG_RETURN(errorNum);
+		DBUG_RETURN(convertToMysqlErrorCode(errorCode));
 	}
 
 	if ( scan ) {  
@@ -3233,13 +3235,13 @@ int ha_scaledb::rnd_init(bool scan) {
 
 			if ( sqlCommand_ != SQLCOM_SELECT ) {
 				if (SDBLockTable(sdbUserId_, sdbDbId_, sdbTableNumber_, tableLockLevel) == false)
-					errorNum = HA_ERR_LOCK_WAIT_TIMEOUT;
+					errorCode = LOCK_TABLE_FAILED;
 			}
 		}
 
 	}	// 	if ( scan )
 
-	DBUG_RETURN(errorNum);
+	DBUG_RETURN(convertToMysqlErrorCode(errorCode));
 }
 
 
@@ -4626,7 +4628,7 @@ int ha_scaledb::delete_table(const char* name)
 		if ( (sqlCommand == SQLCOM_DROP_TABLE) || (sqlCommand == SQLCOM_DROP_DB) ) {
 			if (SDBLockTable(sdbUserId_, sdbDbId_, sdbTableNumber_, REFERENCE_LOCK_EXCLUSIVE) == false) {
 				SDBCommit(sdbUserId_);	// release lockMetaInfo
-				DBUG_RETURN(HA_ERR_LOCK_WAIT_TIMEOUT);
+				DBUG_RETURN(convertToMysqlErrorCode(LOCK_TABLE_FAILED));
 			}
 		}
 
@@ -4841,7 +4843,7 @@ int ha_scaledb::rename_table(const char* fromTable, const char* toTable) {
 		if ( sqlCommand == SQLCOM_RENAME_TABLE ) {
 			if (SDBLockTable(sdbUserId_, sdbDbId_, sdbTableNumber_, REFERENCE_LOCK_EXCLUSIVE) == false) {
 				SDBCommit(sdbUserId_);	// release lockMetaInfo
-				DBUG_RETURN(HA_ERR_LOCK_WAIT_TIMEOUT);
+				DBUG_RETURN(convertToMysqlErrorCode(LOCK_TABLE_FAILED));
 			}
 		}
 
