@@ -23,7 +23,8 @@ This is because we have STL header files which must be declared before C header 
 #ifndef _MYSQL_FOREIGN_KEY_H
 #define _MYSQL_FOREIGN_KEY_H
 
-#include "string.h"           
+#include "string.h"
+
 #include "mysql_priv.h"           // this must come second
 #include <mysql/plugin.h>         // this must come third
 #include "../../scaledb/incl/SdbStorageAPI.h"

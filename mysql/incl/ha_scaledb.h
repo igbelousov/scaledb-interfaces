@@ -33,8 +33,8 @@
 
 #ifdef SDB_MYSQL
 
-#include "mysql_txn.h"
 #include "mysql_foreign_key.h"
+#include "mysql_txn.h"
 #include "mysql_priv.h"           // this must come second
 #include "mysql/plugin.h"         // this must come third
 
