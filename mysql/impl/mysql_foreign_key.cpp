@@ -49,7 +49,7 @@ bool isSeparator(char c) {
 
 MysqlForeignKey::MysqlForeignKey() {
 #ifdef __DEBUG_CLASS_CALLS
-	DebugClass::countClass("MysqlForeignKey");
+	DebugClass::countClassConstructor("MysqlForeignKey");
 #endif
     keyNumber = -1;
     numOfKeyFields = 0;
@@ -64,6 +64,9 @@ MysqlForeignKey::MysqlForeignKey() {
 }
 
 MysqlForeignKey::~MysqlForeignKey() {
+#ifdef __DEBUG_CLASS_CALLS
+	DebugClass::countClassDestructor("MysqlForeignKey");
+#endif
 	if ( pForeignKeyName_ )
 		RELEASE_MEMORY( pForeignKeyName_ );
 	if ( pParentTableName_ )

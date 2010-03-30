@@ -26,13 +26,16 @@ SdbMysqlClient::SdbMysqlClient(char* host, char* user, char* password, char* dbN
 							port_(port), connected_(false), debugLevel_(debugLevel) {
 
 #ifdef __DEBUG_CLASS_CALLS
-	DebugClass::countClass("SdbMysqlClient");
+	DebugClass::countClassConstructor("SdbMysqlClient");
 #endif
 	mysql_ = mysql_init(NULL);
 	mysql_->reconnect= 1;
 }
 
 SdbMysqlClient::~SdbMysqlClient(){
+#ifdef __DEBUG_CLASS_CALLS
+	DebugClass::countClassDestructor("SdbMysqlClient");
+#endif
 
 	if (connected_ && mysql_) {
 		mysql_close(mysql_);

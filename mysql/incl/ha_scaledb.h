@@ -145,7 +145,7 @@ private:
 
 public:
 	ha_scaledb(handlerton *hton, TABLE_SHARE *table_arg);
-	~ha_scaledb() {}
+	~ha_scaledb();
 
 	static unsigned char mysqlInterfaceDebugLevel_;		// defines the debug level for Interface component
 	// You need to set up debug level in parameter 'debug_string' in scaledb.ini

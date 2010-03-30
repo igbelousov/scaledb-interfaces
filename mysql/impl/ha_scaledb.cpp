@@ -848,7 +848,7 @@ ha_scaledb::ha_scaledb(handlerton *hton, TABLE_SHARE *table_arg)
 :handler(hton, table_arg) {
 
 #ifdef __DEBUG_CLASS_CALLS
-	DebugClass::countClass("ha_scaledb");
+	DebugClass::countClassConstructor("ha_scaledb");
 #endif
 
 #ifdef SDB_DEBUG_LIGHT
@@ -876,6 +876,11 @@ ha_scaledb::ha_scaledb(handlerton *hton, TABLE_SHARE *table_arg)
 	bRangeQuery_ = false;
 }
 
+ha_scaledb::~ha_scaledb() {
+#ifdef __DEBUG_CLASS_CALLS
+	DebugClass::countClassDestructor("ha_scaledb");
+#endif
+}
 
 // output handle and MySQL user thread id
 void ha_scaledb::outputHandleAndThd() {

@@ -40,7 +40,7 @@
 
 MysqlTxn::MysqlTxn() {  //constructor
 #ifdef __DEBUG_CLASS_CALLS
-	DebugClass::countClass("MysqlTxn");
+	DebugClass::countClassConstructor("MysqlTxn");
 #endif
     mysqlThreadId_ = 0;
 	scaleDbUserId_ = 0;
@@ -69,6 +69,9 @@ MysqlTxn::MysqlTxn() {  //constructor
 
 
 MysqlTxn::~MysqlTxn() {   // destructor
+#ifdef __DEBUG_CLASS_CALLS
+	DebugClass::countClassDestructor("MysqlTxn");
+#endif
 	// memory released in method freeAllQueryManagerIds()
 	SDBArrayFreeWithMembers(pLockTablesArray_);
 	if (pAlterTableName_)
