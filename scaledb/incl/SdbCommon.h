@@ -108,8 +108,9 @@ typedef enum SdbKeySearchDirection {
 #define SDB_FIRST_USER_TABLE_ID 16
 
 // Command type
-#define SDB_COMMAND_INSERT		0
-#define SDB_COMMAND_LOAD		1
+#define SDB_COMMAND_INSERT		1
+#define SDB_COMMAND_LOAD		2
+#define SDB_COMMAND_ALTER_TABLE 3
 
 // Transaction Isolation Level
 #define SDB_ISOLATION_READ_UNCOMMITTED		0
