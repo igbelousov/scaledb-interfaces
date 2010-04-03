@@ -93,14 +93,19 @@ private:
 	unsigned int sdbRowIdInScan_;		// RowId used in sequential table scan
     unsigned int extraChecks_;		// Extra information from handler
 	unsigned int readDebugCounter_; // counter for debugging
-	bool releaseLocksAfterRead_;    // flag to indicate whether we hold the locks after reading data
 	unsigned int deleteRowCount_;
 	int sqlCommand_;		// SQL command defined in ::external_lock.  Use this variable to avoid repetitively calling
 							// thd_sql_command() function.  Example: DATA LOAD command
 	unsigned short sdbCommandType_;	// specifies command to be passed to ScaleDB engine
+    unsigned short numberOfFrontFixedColumns_;	// the number of fixed length columns at the front of a record
+    unsigned short frontFixedColumnsLength_;	// the length of all fixed length columns at the front of a record
+							// this value is 0 if the first column is has variable length
+
+	bool releaseLocksAfterRead_;    // flag to indicate whether we hold the locks after reading data
 	bool virtualTableFlag_;			// flag to show if it is a virtual table
 	bool bRangeQuery_;				// flag is set to true if range condition is specified.  
 									// This flag is set in ::records_in_range method
+
 
 	unsigned short getOffsetByDesignator(unsigned short designator);
 	// This method packs a MySQL row into ScaleDB engine row buffer 

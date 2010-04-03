@@ -871,6 +871,8 @@ ha_scaledb::ha_scaledb(handlerton *hton, TABLE_SHARE *table_arg)
 	sdbRowIdInScan_ = 0;
 	extraChecks_ = 0;
 	sdbCommandType_ = 0;
+	numberOfFrontFixedColumns_ = 0;
+	frontFixedColumnsLength_ = 0;
 	releaseLocksAfterRead_ = false;
 	virtualTableFlag_ = false;
 	bRangeQuery_ = false;
@@ -1184,6 +1186,10 @@ int ha_scaledb::external_lock(
 		if (thd_test_options(thd, OPTION_NOT_AUTOCOMMIT | OPTION_BEGIN)) {
 			trans_register_ha(thd, true, ht);
 		}
+
+		// set some useful constants in case a table has all fixed length columns
+		numberOfFrontFixedColumns_ = SDBGetNumberOfFrontFixedColumns(sdbDbId_, sdbTableNumber_);
+		frontFixedColumnsLength_ = SDBGetFrontFixedColumnsLength(sdbDbId_, sdbTableNumber_);
 
 		/*
 		else if (txn->stmt == 0) {  //TBD: if there is no savepoint defined
@@ -2269,13 +2275,50 @@ int ha_scaledb::copyRowToMySQLBuffer(unsigned char* buf) {
 	// when the query is completed
 	SDBQueryCursorFreeBuffers(sdbQueryMgrId_);
 
-	for (int i=0; i < (int) table->s->fields; ++i) {
+	// First we copy the fixed-length columns at the front of a table record in one batch.
+	// This is feasible because data formats are the same for fixed-length columns
+
+	for (int i=0; i < (int) numberOfFrontFixedColumns_; ++i) {
+		fieldId = i + 1;  // field ID should start with 1 in ScaleDB engine; it starts with 0 in MySQL
+		pField = table->field[i];
+
+		if ( pField->null_ptr ) {	// This field is nullable
+			if (active_index == MAX_KEY) 
+				hasNullValue = SDBQueryCursorFieldIsNull(sdbQueryMgrId_, fieldId);
+			else
+				hasNullValue = SDBQueryCursorFieldIsNullByIndex(sdbQueryMgrId_, sdbDesignatorId_, fieldId);
+
+			if ( hasNullValue ) {
+				unsigned int nullByteOffset = (unsigned int)((char *)pField->null_ptr - (char *)table->record[0]);
+				buf[nullByteOffset] |= pField->null_bit;
+				continue;
+			}
+		}
+	}
+
+	// get the position of the first column in MySQL row buffer.
+	pField = table->field[0];
+	pFieldBuf = buf + ( pField->ptr - table->record[0] );
+
+	// get the position of the first column in ScaleDB row buffer.
+	if (active_index == MAX_KEY)
+		pSdbField = SDBQueryCursorGetSeqColumn(sdbQueryMgrId_, 1 );
+	else 
+		pSdbField = SDBQueryCursorGetFieldByTableId(sdbQueryMgrId_, sdbTableNumber_, 1);
+
+	// copy all the fixed-length columns in one batch.
+	if (numberOfFrontFixedColumns_ > 0)
+		memcpy(pFieldBuf, pSdbField, frontFixedColumnsLength_);
+
+
+	// Second, we copy the subsequent columns one-by-one starting with the first variable-length column
+
+	for (int i=numberOfFrontFixedColumns_; i < (int) table->s->fields; ++i) {
 
 		fieldId = i + 1;  // field ID should start with 1 in ScaleDB engine; it starts with 0 in MySQL
 		pField = table->field[i];
 
 		if ( pField->null_ptr ) {	// This field is nullable
-
 			if (active_index == MAX_KEY) 
 				hasNullValue = SDBQueryCursorFieldIsNull(sdbQueryMgrId_, fieldId);
 			else
@@ -2304,7 +2347,7 @@ int ha_scaledb::copyRowToMySQLBuffer(unsigned char* buf) {
 					break;
 				default:
 					break;
-		}
+		}	// switch
 
 		// Use the field offset to find the right location containing the field value.  
 		// pField->ptr points to the field data for the new row.
@@ -2368,7 +2411,6 @@ int ha_scaledb::copyRowToMySQLBuffer(unsigned char* buf) {
 		// not a variable length column
 		else {
 			if (active_index == MAX_KEY) {
-
 				pSdbField = SDBQueryCursorGetSeqColumn(sdbQueryMgrId_, fieldId );
 			}
 			else {
@@ -2387,21 +2429,22 @@ int ha_scaledb::copyRowToMySQLBuffer(unsigned char* buf) {
 #ifdef SDB_BUG974
 		if (fieldId < 5) {	// enable this code only when you debug Bug974
 			SDBDebugStart();			// synchronize threads printout	
-            int intValue = *((int *)pSdbField);
+			int intValue = *((int *)pSdbField);
 			if (fieldId == 1) {
-                if (intValue == 5000) {
-				    SDBDebugPrintHeader("This is last record in the test case: ");
-                    SDBDebugPrintString("can set a breakpoint here."); // set a breakpoint here
-                }
+				if (intValue == 5000) {
+					SDBDebugPrintHeader("This is last record in the test case: ");
+					SDBDebugPrintString("can set a breakpoint here."); // set a breakpoint here
+				}
 				SDBDebugPrintHeader("adm_note_id=");
-            }
+			}
 
 			SDBDebugPrintInt( intValue );
 			SDBDebugPrintString(", ");
 			SDBDebugEnd();			// synchronize threads printout	
 		}
 #endif
-	}
+	}	//	for (int i=numberOfFrontFixedColumns_; i < (int) table->s->fields; ++i) {
+
 
 	table->status = 0;
 	dbug_tmp_restore_column_map(table->write_set, org_bitmap);
@@ -4189,9 +4232,7 @@ int ha_scaledb::add_columns_to_table(THD* thd, TABLE *table_arg, unsigned short 
 			sdbMaxDataLength = 0;
 			break;
 
-			// In MySQL 5.1.20-beta, MySQL treats SET as string during create table and select.
-			// But it treats SET as INT during inserts.  This is wrong!  It happens to work now.
-			// The right way is to treat it as SET.  Need to check GA release.
+			// In MySQL 5.1.42, MySQL treats SET as string during create table, insert, and select.
 		case MYSQL_TYPE_SET:	// SET is treated as a non-negative integer.  Its length is up to 8 bytes
 			sdbFieldType = ENGINE_TYPE_U_NUMBER;
 			sdbFieldSize = ((Field_set*) pField)->pack_length();
@@ -4239,7 +4280,7 @@ int ha_scaledb::add_columns_to_table(THD* thd, TABLE *table_arg, unsigned short 
 
 			// In MySQL 5.1.20-beta, MySQL treats ENUM as string during create table and select.
 			// But it treats ENUM as INT during inserts.  This is wrong!  It happens to work now.
-			// The right way is to treat it as ENUM.  Need to check GA release.
+			// It appears to get fixed in mysql-5.1.42.
 			sdbFieldSize = ((Field_enum*) pField)->pack_length();	// TBD: need validation
 			sdbMaxDataLength = 0;
 			break;
@@ -4257,7 +4298,8 @@ int ha_scaledb::add_columns_to_table(THD* thd, TABLE *table_arg, unsigned short 
 			else{
 				sdbFieldType = ENGINE_TYPE_STRING;
 			}
-			sdbFieldSize = pField->field_length;
+			// do NOT use pField->field_length as it may be too big
+			sdbFieldSize = pField->pack_length();	// exact size used in RAM
 			sdbMaxDataLength = 0;
 			break;
 

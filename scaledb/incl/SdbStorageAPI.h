@@ -225,6 +225,10 @@ unsigned char SDBGetTableLockLevel(unsigned short userId, unsigned short dbId, u
 unsigned long long SDBGetTableStats(unsigned short dbId, unsigned short tableId, SDB_TABLE_STAT_INFO stat); 
 unsigned long long SDBGetTableStats(unsigned short dbId, char* tableName, SDB_TABLE_STAT_INFO stat); 
 
+unsigned short SDBGetNumberOfFrontFixedColumns(unsigned short dbId, unsigned short tableId);
+unsigned short SDBGetFrontFixedColumnsLength(unsigned short dbId, unsigned short tableId);
+
+
 /*
 //////////////////////////////////////////////////////////////////////////////
 //
