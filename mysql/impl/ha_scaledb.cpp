@@ -1539,12 +1539,13 @@ int ha_scaledb::close(void) {
 		DBUG_RETURN(free_share(share));
 	}
 
+	unsigned int sqlCommand;
 	if (thd) {
 		// thd is defined.  In this case, a user executes a DDL.
 		placeSdbMysqlTxnInfo( thd );
 
-		unsigned int sqlCommand = thd_sql_command(thd);
 		bool bIsAlterTableStmt = false;
+		sqlCommand = thd_sql_command(thd);
 		if (sqlCommand==SQLCOM_ALTER_TABLE || sqlCommand==SQLCOM_CREATE_INDEX || sqlCommand==SQLCOM_DROP_INDEX)
 			bIsAlterTableStmt = true;
 		if ( strstr(thd->query(), SCALEDB_HINT_PASS_DDL) )
@@ -1588,7 +1589,7 @@ int ha_scaledb::close(void) {
 	// for each instantiated table handler.  Hence we remove table information from metainfo for DDL/FLUSH statements only
 	// or this method is called from a system thread (such as mysqladmin shutdown command).
 	if (needToRemoveFromScaledbCache) {
-		if (ddlFlag & SDBFLAG_DDL_SECOND_NODE)	// TODO: need to evaluate DROP TABLE on non-primary nodes
+		if (ddlFlag & SDBFLAG_DDL_SECOND_NODE)
 			errorCode = SDBCloseTable(userId, sdbDbId_, table->s->table_name.str, false, false);
 		else
 			errorCode = SDBCloseTable(userId, sdbDbId_, table->s->table_name.str, true, needToCommit);
@@ -1596,6 +1597,30 @@ int ha_scaledb::close(void) {
 		if (errorCode)
 			DBUG_RETURN(convertToMysqlErrorCode(errorCode));
 	}
+
+#ifdef SDB_DEBUG_LIGHT
+	if (mysqlInterfaceDebugLevel_ > 1) {
+		SDBDebugStart();			// synchronize threads printout	
+		SDBDebugPrintHeader("In ha_scaledb::close, needToRemoveFromScaledbCache=");
+		if (needToRemoveFromScaledbCache)
+			SDBDebugPrintString("true");
+		else
+			SDBDebugPrintString("false");
+
+		SDBDebugPrintString(", needToCommit=");
+		if (needToCommit)
+			SDBDebugPrintString("true");
+		else
+			SDBDebugPrintString("false");
+
+		if (thd) {
+			SDBDebugPrintString("sqlCommand=");
+			SDBDebugPrintInt(sqlCommand);
+		}
+
+		SDBDebugEnd();			// synchronize threads printout	
+	}
+#endif
 
 #ifdef SDB_DEBUG
 	if (mysqlInterfaceDebugLevel_ > 4) {
