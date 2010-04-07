@@ -3119,8 +3119,8 @@ int ha_scaledb::index_next(unsigned char* buf) {
 
 	ha_statistic_increment(&SSV::ha_read_next_count);
 	int errorNum = 0;
-
-	SDBQueryCursorSetFlags(sdbQueryMgrId_, sdbDesignatorId_, false,SDB_KEY_SEARCH_DIRECTION_GE, false, true);
+	// appears no need to call SDBQueryCursorSetFlags as it is already called in index_read.
+	//SDBQueryCursorSetFlags(sdbQueryMgrId_, sdbDesignatorId_, false,SDB_KEY_SEARCH_DIRECTION_GE, false, true);
 
 	if (virtualTableFlag_)
 		errorNum = fetchVirtualRow(buf);
@@ -3140,6 +3140,10 @@ int ha_scaledb::index_next(unsigned char* buf) {
 }
 
 
+// This method reads the next row matching the key value given as the parameter.
+// For example, an index consists of two columns.  But a user query specifies value for one column only.
+// SELECT * FROM t1 WHERE c1 = 5;  Note that an index consists of two columns c1 and c2.
+// In index_read method, we specify SDB_KEY_SEARCH_DIRECTION_EQ.  Here we specify SDB_KEY_SEARCH_DIRECTION_GE. 
 int ha_scaledb::index_next_same(uchar* buf, const uchar* key, uint keylen) {
 	DBUG_ENTER("ha_scaledb::index_next_same");
 #ifdef SDB_DEBUG_LIGHT
@@ -3158,8 +3162,8 @@ int ha_scaledb::index_next_same(uchar* buf, const uchar* key, uint keylen) {
 #endif
 
 	int errorNum = 0;
-
-	SDBQueryCursorSetFlags(sdbQueryMgrId_, sdbDesignatorId_, false,SDB_KEY_SEARCH_DIRECTION_GE, true, true);
+	// appears no need to call SDBQueryCursorSetFlags as it is already called in index_read.
+	//SDBQueryCursorSetFlags(sdbQueryMgrId_, sdbDesignatorId_, false,SDB_KEY_SEARCH_DIRECTION_GE, true, true);
 
 	if (virtualTableFlag_)
 		errorNum = fetchVirtualRow(buf);
@@ -3243,7 +3247,8 @@ int ha_scaledb::index_prev(uchar * buf) {
 
 	ha_statistic_increment(&SSV::ha_read_prev_count);
 	int errorNum = 0;
-	SDBQueryCursorSetFlags(sdbQueryMgrId_, sdbDesignatorId_, false,SDB_KEY_SEARCH_DIRECTION_LE, false, true);
+	// appears no need to call SDBQueryCursorSetFlags as it is already called in index_read.
+	//SDBQueryCursorSetFlags(sdbQueryMgrId_, sdbDesignatorId_, false,SDB_KEY_SEARCH_DIRECTION_LE, false, true);
 
 	if (virtualTableFlag_)
 		errorNum = fetchVirtualRow(buf);
