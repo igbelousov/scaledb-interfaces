@@ -3119,8 +3119,8 @@ int ha_scaledb::index_next(unsigned char* buf) {
 
 	ha_statistic_increment(&SSV::ha_read_next_count);
 	int errorNum = 0;
-	// appears no need to call SDBQueryCursorSetFlags as it is already called in index_read.
-	//SDBQueryCursorSetFlags(sdbQueryMgrId_, sdbDesignatorId_, false,SDB_KEY_SEARCH_DIRECTION_GE, false, true);
+	// Bug 1132: still need to call SDBQueryCursorSetFlags as distinct parameter may have diffrent value than the one set in index_read.
+	SDBQueryCursorSetFlags(sdbQueryMgrId_, sdbDesignatorId_, false,SDB_KEY_SEARCH_DIRECTION_GE, false, true);
 
 	if (virtualTableFlag_)
 		errorNum = fetchVirtualRow(buf);
@@ -3162,8 +3162,8 @@ int ha_scaledb::index_next_same(uchar* buf, const uchar* key, uint keylen) {
 #endif
 
 	int errorNum = 0;
-	// appears no need to call SDBQueryCursorSetFlags as it is already called in index_read.
-	//SDBQueryCursorSetFlags(sdbQueryMgrId_, sdbDesignatorId_, false,SDB_KEY_SEARCH_DIRECTION_GE, true, true);
+	// Bug 1132: still need to call SDBQueryCursorSetFlags as distinct parameter may have diffrent value than the one set in index_read.
+	SDBQueryCursorSetFlags(sdbQueryMgrId_, sdbDesignatorId_, false,SDB_KEY_SEARCH_DIRECTION_GE, true, true);
 
 	if (virtualTableFlag_)
 		errorNum = fetchVirtualRow(buf);
@@ -3247,8 +3247,8 @@ int ha_scaledb::index_prev(uchar * buf) {
 
 	ha_statistic_increment(&SSV::ha_read_prev_count);
 	int errorNum = 0;
-	// appears no need to call SDBQueryCursorSetFlags as it is already called in index_read.
-	//SDBQueryCursorSetFlags(sdbQueryMgrId_, sdbDesignatorId_, false,SDB_KEY_SEARCH_DIRECTION_LE, false, true);
+	// Bug 1132: still need to call SDBQueryCursorSetFlags as distinct parameter may have diffrent value than the one set in index_read.
+	SDBQueryCursorSetFlags(sdbQueryMgrId_, sdbDesignatorId_, false,SDB_KEY_SEARCH_DIRECTION_LE, false, true);
 
 	if (virtualTableFlag_)
 		errorNum = fetchVirtualRow(buf);
@@ -3825,6 +3825,12 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 		SDBDebugFlush();
 		DBUG_RETURN(HA_ERR_UNKNOWN_CHARSET);		
 	}
+
+	// TODO: As of 4/20/2010, we support charset in either ascii or latin1 only.
+	// After we support utf8, we need to revise this checking.
+	if ( (strncmp(create_info->default_table_charset->csname, "ascii", 5) != 0) &&
+		 (strncmp(create_info->default_table_charset->csname, "latin1", 6) != 0) )
+		DBUG_RETURN(HA_ERR_UNKNOWN_CHARSET);		
 
 	// Check if Database name and table name are US ASCII for now. 
 	//if ( (DataUtil::isUsAscii(table_arg->s->db.str) == false) || 
