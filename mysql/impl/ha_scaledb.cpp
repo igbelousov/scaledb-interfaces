@@ -1494,9 +1494,10 @@ int ha_scaledb::open(const char *name, int mode, uint test_if_locked) {
 	// We can commit without problem for this new user
 	SDBCommit(userIdforOpen);
 	SDBRemoveUserById(userIdforOpen);
-	info(HA_STATUS_VARIABLE | HA_STATUS_CONST);
-
 	errorNum = convertToMysqlErrorCode(retCode);
+	if (errorNum == 0)
+		errorNum = info(HA_STATUS_VARIABLE | HA_STATUS_CONST);
+
 	DBUG_RETURN(errorNum);
 }
 
@@ -3578,6 +3579,8 @@ int ha_scaledb::info(uint flag)
 
 	if ( sdbTableNumber_ == 0 ) {
 		sdbTableNumber_ = SDBGetTableNumberByName(sdbUserId_, sdbDbId_, table->s->table_name.str);
+		if (sdbTableNumber_ == 0)
+			DBUG_RETURN(convertToMysqlErrorCode(TABLE_NAME_UNDEFINED));
 	}
 
 	if (flag & HA_STATUS_ERRKEY) {
@@ -5134,6 +5137,7 @@ bool ha_scaledb::check_if_incompatible_data(HA_CREATE_INFO*	info, uint table_cha
 // analyze the table
 int ha_scaledb::analyze(THD* thd, HA_CHECK_OPT*	check_opt)
 {
+	DBUG_ENTER("ha_scaledb::analyze");
 #ifdef SDB_DEBUG_LIGHT
 	if (mysqlInterfaceDebugLevel_) {
 		SDBDebugStart();			// synchronize threads printout	
@@ -5141,8 +5145,8 @@ int ha_scaledb::analyze(THD* thd, HA_CHECK_OPT*	check_opt)
 		SDBDebugEnd();			// synchronize threads printout	
 	}
 #endif
-	info(HA_STATUS_TIME | HA_STATUS_CONST | HA_STATUS_VARIABLE);
-	return 0;
+	int errorNum = info(HA_STATUS_TIME | HA_STATUS_CONST | HA_STATUS_VARIABLE);
+	DBUG_RETURN(errorNum);
 }
 
 // initialize the index
@@ -5789,6 +5793,12 @@ static MYSQL_SYSVAR_STR(config_file, scaledb_config_file,
 
 static struct st_mysql_sys_var* scaledb_system_variables[]= {
 	MYSQL_SYSVAR(config_file),
+	/* TODO: to be enabled later
+	MYSQL_SYSVAR(data_directory),
+	MYSQL_SYSVAR(log_directory),
+	MYSQL_SYSVAR(buffer_size_index),
+	MYSQL_SYSVAR(buffer_size_data),
+	*/
 	NULL
 };
 
@@ -5798,14 +5808,15 @@ mysql_declare_plugin(scaledb)
 		&scaledb_storage_engine,
 		"ScaleDB",
 		"ScaleDB, Inc.",
-		"ScaleDB storage engine with Trie indexing",
+		"ScaleDB is a transactional storage engine that runs on a cluster machine with multiple nodes.  No data partition needed.",
 		PLUGIN_LICENSE_PROPRIETARY,
 		scaledb_init_func,			/* Plugin Init		*/
 		scaledb_done_func,			/* Plugin Deinit	*/
 		0x0100	,					/* version 1.0		*/
-		NULL,                       /* status variables	*/
-		scaledb_system_variables,   /* system variables	*/
-		NULL                        /* config options	*/
+		//scaledb_status_variables_export,	/* status variables	*/
+		NULL,	/* status variables	*/
+		scaledb_system_variables,			/* system variables	*/
+		NULL								/* config options	*/
 }
 mysql_declare_plugin_end;
 
