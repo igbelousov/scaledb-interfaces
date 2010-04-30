@@ -4043,10 +4043,6 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 	// Bug 1008: A user may CREATE TABLE and then RENAME TABLE immediately. 
 	// In order to fix this bug, we need to open and create the table files. Then we can rename the table files.
 	SDBOpenTableFiles(sdbUserId_, sdbDbId_, sdbTableNumber_);
-	if ( sqlCommand == SQLCOM_CREATE_TABLE ) 
-		SDBCloseTable(sdbUserId_, sdbDbId_, pTableName, true, true);
-	else	// do not commit for ALTER TABLE statement
-		SDBCloseTable(sdbUserId_, sdbDbId_, pTableName, true, false);
 
 #ifdef SDB_DEBUG_LIGHT
 	if (mysqlInterfaceDebugLevel_ > 1) 
@@ -4065,6 +4061,11 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 		SDBShowUserLockStatus(sdbUserId_);
 	}
 #endif
+
+	if ( sqlCommand == SQLCOM_CREATE_TABLE ) 
+		SDBCloseTable(sdbUserId_, sdbDbId_, pTableName, true, true);
+	else	// do not commit for ALTER TABLE statement
+		SDBCloseTable(sdbUserId_, sdbDbId_, pTableName, true, false);
 
 	// pass the DDL statement to engine so that it can be propagated to other nodes.
 	// We need to make sure it is a regular CREATE TABLE command because this method is called

@@ -128,7 +128,7 @@ bool SdbMysqlClient::connect(){
 #ifdef SDB_DEBUG
 	unsigned int timeoutInSeconds = 3600;	// to use with a debugger breakpoint
 #else
-	unsigned int timeoutInSeconds = 600;
+	unsigned int timeoutInSeconds = 3600;
 #endif
 
 	int retCode = 0;
