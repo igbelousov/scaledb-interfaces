@@ -228,6 +228,7 @@ unsigned long long SDBGetTableStats(unsigned short dbId, char* tableName, SDB_TA
 unsigned short SDBGetNumberOfFrontFixedColumns(unsigned short dbId, unsigned short tableId);
 unsigned short SDBGetFrontFixedColumnsLength(unsigned short dbId, unsigned short tableId);
 
+char* SDBGetForeignKeyClause(unsigned short userId, unsigned short dbId, unsigned short tableId);
 
 /*
 //////////////////////////////////////////////////////////////////////////////
@@ -246,7 +247,7 @@ unsigned short SDBCreateIndex(unsigned int userId, unsigned short dbId, unsigned
 unsigned short SDBDropIndex(unsigned int userId, unsigned short dbId, unsigned short tableId, char *indexName);
 
 unsigned short SDBDefineForeignKey(unsigned int userId, unsigned short dbId, 
-								   char *tableName, char *parentTableName, 
+								   char *tableName, char *parentTableName, char* pForeignKeyName,
 								   char **fieldsInTable, char **fieldsInParentTable);
 
 char *SDBGetParentIndexByForeignFields(unsigned short dbmsId, char *tableName, char **fields, char **foreignFields);

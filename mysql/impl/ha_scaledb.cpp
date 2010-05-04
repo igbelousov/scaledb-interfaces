@@ -1966,6 +1966,44 @@ void ha_scaledb::update_create_info(HA_CREATE_INFO* create_info) {
 }
 
 
+// For SHOW CREATE TABLE statement, the method recreates foreign key constraint clause
+// based on ScaleDB's metadata information, and then return it to MySQL 
+char* ha_scaledb::get_foreign_key_create_info() {
+#ifdef SDB_DEBUG_LIGHT
+	if (mysqlInterfaceDebugLevel_) {
+		SDBDebugStart();			// synchronize threads printout	
+		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::get_foreign_key_create_info() on table ");
+		SDBDebugPrintString( table->s->table_name.str );
+		SDBDebugPrintString(" ");
+		SDBDebugEnd();			// synchronize threads printout	
+	}
+#endif
+
+	THD* thd = ha_thd();
+	placeSdbMysqlTxnInfo( thd );
+
+	return SDBGetForeignKeyClause(sdbUserId_, sdbDbId_, sdbTableNumber_);
+}
+
+
+// This method frees the string containing foreign key clause
+void ha_scaledb::free_foreign_key_create_info(char* str) {
+#ifdef SDB_DEBUG_LIGHT
+	if (mysqlInterfaceDebugLevel_) {
+		SDBDebugStart();			// synchronize threads printout	
+		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::free_foreign_key_create_info(...) on table ");
+		SDBDebugPrintString( table->s->table_name.str );
+		SDBDebugPrintString(" ");
+		SDBDebugEnd();			// synchronize threads printout	
+	}
+#endif
+
+	if (str) {
+		RELEASE_MEMORY(str);
+	}
+}
+
+
 // This method updates a record with both the old row data and the new row data specified 
 int ha_scaledb::update_row(const unsigned char* old_row, unsigned char* new_row) {
 	DBUG_ENTER("ha_scaledb::update_row");
@@ -4432,13 +4470,25 @@ int ha_scaledb::create_fks(THD* thd, TABLE *table_arg, char* tblName, SdbDynamic
 		//		REFERENCES tbl_name (index_col_name,...)
 		// MySQL creates a non-unique secondary index in the child table for a foreign key constraint
 
-		char* pForeignKeyClause = strstr( pCreateTableStmt, "foreign key ");
-		while ( pForeignKeyClause != NULL ) {  // foreign key clause exists
+		char* pCurrConstraintClause = strstr( pCreateTableStmt, "constraint ");
+		char* pCurrForeignKeyClause = strstr( pCreateTableStmt, "foreign key ");
+		char* pConstraintName = NULL;
+		while ( pCurrForeignKeyClause != NULL ) {  // foreign key clause exists
+			pConstraintName = NULL;
+			if (pCurrConstraintClause && pCurrForeignKeyClause) {
+				if (pCurrForeignKeyClause - pCurrConstraintClause > 11)
+					pConstraintName = pCurrConstraintClause + 11;	// there are 11 characters in "constraint "
+			}
+
 			MysqlForeignKey* pKeyI = new MysqlForeignKey();
-			char* pOffset = pForeignKeyClause + 12;  // there are 12 characters in "foreign key "
-			pKeyI->setForeignKeyName( pOffset );   // set foreign key name
+			char* pOffset = pCurrForeignKeyClause + 12;  // there are 12 characters in "foreign key "
+			if (pConstraintName)
+				pKeyI->setForeignKeyName( pConstraintName );// use constraint symbol as foreign key constraint name
+			else
+				pKeyI->setForeignKeyName( pOffset );		// use index_name as foreign key constraint name
+
 			pOffset = pOffset + pKeyI->getForeignKeyNameLength();
-			char* pColumnNames = strstr( pOffset, "(" );   // points to column name
+			char* pColumnNames = strstr( pOffset, "(" );	// points to column name
 
 			if (!pColumnNames) {
 				errorNum = HA_ERR_CANNOT_ADD_FOREIGN;
@@ -4476,7 +4526,7 @@ int ha_scaledb::create_fks(THD* thd, TABLE *table_arg, char* tblName, SdbDynamic
 				//fkInfoArray->putPtrInArray(keyNum+1, pKeyI);
 			}
 
-			unsigned short retValue = SDBDefineForeignKey(sdbUserId_, sdbDbId_, tblName, pParentTableName, 
+			unsigned short retValue = SDBDefineForeignKey(sdbUserId_, sdbDbId_, tblName, pParentTableName, pKeyI->getForeignKeyName(),
 				pKeyI->getIndexColumnNames(), pKeyI->getParentColumnNames() );
 
 
@@ -4487,8 +4537,9 @@ int ha_scaledb::create_fks(THD* thd, TABLE *table_arg, char* tblName, SdbDynamic
 
 			// Need to add a non-unique secondary index here based on the foreign key constraint
 
-			pForeignKeyClause = strstr( pOffset, "foreign key ");
-		}	// while ( pForeignKeyClause != NULL )
+			pCurrConstraintClause = strstr( pOffset, "constraint ");
+			pCurrForeignKeyClause = strstr( pOffset, "foreign key ");
+		}	// while ( pCurrForeignKeyClause != NULL )
 
 	}	// if ( thd->query_length() > 0 )
 

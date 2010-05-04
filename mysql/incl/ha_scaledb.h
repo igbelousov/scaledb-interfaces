@@ -322,6 +322,11 @@ public:
 	// Update HA_CREATE_INFO object.  Used in SHOW CREATE TABLE
 	void update_create_info(HA_CREATE_INFO* create_info);
 
+	// For SHOW CREATE TABLE statement, these two methods recreate foreign key constraint clause
+	// based on ScaleDB's metadata information, and then return it to MySQL 
+	char* get_foreign_key_create_info();
+	void free_foreign_key_create_info(char* str);
+
 	// set detailed error message for fk constraint failures
     bool get_error_message(int error, String *buf);
 
