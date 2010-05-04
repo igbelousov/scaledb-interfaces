@@ -4484,10 +4484,11 @@ int ha_scaledb::create_fks(THD* thd, TABLE *table_arg, char* tblName, SdbDynamic
 			char* pOffset = pCurrForeignKeyClause + 12;  // there are 12 characters in "foreign key "
 			if (pConstraintName)
 				pKeyI->setForeignKeyName( pConstraintName );// use constraint symbol as foreign key constraint name
-			else
+			else {
 				pKeyI->setForeignKeyName( pOffset );		// use index_name as foreign key constraint name
+				pOffset = pOffset + pKeyI->getForeignKeyNameLength();	// advance after index_name
+			}
 
-			pOffset = pOffset + pKeyI->getForeignKeyNameLength();
 			char* pColumnNames = strstr( pOffset, "(" );	// points to column name
 
 			if (!pColumnNames) {
