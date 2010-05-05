@@ -1112,7 +1112,7 @@ int ha_scaledb::external_lock(
 
 	if (lock_type != F_UNLCK) {
 
-#ifdef SDB_DEBUG
+#ifdef SDB_DEBUG_LIGHT
 		SDBLogSqlStmt(sdbUserId_, thd->query(), thd->query_id);	// inform engine to log user query for DML
 #endif
 		bool all_tx = false;
@@ -3892,7 +3892,7 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 	unsigned int errorNum = 0;
 	THD* thd = ha_thd();
 	placeSdbMysqlTxnInfo( thd );	
-#ifdef SDB_DEBUG
+#ifdef SDB_DEBUG_LIGHT
 	SDBLogSqlStmt(sdbUserId_, thd->query(), thd->query_id);	// inform engine to log user query for DDL
 #endif
 
@@ -4721,7 +4721,7 @@ int ha_scaledb::delete_table(const char* name)
 	bool bIsAlterTableStmt = false;
 	THD* thd = ha_thd();
 	placeSdbMysqlTxnInfo( thd );	
-#ifdef SDB_DEBUG
+#ifdef SDB_DEBUG_LIGHT
 	SDBLogSqlStmt(sdbUserId_, thd->query(), thd->query_id);	// inform engine to log user query for DDL
 #endif
 
@@ -4937,7 +4937,7 @@ int ha_scaledb::rename_table(const char* fromTable, const char* toTable) {
 	bool bIsAlterTableStmt = false;
 	THD* thd = ha_thd();
 	placeSdbMysqlTxnInfo( thd );	
-#ifdef SDB_DEBUG
+#ifdef SDB_DEBUG_LIGHT
 	SDBLogSqlStmt(sdbUserId_, thd->query(), thd->query_id);	// inform engine to log user query for DDL
 #endif
 
