@@ -4805,6 +4805,11 @@ int ha_scaledb::delete_table(const char* name)
 	// In our metadata, we save the original user-defined table name and the file-system-compliant name.
 	pTableName = SDBGetTableNameByNumber(sdbUserId_, sdbDbId_, sdbTableNumber_);
 	retCode = SDBCanTableBeDropped(sdbUserId_, sdbDbId_, pTableName);
+	if ( bIsAlterTableStmt && (retCode == METAINFO_ATTEMPT_DROP_REFERENCED_TABLE) ) {
+		ddlFlag |= SDBFLAG_DONOT_CHECK_TABLE_REFERENCE;
+		retCode= SUCCESS;	// Bug 1151: allow it to proceed if it is ALTER TABLE statement
+	}
+
 	if (retCode == SUCCESS) {
 
 		// For DROP TABLE and DROP DATABASE, we need to impose the exclusive table level lock.
@@ -4861,7 +4866,7 @@ int ha_scaledb::delete_table(const char* name)
 
 	// For ALTER TABLE in cluster, this is the last MySQL interface method call.
 	// The primary node now replicates DDL to other nodes.
-	if ( bIsAlterTableStmt && (SDBNodeIsCluster() == true) && ( strstr(tblFsName, MYSQL_TEMP_TABLE_PREFIX2) ) ) {
+	if ( (retCode == SUCCESS) && bIsAlterTableStmt && (SDBNodeIsCluster() == true) && ( strstr(tblFsName, MYSQL_TEMP_TABLE_PREFIX2) ) ) {
 		// if the table to be dropped is the second temp table, then we proceed to replicate to other nodes.
 		// if not, then we are rolling back an ALTER TABLE statement by removing the first temp table; 
 		// hence there is no need to send ALTER TABLE statements to other nodes
@@ -4871,7 +4876,11 @@ int ha_scaledb::delete_table(const char* name)
 	}
 
 	// For both DROP TABLE and ALTER TABLE, primary node needs to release lockMetaInfo and table level lock
-	SDBCommit(sdbUserId_);
+	if (retCode == SUCCESS)
+		SDBCommit(sdbUserId_);
+	else
+		SDBRollBack(sdbUserId_);
+
 	pSdbMysqlTxn_->setDdlFlag(0);	// Bug1039: reset the flag as a subsequent statement may check this flag
 	pSdbMysqlTxn_->setActiveTrn( false );	// mark the end of long implicit transaction
 

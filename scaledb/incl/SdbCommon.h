@@ -98,6 +98,7 @@ typedef enum SdbKeySearchDirection {
 #define SDBFLAG_CMD_CLOSE_FILE	(1 << 3) /* close table files on a non-primary node */
 #define SDBFLAG_ALTER_TABLE_KEYS (1 << 4) /* set up this flag if the statement is ALTER TABLE DISABLE/ENABLE KEYS */
 #define SDBFLAG_ALTER_TABLE_CREATE (1 << 5) /* set up this flag if MySQL has called create() method for ALTER TABLE */
+#define SDBFLAG_DONOT_CHECK_TABLE_REFERENCE (1 << 6)	// It is okay not to check foreign key constraint
 
 #define SDB_VIRTUAL_VIEW "sdb_view_"
 #define SDB_VIRTUAL_VIEW_PREFIX_BYTES  9
