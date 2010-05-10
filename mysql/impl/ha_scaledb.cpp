@@ -55,7 +55,23 @@ const char* mysql_key_flag_strings[] = {
 	"HA_READ_PREFIX_LAST_OR_PREV"
 };
 
+/* variables for ScaleDB configuration parameters */
+
 static char* scaledb_config_file = NULL;
+static char* scaledb_data_directory = NULL;
+static char* scaledb_log_directory = NULL;
+static my_bool scaledb_log_dir_append_host	= FALSE;
+static unsigned int scaledb_buffer_size_index;
+static unsigned int scaledb_buffer_size_data;
+static unsigned int scaledb_max_file_handles;
+static my_bool scaledb_aio_flag = TRUE;
+static unsigned int scaledb_max_column_length_in_base_file;
+static unsigned int scaledb_dead_lock_milliseconds;
+static my_bool scaledb_cluster = FALSE;
+static unsigned int scaledb_cluster_port;
+static char* scaledb_cluster_user = NULL;
+static unsigned int scaledb_heartbeat_seconds;
+static char* scaledb_debug_string = NULL;
 
 static int scaledb_init_func();
 static handler *scaledb_create_handler(handlerton *hton,
@@ -294,6 +310,22 @@ static int scaledb_init_func(void *p)
 		SDBDebugEnd();			// synchronize threads printout	
 	}
 #endif
+
+	// Get all ScaleDB Configuration Parameters
+	scaledb_data_directory = SDBGetDataDirectory();
+	scaledb_log_directory = SDBGetLogDirectory();
+	scaledb_log_dir_append_host = SDBGetLogDirAppendHost();
+	scaledb_buffer_size_index = SDBGetBufferSizeIndex();
+	scaledb_buffer_size_data = SDBGetBufferSizeData();
+	scaledb_max_file_handles = SDBGetMaxFileHandles();
+	scaledb_aio_flag = SDBGetAioFlag();
+	scaledb_max_column_length_in_base_file = SDBGetMaxColumnLengthInBaseFile();
+	scaledb_dead_lock_milliseconds = SDBGetDeadlockMilliseconds();
+	scaledb_cluster = SDBNodeIsCluster();
+	scaledb_cluster_port = SDBGetClusterPort();
+	scaledb_cluster_user = SDBGetClusterUser();
+	scaledb_heartbeat_seconds = SDBGetHeartbeatSeconds();
+	scaledb_debug_string = SDBGetDebugString();
 
 	DBUG_RETURN(0);
 }
@@ -964,7 +996,7 @@ uint ha_scaledb::max_supported_key_part_length() const {
 	}
 #endif
 
-	return SDBGetMaxColumnLengthInBaseFile();
+	return scaledb_max_column_length_in_base_file;
 }
 
 void start_new_stmt_trx(THD *thd, handlerton *hton)
@@ -1333,7 +1365,7 @@ unsigned short ha_scaledb::openUserDatabase(char* pDbName, char *pDbFsName, bool
 	if ( sdbDbId_ == 0 )
 		needToOpenDbFiles = true;
 	else {
-		// If we use configuration parameter 'db_directory' to define a database location,
+		// If we use configuration parameter 'scaledb_db_directory' to define a database location,
 		// then we may set a Dbid without opening the database.
 		// In this case, we need to open the user database here.
 		if ( SDBGetDatabaseStatusByNumber(sdbDbId_) == false )
@@ -4169,7 +4201,6 @@ int ha_scaledb::has_overflow_fields(THD* thd, TABLE *table_arg){
 	enum_field_types fieldType;
 	unsigned short sdbFieldSize;
 	unsigned int sdbMaxDataLength; 
-	unsigned int maxColumnLengthInBaseFile = SDBGetMaxColumnLengthInBaseFile();
 
 	for (unsigned short i=0; i < (int) table_arg->s->fields; ++i) {
 		pField = table_arg->field[i];
@@ -4178,8 +4209,8 @@ int ha_scaledb::has_overflow_fields(THD* thd, TABLE *table_arg){
 		case MYSQL_TYPE_VARCHAR:  
 		case MYSQL_TYPE_VAR_STRING: 
 		case MYSQL_TYPE_TINY_BLOB:  // tiny	blob applies to to TEXT as well
-			if( pField->field_length > maxColumnLengthInBaseFile )
-				sdbFieldSize = maxColumnLengthInBaseFile;
+			if( pField->field_length > scaledb_max_column_length_in_base_file )
+				sdbFieldSize = scaledb_max_column_length_in_base_file;
 			else
 				sdbFieldSize = pField->field_length;
 			sdbMaxDataLength = pField->field_length;
@@ -4196,8 +4227,8 @@ int ha_scaledb::has_overflow_fields(THD* thd, TABLE *table_arg){
 			// how much in the overflow file. If field does not participate in any index then
 			// we do not store anything as part of the record.
 			sdbFieldSize = get_field_key_participation_length(thd, table_arg, pField);
-			if( sdbFieldSize > maxColumnLengthInBaseFile )
-				sdbFieldSize = maxColumnLengthInBaseFile; // can not exceed maxColumnLengthInBaseFile under any circumstances)
+			if( sdbFieldSize > scaledb_max_column_length_in_base_file )
+				sdbFieldSize = scaledb_max_column_length_in_base_file; // can not exceed scaledb_max_column_length_in_base_file under any circumstances)
 
 			sdbMaxDataLength = pField->field_length;
 			if (sdbMaxDataLength > sdbFieldSize)
@@ -4223,7 +4254,6 @@ int ha_scaledb::add_columns_to_table(THD* thd, TABLE *table_arg, unsigned short 
 	unsigned short sdbFieldSize;
 	unsigned int sdbMaxDataLength; 
 	unsigned short sdbFieldId;
-	unsigned int maxColumnLengthInBaseFile = SDBGetMaxColumnLengthInBaseFile();
 	bool isAutoIncrField;
 	Field* pAutoIncrField = NULL;
 	const char* charsetName = NULL;
@@ -4394,8 +4424,8 @@ int ha_scaledb::add_columns_to_table(THD* thd, TABLE *table_arg, unsigned short 
 //			which is not desirable.
 			sdbFieldType = ENGINE_TYPE_BYTE_ARRAY;
 
-			if( pField->field_length > maxColumnLengthInBaseFile )
-				sdbFieldSize = maxColumnLengthInBaseFile;
+			if( pField->field_length > scaledb_max_column_length_in_base_file )
+				sdbFieldSize = scaledb_max_column_length_in_base_file;
 			else
 				sdbFieldSize = pField->field_length;
 			sdbMaxDataLength = pField->field_length;
@@ -4419,8 +4449,8 @@ int ha_scaledb::add_columns_to_table(THD* thd, TABLE *table_arg, unsigned short 
 			// how much in the overflow file. If field does not participate in any index then
 			// we do not store anything as part of the record.
 			sdbFieldSize = get_field_key_participation_length(thd, table_arg, pField);
-			if( sdbFieldSize > maxColumnLengthInBaseFile )
-				sdbFieldSize = maxColumnLengthInBaseFile; // can not exceed maxColumnLengthInBaseFile under any circumstances)
+			if( sdbFieldSize > scaledb_max_column_length_in_base_file )
+				sdbFieldSize = scaledb_max_column_length_in_base_file; // can not exceed scaledb_max_column_length_in_base_file under any circumstances)
 
 			sdbMaxDataLength = pField->field_length;
 			break;
@@ -5849,36 +5879,114 @@ struct st_mysql_storage_engine scaledb_storage_engine =
 { MYSQL_HANDLERTON_INTERFACE_VERSION };
 
 static MYSQL_SYSVAR_STR(config_file, scaledb_config_file,
-						PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
-						"ScaledDB Config File Path",
-						NULL, NULL, NULL);
+			PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
+			"ScaledDB Config File Path",
+			NULL, NULL, NULL);
+
+static MYSQL_SYSVAR_STR(data_directory, scaledb_data_directory,
+			PLUGIN_VAR_NOCMDOPT | PLUGIN_VAR_READONLY,
+			"The default data directory used by ScaledDB storage engine",
+			NULL, NULL, NULL);
+
+static MYSQL_SYSVAR_STR(log_directory, scaledb_log_directory,
+			PLUGIN_VAR_NOCMDOPT | PLUGIN_VAR_READONLY,
+			"The default log directory used by ScaledDB storage engine",
+			NULL, NULL, NULL);
+
+static MYSQL_SYSVAR_BOOL(log_dir_append_host, scaledb_log_dir_append_host,
+			PLUGIN_VAR_NOCMDOPT | PLUGIN_VAR_READONLY,
+			"Make hostname be appeneded to the log directory",
+			NULL, NULL, FALSE);
+
+static MYSQL_SYSVAR_UINT(buffer_size_index, scaledb_buffer_size_index,
+			PLUGIN_VAR_NOCMDOPT | PLUGIN_VAR_READONLY,
+			"This parameter specifies the number of Mega-Bytes (MB) memory space reserved for the index cache by ScaleDB engine",
+			NULL, NULL, 10, 1, 1000000, 8192);
+
+static MYSQL_SYSVAR_UINT(buffer_size_data, scaledb_buffer_size_data,
+			PLUGIN_VAR_NOCMDOPT | PLUGIN_VAR_READONLY,
+			"This parameter specifies the number of Mega-Bytes (MB) memory space reserved for the data cache by ScaleDB engine",
+			NULL, NULL, 30, 1, 1000000, 8192);
+
+static MYSQL_SYSVAR_UINT(max_file_handles, scaledb_max_file_handles,
+			PLUGIN_VAR_NOCMDOPT | PLUGIN_VAR_READONLY,
+			"This parameter specifies the maximum number of file handles for each physical file.",
+			NULL, NULL, 2, 2, 100, 0);
+
+static MYSQL_SYSVAR_BOOL(aio_flag, scaledb_aio_flag,
+			PLUGIN_VAR_NOCMDOPT | PLUGIN_VAR_READONLY,
+			"Make hostname be appeneded to the log directory",
+			NULL, NULL, TRUE);
+
+static MYSQL_SYSVAR_UINT(max_column_length_in_base_file, scaledb_max_column_length_in_base_file,
+			PLUGIN_VAR_NOCMDOPT | PLUGIN_VAR_READONLY,
+			"This parameter specifies the maximum number of bytes saved in the base file for a variable-length (VARCHAR or VARBINARY) column.",
+			NULL, NULL, 255, 127, 2047, 0);
+
+static MYSQL_SYSVAR_UINT(dead_lock_milliseconds, scaledb_dead_lock_milliseconds,
+			PLUGIN_VAR_NOCMDOPT | PLUGIN_VAR_READONLY,
+			"This parameter sets the time for ScaleDB engine to detect a dead lock.",
+			NULL, NULL, 3000, 0, 180000, 0);
+
+static MYSQL_SYSVAR_BOOL(cluster, scaledb_cluster,
+			PLUGIN_VAR_NOCMDOPT | PLUGIN_VAR_READONLY,
+			"This flag shows whether ScaleDB cluster software is enabled.",
+			NULL, NULL, FALSE);
+
+static MYSQL_SYSVAR_UINT(cluster_port, scaledb_cluster_port,
+			PLUGIN_VAR_NOCMDOPT | PLUGIN_VAR_READONLY,
+			"This parameter specifies the port for connecting to mysql for DDL operations, leave option out if using default port.",
+			NULL, NULL, 3306, 1, UINT_MAX, 0);
+
+static MYSQL_SYSVAR_STR(cluster_user, scaledb_cluster_user,
+			PLUGIN_VAR_NOCMDOPT | PLUGIN_VAR_READONLY,
+			"user name for connecting to mysql for DDL operations",
+			NULL, NULL, NULL);
+
+static MYSQL_SYSVAR_UINT(heartbeat_seconds, scaledb_heartbeat_seconds,
+			PLUGIN_VAR_NOCMDOPT | PLUGIN_VAR_READONLY,
+			"send a heartbeat message to the SLM server every X seconds.  Used in cluster only",
+			NULL, NULL, 15, 1, UINT_MAX, 0);
+
+static MYSQL_SYSVAR_STR(debug_string, scaledb_debug_string,
+			PLUGIN_VAR_NOCMDOPT ,
+			"The debug string used to print additional debug messages by ScaledDB engineers",
+			NULL, NULL, NULL);
 
 static struct st_mysql_sys_var* scaledb_system_variables[]= {
 	MYSQL_SYSVAR(config_file),
-	/* TODO: to be enabled later
 	MYSQL_SYSVAR(data_directory),
 	MYSQL_SYSVAR(log_directory),
+	MYSQL_SYSVAR(log_dir_append_host),
 	MYSQL_SYSVAR(buffer_size_index),
 	MYSQL_SYSVAR(buffer_size_data),
-	*/
-	NULL
+	MYSQL_SYSVAR(max_file_handles),
+	MYSQL_SYSVAR(aio_flag),
+	MYSQL_SYSVAR(max_column_length_in_base_file),
+	MYSQL_SYSVAR(dead_lock_milliseconds),
+	MYSQL_SYSVAR(cluster),
+	MYSQL_SYSVAR(cluster_port),
+	MYSQL_SYSVAR(cluster_user),
+	MYSQL_SYSVAR(heartbeat_seconds),
+	MYSQL_SYSVAR(debug_string),
+	NULL		// the last element of this array must be NULL
 };
 
 mysql_declare_plugin(scaledb)
 {
 	MYSQL_STORAGE_ENGINE_PLUGIN,
-		&scaledb_storage_engine,
-		"ScaleDB",
-		"ScaleDB, Inc.",
-		"ScaleDB is a transactional storage engine that runs on a cluster machine with multiple nodes.  No data partition needed.",
-		PLUGIN_LICENSE_PROPRIETARY,
-		scaledb_init_func,			/* Plugin Init		*/
-		scaledb_done_func,			/* Plugin Deinit	*/
-		0x0100	,					/* version 1.0		*/
-		//scaledb_status_variables_export,	/* status variables	*/
-		NULL,	/* status variables	*/
-		scaledb_system_variables,			/* system variables	*/
-		NULL								/* config options	*/
+	&scaledb_storage_engine,
+	"ScaleDB",
+	"ScaleDB, Inc.",
+	"ScaleDB is a transactional storage engine that runs on a cluster machine with multiple nodes.  No data partition needed.",
+	PLUGIN_LICENSE_PROPRIETARY,
+	scaledb_init_func,					/* Plugin Init		*/
+	scaledb_done_func,					/* Plugin Deinit	*/
+	0x0100	,							/* version 1.0		*/
+	//scaledb_status_variables_export,	/* status variables, will change to this one later	*/
+	NULL,								/* status variables	*/
+	scaledb_system_variables,			/* system variables	*/
+	NULL								/* config options	*/
 }
 mysql_declare_plugin_end;
 

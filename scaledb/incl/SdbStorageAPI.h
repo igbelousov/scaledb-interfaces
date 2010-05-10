@@ -288,8 +288,6 @@ unsigned short SDBCreateField(unsigned int userId, unsigned short dbId, unsigned
 							  unsigned int maxDataLength, char *defaultValue, bool autoIncr, 
 							  unsigned short ddlFlag);
 
-unsigned int SDBGetMaxColumnLengthInBaseFile();
-
 bool SDBIsFieldAutoIncrement(unsigned short dbId, unsigned short tableId, unsigned short fieldId);
 char* SDBGetFileDataField(unsigned short userId, unsigned short tableId, unsigned short fieldId);
 void SDBSetAutoIncrBaseValue(unsigned short dbId, unsigned short tableId, unsigned long long value);
@@ -530,6 +528,28 @@ unsigned short SDBArrayGetUnUsedPosition(SdbDynamicArray *array);
 char *SDBTestedMalloc( unsigned int size , unsigned long id = 0);
 void SDBTestedFree( void *ptr );
 char *SDBTestedRealloc( void *ptr, unsigned int size );
+
+/*
+//////////////////////////////////////////////////////////////////////////////
+//
+//                 ScaleDB Configuration Parameters
+//
+//////////////////////////////////////////////////////////////////////////////
+*/
+
+char* SDBGetDataDirectory();
+char* SDBGetLogDirectory();
+char SDBGetLogDirAppendHost();
+unsigned int SDBGetBufferSizeIndex();
+unsigned int SDBGetBufferSizeData();
+unsigned int SDBGetMaxFileHandles();
+char SDBGetAioFlag();
+unsigned int SDBGetMaxColumnLengthInBaseFile();
+unsigned int SDBGetDeadlockMilliseconds();
+unsigned int SDBGetClusterPort();
+unsigned int SDBGetHeartbeatSeconds();
+char* SDBGetDebugString();
+
 
 #endif //_SDB_STORAGE_API_H
 
