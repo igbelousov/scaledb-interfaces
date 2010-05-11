@@ -3608,7 +3608,7 @@ int ha_scaledb::rnd_pos(uchar * buf, uchar *pos)
 		int64 rowPos = my_get_ptr(pos,ref_length);
 
 		if (rowPos > SDB_MAX_ROWID_VALUE){
-			return HA_ERR_END_OF_FILE;
+			DBUG_RETURN( HA_ERR_END_OF_FILE );
 		}
 
 		unsigned int rowid = (unsigned int)rowPos;
