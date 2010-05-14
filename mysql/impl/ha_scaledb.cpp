@@ -1098,13 +1098,6 @@ int ha_scaledb::external_lock(
 			else
 				pSdbMysqlTxn_->setDdlFlag(0);	// reset the flag as MySQL may reuse this handler object
 			DBUG_RETURN(0);
-		} else {	
-			// this is primary node
-			if ( (sdbCommandType_==SDB_COMMAND_ALTER_TABLE) && (lock_type != F_UNLCK) 
-				&& (strstr(table->s->table_name.str, MYSQL_TEMP_TABLE_PREFIX)==NULL) ) {
-				// We can find the alter-table name in the first external_lock on the regular table name
-					pSdbMysqlTxn_->addAlterTableName(table->s->table_name.str);
-			}
 		}
 	}
 
@@ -1219,6 +1212,12 @@ int ha_scaledb::external_lock(
 			trans_register_ha(thd, true, ht);
 		}
 
+		// this is primary node
+		if ( (sdbCommandType_==SDB_COMMAND_ALTER_TABLE) && (strstr(table->s->table_name.str, MYSQL_TEMP_TABLE_PREFIX)==NULL) ) {
+			// We can find the alter-table name in the first external_lock on the regular table name
+			pSdbMysqlTxn_->addAlterTableName(table->s->table_name.str);
+		}
+
 		// set some useful constants in case a table has all fixed length columns
 		numberOfFrontFixedColumns_ = SDBGetNumberOfFrontFixedColumns(sdbDbId_, sdbTableNumber_);
 		frontFixedColumnsLength_ = SDBGetFrontFixedColumnsLength(sdbDbId_, sdbTableNumber_);
@@ -1258,7 +1257,14 @@ int ha_scaledb::external_lock(
 			//	delete txn->stmt; // delete savepoint
 			//	txn->stmt= NULL;
 		}
-	}
+
+		// this is primary node
+		if ( (sdbCommandType_==SDB_COMMAND_ALTER_TABLE) && (strstr(table->s->table_name.str, MYSQL_TEMP_TABLE_PREFIX)==NULL) ) {
+			// We can find the alter-table name in the first external_lock on the regular table name
+			pSdbMysqlTxn_->removeAlterTableName();
+		}
+
+	}	// else {	// need to release locks
 
 	DBUG_RETURN(0);
 }
@@ -4019,7 +4025,6 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 #endif
 	if (retCode) {
 		RELEASE_MEMORY(pCreateTableStmt);
-		pSdbMysqlTxn_->removeAlterTableName();
 		DBUG_RETURN( convertToMysqlErrorCode(retCode) );
 	}
 
@@ -4044,11 +4049,10 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 		if (sqlCommand==SQLCOM_ALTER_TABLE || sqlCommand==SQLCOM_CREATE_INDEX || sqlCommand==SQLCOM_DROP_INDEX) {
 			char* pFlushTableStmt = SDBUtilAppendString("flush table ", pSdbMysqlTxn_->getAlterTableName());
 			bool bFlushTableReady = sendStmtToOtherNodes(sdbDbId_, pFlushTableStmt, false, false);
-			pSdbMysqlTxn_->removeAlterTableName();
 			RELEASE_MEMORY(pFlushTableStmt);
 
 			if (!bFlushTableReady) {
-				SDBCommit(sdbUserId_);
+				SDBRollBack(sdbUserId_);
 				RELEASE_MEMORY( pCreateTableStmt );
 				DBUG_RETURN( convertToMysqlErrorCode(retCode) );
 			}
@@ -4086,8 +4090,9 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 	SdbDynamicArray *fkInfoArray = SDBArrayInit(numOfKeys+1, numOfKeys+1, sizeof(void*)); //+1 because we use the locations 1,2,3 rather than 0,1,2
 
 	if ( numOfKeys > 0 ) {  // index/designator exists
-		// create the foreign key metadata
-		errorNum = create_fks(thd, table_arg, pTableName, fkInfoArray, pCreateTableStmt);
+		// we need to create the foreign key metadata before we work on index because we need
+		// foreign key information to build multi-table index.
+		errorNum = create_fks(thd, table_arg, pTableName, fkInfoArray, pCreateTableStmt, bIsAlterTableStmt);
 		if (errorNum){
 			SDBRollBack(sdbUserId_);	// rollback new table record in transaction
 			SDBDeleteTableById(sdbUserId_, sdbDbId_, sdbTableNumber_);
@@ -4488,7 +4493,8 @@ int ha_scaledb::add_columns_to_table(THD* thd, TABLE *table_arg, unsigned short 
 
 
 // create the foreign keys for a table
-int ha_scaledb::create_fks(THD* thd, TABLE *table_arg, char* tblName, SdbDynamicArray* fkInfoArray, char* pCreateTableStmt){
+int ha_scaledb::create_fks(THD* thd, TABLE *table_arg, char* tblName, SdbDynamicArray* fkInfoArray, 
+						   char* pCreateTableStmt, bool bIsAlterTableStmt) {
 
 	unsigned int errorNum = 0;
 	int numOfKeys = (int) table_arg->s->keys ;
@@ -4503,6 +4509,15 @@ int ha_scaledb::create_fks(THD* thd, TABLE *table_arg, char* tblName, SdbDynamic
 		char* pCurrConstraintClause = strstr( pCreateTableStmt, "constraint ");
 		char* pCurrForeignKeyClause = strstr( pCreateTableStmt, "foreign key ");
 		char* pConstraintName = NULL;
+
+		// If the ALTER TABLE (including CREATE/DROP INDEX) statement has no FOREIGN KEY clause,
+		// then we are modifying other constraints.  We need to carry the existing foreign key constraints
+		// into the newly created table.
+		if (bIsAlterTableStmt && (!pCurrForeignKeyClause) ) {
+			errorNum = SDBCopyForeignKey(sdbUserId_, sdbDbId_, sdbTableNumber_, pSdbMysqlTxn_->getAlterTableName());
+			return errorNum;	// we should exit early for this case.
+		}
+
 		while ( pCurrForeignKeyClause != NULL ) {  // foreign key clause exists
 			pConstraintName = NULL;
 			if (pCurrConstraintClause && pCurrForeignKeyClause) {

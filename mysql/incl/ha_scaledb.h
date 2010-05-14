@@ -274,7 +274,8 @@ public:
 	int add_columns_to_table(THD* thd, TABLE *table_arg, unsigned short ddlFlag);
 	int add_indexes_to_table(THD* thd, TABLE *table_arg, char* tblName, unsigned short ddlFlag, 
 							SdbDynamicArray* fkInfoArray, char* pCreateTableStmt);
-	int create_fks(THD* thd, TABLE *table_arg, char* tblName, SdbDynamicArray* fkInfoArray, char* pCreateTableStmt);
+	int create_fks(THD* thd, TABLE *table_arg, char* tblName, SdbDynamicArray* fkInfoArray, char* pCreateTableStmt,
+					bool bIsAlterTableStmt);
 
 	int get_field_key_participation_length(THD* thd, TABLE *table_arg, Field * pField);
 

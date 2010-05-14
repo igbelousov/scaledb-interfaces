@@ -251,6 +251,8 @@ unsigned short SDBDefineForeignKey(unsigned int userId, unsigned short dbId,
 								   char **fieldsInTable, char **fieldsInParentTable);
 
 char *SDBGetParentIndexByForeignFields(unsigned short dbmsId, char *tableName, char **fields, char **foreignFields);
+// copy the foreign key constraints of an existing table (identified by existingTableName) into a new table with tableId
+unsigned short SDBCopyForeignKey(unsigned int userId, unsigned short dbId, unsigned short tableId, char* existingTableName);
 
 unsigned short SDBRebuildIndexes(unsigned int userId, unsigned short dbId, char *tableName);
 unsigned short SDBRebuildIndexesByTableId(unsigned int userId, unsigned short dbId, unsigned short tableNumber);
