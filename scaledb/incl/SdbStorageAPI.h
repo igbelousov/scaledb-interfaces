@@ -152,6 +152,7 @@ char* SDBGetSystemParamString(const char *param);
 //////////////////////////////////////////////////////////////////////////////
 */
 unsigned int SDBGetNewUserId(unsigned short userType = SDB_USER_TYPE_DEFAULT);
+unsigned int SDBGetSystemUserId();
 void SDBRemoveUserById(unsigned int userId);
 void SDBShowUserActivity(unsigned int userId);
 void SDBShowUserLockStatus(unsigned int userId);
