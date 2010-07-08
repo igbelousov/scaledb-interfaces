@@ -223,8 +223,8 @@ char *SDBGetTableFileSystemNameByTableNumber(unsigned short dbId, unsigned short
 unsigned char SDBGetTableLockLevel(unsigned short userId, unsigned short dbId, unsigned short tableId);
 
 // the fast version to avoid resolving table name again
-unsigned long long SDBGetTableStats(unsigned short dbId, unsigned short tableId, SDB_TABLE_STAT_INFO stat); 
-unsigned long long SDBGetTableStats(unsigned short dbId, char* tableName, SDB_TABLE_STAT_INFO stat); 
+unsigned long long SDBGetTableStats(unsigned short userId, unsigned short dbId, unsigned short tableId, SDB_TABLE_STAT_INFO stat); 
+unsigned long long SDBGetTableStats(unsigned short userId, unsigned short dbId, char* tableName, SDB_TABLE_STAT_INFO stat); 
 
 unsigned short SDBGetNumberOfFrontFixedColumns(unsigned short dbId, unsigned short tableId);
 unsigned short SDBGetFrontFixedColumnsLength(unsigned short dbId, unsigned short tableId);

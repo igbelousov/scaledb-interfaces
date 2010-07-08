@@ -3671,15 +3671,15 @@ int ha_scaledb::info(uint flag)
 	if ( (flag & HA_STATUS_VARIABLE) || // update the 'variable' part of the info:
 		(flag & HA_STATUS_NO_LOCK) )
 	{  
-		stats.records = (ulong) SDBGetTableStats(sdbDbId_, sdbTableNumber_, SDB_STATS_INFO_FILE_RECORDS);
-		stats.deleted = (ulong) SDBGetTableStats(sdbDbId_, sdbTableNumber_, SDB_STATS_INFO_FILE_DELETED);
-		stats.data_file_length = (ulong) SDBGetTableStats(sdbDbId_, sdbTableNumber_, SDB_STATS_INFO_FILE_LENGTH);
-		stats.index_file_length = SDBGetTableStats(sdbDbId_, sdbTableNumber_, SDB_STATS_INDEX_FILE_LENGTH) / 2;
+		stats.records = (ulong) SDBGetTableStats(sdbUserId_, sdbDbId_, sdbTableNumber_, SDB_STATS_INFO_FILE_RECORDS);
+		stats.deleted = (ulong) SDBGetTableStats(sdbUserId_, sdbDbId_, sdbTableNumber_, SDB_STATS_INFO_FILE_DELETED);
+		stats.data_file_length = (ulong) SDBGetTableStats(sdbUserId_, sdbDbId_, sdbTableNumber_, SDB_STATS_INFO_FILE_LENGTH);
+		stats.index_file_length = SDBGetTableStats(sdbUserId_, sdbDbId_, sdbTableNumber_, SDB_STATS_INDEX_FILE_LENGTH) / 2;
 
 		//if (stats.index_file_length == 0)
 		//    stats.index_file_length = 1;
 
-		stats.mean_rec_length = (ulong)(stats.records == 0 ? 0 : SDBGetTableStats(sdbDbId_, sdbTableNumber_, SDB_STATS_INFO_REC_LENGTH));
+		stats.mean_rec_length = (ulong)(stats.records == 0 ? 0 : SDBGetTableStats(sdbUserId_, sdbDbId_, sdbTableNumber_, SDB_STATS_INFO_REC_LENGTH));
 	}
 
 #if 0
@@ -5562,7 +5562,7 @@ double ha_scaledb::scan_time() {
 
 	// TODO: this should be stored in file handle; auto updated during dictionary change.
 	// Compute disk seek length for normal tables.
-	seekLength = SDBGetTableStats(sdbDbId_, sdbTableNumber_, SDB_STATS_INFO_SEEK_LENGTH);
+	seekLength = SDBGetTableStats(sdbUserId_, sdbDbId_, sdbTableNumber_, SDB_STATS_INFO_SEEK_LENGTH);
 
 	if (seekLength == 0)
 		seekLength = 1;
