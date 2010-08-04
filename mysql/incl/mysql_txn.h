@@ -147,7 +147,7 @@ private:
 
 	char* pAlterTableName_;			// table name used in ALTER TABLE, CREATE/DROP INDEX statement
 
-	QueryManagerInfo queryMgrArray_[METAINFO_MAX_QUERY_MANAGER_ID];
+	SdbDynamicArray* pQueryManagerInfoArray_;
 };
 
 #endif   // _MYSQL_TXN_H

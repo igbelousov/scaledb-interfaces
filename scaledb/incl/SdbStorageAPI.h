@@ -118,6 +118,7 @@ typedef unsigned long long uint64;
 */
 unsigned short SDBGlobalInit(char* engineConfigFileName);
 unsigned short SDBGlobalEnd();
+unsigned short SDBOpenMasterDbAndRecoverLog(unsigned int userId);
 bool SDBStorageEngineIsInited();
 void SDBTerminateEngine(int errCode, const char *msg, char *file, int line);
 
@@ -130,7 +131,7 @@ void SDBTerminateEngine(int errCode, const char *msg, char *file, int line);
 */
 unsigned short SDBOpenDatabase(unsigned int userId, char *databaseName, char *databaseFsName=0, char *databaseCsName=0, unsigned short ddlFlag=0);
 void SDBOpenDatabaseById(unsigned int userId, unsigned short databaseId);
-void SDBOpenAllDatabases();
+
 unsigned short SDBGetDatabaseNumberByName(unsigned short userId, char *databaseName, bool openTables=false);
 char* SDBGetDatabaseNameByNumber(unsigned short databaseId);
 bool SDBGetDatabaseStatusByNumber(unsigned short databaseId);
@@ -438,10 +439,8 @@ void SDBQueryCursorSetFlags(unsigned short queryMgrId, unsigned short indexId, b
 //
 //////////////////////////////////////////////////////////////////////////////
 */
-bool SDBNodeIsCluster(void);
-unsigned char SDBGetTotalNodesInCluster(void);
-unsigned char SDBSetupClusterNodes(unsigned int *dstArray, 
-                                   unsigned int *portArray);
+bool SDBNodeIsCluster();
+void SDBGetConnectedNodesList(unsigned short userId, unsigned short bufferLength, char *buffer);
 /*
 //////////////////////////////////////////////////////////////////////////////
 //
@@ -474,7 +473,7 @@ void SDBLogSqlStmt(unsigned int userId, char* pStatement, unsigned long long stm
 unsigned short SDBMapToMySQLError(unsigned short error);
 void SDBPrintMemoryInfo();
 void SDBPrintStructure(unsigned short dbId);
-void SDBPrintFilesInfo(bool showFileNames=true);
+void SDBPrintFilesInfo();
 char* SDBUtilPtr2String(char *dstPtr, const void* srcPtr);
 // this method allocates memory space for result without freeing first param
 char *SDBUtilAppendString(char *ptr1, char *ptr2);
@@ -542,7 +541,6 @@ char *SDBTestedRealloc( void *ptr, unsigned int size );
 
 char* SDBGetDataDirectory();
 char* SDBGetLogDirectory();
-char SDBGetLogDirAppendHost();
 unsigned int SDBGetBufferSizeIndex();
 unsigned int SDBGetBufferSizeData();
 unsigned int SDBGetMaxFileHandles();
@@ -550,7 +548,6 @@ char SDBGetAioFlag();
 unsigned int SDBGetMaxColumnLengthInBaseFile();
 unsigned int SDBGetDeadlockMilliseconds();
 unsigned int SDBGetClusterPort();
-unsigned int SDBGetHeartbeatSeconds();
 char* SDBGetDebugString();
 
 

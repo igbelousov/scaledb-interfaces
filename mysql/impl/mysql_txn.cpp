@@ -53,15 +53,10 @@ MysqlTxn::MysqlTxn() {  //constructor
 	ddlFlag_ = 0;
 	pAlterTableName_ = NULL;
 
+    // use a dynamic vector to save all QueryManagerInfo objects so that we can handle any number of 
+	// join operations in a query
+	pQueryManagerInfoArray_ = SDBArrayInit(INITIAL_QUERY_MANAGER_ID_IN_VECTOR, 10, sizeof(void *));
 	QueryManagerIdCount_ = 0;
-	for (int i=0; i < METAINFO_MAX_QUERY_MANAGER_ID; ++i) {
-		queryMgrArray_[i].pDesignatorName_ = NULL;
-        queryMgrArray_[i].pHandler_ = NULL;
-		queryMgrArray_[i].pKey_ = NULL;
-		queryMgrArray_[i].keyLength_ = 0;
-		queryMgrArray_[i].queryMgrId_ = 0;
-        queryMgrArray_[i].scanSequential_ = false;
-	}
 
     // use a vector to save all lock table names
 	pLockTablesArray_ = SDBArrayInit( 10, 10, sizeof (void *));
@@ -72,6 +67,9 @@ MysqlTxn::~MysqlTxn() {   // destructor
 #ifdef __DEBUG_CLASS_CALLS
 	DebugClass::countClassDestructor("MysqlTxn");
 #endif
+
+	SDBArrayFree(pQueryManagerInfoArray_);
+
 	// memory released in method freeAllQueryManagerIds()
 	SDBArrayFreeWithMembers(pLockTablesArray_);
 	if (pAlterTableName_)
@@ -84,14 +82,16 @@ MysqlTxn::~MysqlTxn() {   // destructor
 // Using table handler can uniquely define the right table object currently being used by MySQL query processor.
 void MysqlTxn::addQueryManagerId(bool isRealIndex, char* pDesignatorName, void* pHandler, char* pKey, 
 				unsigned int aKenLength, unsigned short aQueryMgrId, unsigned char mysqlInterfaceDebugLevel) {
-	//queryMgrArray_[QueryManagerIdCount_].pMetaInfo_ = pMetaInfo;
-	queryMgrArray_[QueryManagerIdCount_].queryMgrId_ = aQueryMgrId;
-	queryMgrArray_[QueryManagerIdCount_].pDesignatorName_ = SDBUtilDuplicateString(pDesignatorName);
+
+	QueryManagerInfo* pQueryManagerInfo = (QueryManagerInfo*) GET_MEMORY( sizeof(QueryManagerInfo) );
+					
+	pQueryManagerInfo->queryMgrId_ = aQueryMgrId;
+	pQueryManagerInfo->pDesignatorName_ = SDBUtilDuplicateString(pDesignatorName);
 #ifdef SDB_DEBUG_LIGHT
 	if (mysqlInterfaceDebugLevel > 1) {
 		SDBDebugStart();			// synchronize threads printout	
 		SDBDebugPrintHeader("MysqlTxn::addQueryManagerId, add new designator ");
-		SDBDebugPrintString( queryMgrArray_[QueryManagerIdCount_].pDesignatorName_ );
+		SDBDebugPrintString( pQueryManagerInfo->pDesignatorName_ );
 		SDBDebugPrintString(" pHandler= ");
 		SDBDebugPrintPointer( pHandler );
 		SDBDebugEnd();			// synchronize threads printout	
@@ -99,17 +99,17 @@ void MysqlTxn::addQueryManagerId(bool isRealIndex, char* pDesignatorName, void* 
 #endif
 
 	if ( isRealIndex )
-		queryMgrArray_[QueryManagerIdCount_].designatorId_ = SDBGetIndexNumberByName(scaledbDbId_, pDesignatorName);
+		pQueryManagerInfo->designatorId_ = SDBGetIndexNumberByName(scaledbDbId_, pDesignatorName);
 	else
-		queryMgrArray_[QueryManagerIdCount_].designatorId_ = 0;
+		pQueryManagerInfo->designatorId_ = 0;
 
-    queryMgrArray_[QueryManagerIdCount_].pHandler_ = pHandler;
-	queryMgrArray_[QueryManagerIdCount_].pKey_ = pKey;
-	queryMgrArray_[QueryManagerIdCount_].keyLength_ = aKenLength;
-    queryMgrArray_[QueryManagerIdCount_].scanSequential_ = false;
+    pQueryManagerInfo->pHandler_ = pHandler;
+	pQueryManagerInfo->pKey_ = pKey;
+	pQueryManagerInfo->keyLength_ = aKenLength;
+    pQueryManagerInfo->scanSequential_ = false;
 
+	SDBArrayPutPtr(pQueryManagerInfoArray_, QueryManagerIdCount_, pQueryManagerInfo);
 	++QueryManagerIdCount_ ;
-	
 }
 
 
@@ -117,14 +117,15 @@ void MysqlTxn::addQueryManagerId(bool isRealIndex, char* pDesignatorName, void* 
 unsigned short MysqlTxn::findQueryManagerId(char* aDesignatorName, void* pHandler, char* aKey, 
 											unsigned int aKenLength, bool virtualTableFlag) {
 	for (int i=0; i < QueryManagerIdCount_; ++i) {
+		QueryManagerInfo* pQueryManagerInfo = (QueryManagerInfo*)SDBArrayGetPtr(pQueryManagerInfoArray_, i);
 
 		// We found the query manger id if both the table handler object and designator match. 
-		if ( (queryMgrArray_[i].pHandler_ == pHandler) &&
-				SDBUtilCompareStrings(aDesignatorName, queryMgrArray_[i].pDesignatorName_, true) ) {
+		if ( (pQueryManagerInfo->pHandler_ == pHandler) &&
+				SDBUtilCompareStrings(aDesignatorName, pQueryManagerInfo->pDesignatorName_, true) ) {
 
-			queryMgrArray_[i].pKey_ = (char*) aKey;    // update its key value
-			queryMgrArray_[i].keyLength_ = aKenLength;
-			return (queryMgrArray_[i].queryMgrId_);
+			pQueryManagerInfo->pKey_ = (char*) aKey;    // update its key value
+			pQueryManagerInfo->keyLength_ = aKenLength;
+			return (pQueryManagerInfo->queryMgrId_);
 		}
 	}
 	
@@ -134,60 +135,78 @@ unsigned short MysqlTxn::findQueryManagerId(char* aDesignatorName, void* pHandle
 
 void MysqlTxn::freeAllQueryManagerIds(unsigned char mysqlInterfaceDebugLevel) {
 	for (int i=0; i < QueryManagerIdCount_; ++i) {
-		SDBCloseQueryManager(queryMgrArray_[i].queryMgrId_  );
+		QueryManagerInfo* pQueryManagerInfo = (QueryManagerInfo*)SDBArrayGetPtr(pQueryManagerInfoArray_, i);
+
+		SDBCloseQueryManager(pQueryManagerInfo->queryMgrId_);
 
 #ifdef SDB_DEBUG_LIGHT
 		if (mysqlInterfaceDebugLevel > 1) {
 			SDBDebugStart();			// synchronize threads printout	
 			SDBDebugPrintHeader("MysqlTxn::freeAllQueryManagerIds, release designator ");
-			SDBDebugPrintString( queryMgrArray_[i].pDesignatorName_ );
+			SDBDebugPrintString( pQueryManagerInfo->pDesignatorName_ );
 			SDBDebugPrintString(" pHandler= ");
-			SDBDebugPrintPointer( queryMgrArray_[i].pHandler_ );
+			SDBDebugPrintPointer( pQueryManagerInfo->pHandler_ );
 			SDBDebugEnd();			// synchronize threads printout	
 		}
 #endif
-		RELEASE_MEMORY( queryMgrArray_[i].pDesignatorName_ );
-        queryMgrArray_[i].pHandler_ = NULL;
-		queryMgrArray_[i].pKey_ = NULL;
-		queryMgrArray_[i].keyLength_ = 0;
-		queryMgrArray_[i].queryMgrId_ = 0;
-        queryMgrArray_[i].scanSequential_ = false;
+		RELEASE_MEMORY( pQueryManagerInfo->pDesignatorName_ );
+        pQueryManagerInfo->pHandler_ = NULL;
+		pQueryManagerInfo->pKey_ = NULL;
+		pQueryManagerInfo->keyLength_ = 0;
+		pQueryManagerInfo->queryMgrId_ = 0;
+        pQueryManagerInfo->scanSequential_ = false;
+
+		RELEASE_MEMORY((void*)pQueryManagerInfo);
+		SDBArrayRemove(pQueryManagerInfoArray_, i);
 	}
+
 	QueryManagerIdCount_ = 0;
 }
 
+
 char* MysqlTxn::getDesignatorNameByQueryMrgId(unsigned short aQueryMgrId) {
 	for (int i=0; i < QueryManagerIdCount_; ++i) {
-		if ( queryMgrArray_[i].queryMgrId_ == aQueryMgrId ) {
-			return (queryMgrArray_[i].pDesignatorName_);
+		QueryManagerInfo* pQueryManagerInfo = (QueryManagerInfo*)SDBArrayGetPtr(pQueryManagerInfoArray_, i);
+
+		if ( pQueryManagerInfo->queryMgrId_ == aQueryMgrId ) {
+			return (pQueryManagerInfo->pDesignatorName_);
 		}
 	}
 
 	return NULL;	// not found
 }
 
+
 void MysqlTxn::setScanType(unsigned short queryMgrId, bool sequentialScan/*=false*/) {
 	for (int i=0; i < QueryManagerIdCount_; ++i) {
-		if ( queryMgrArray_[i].queryMgrId_ == queryMgrId ) {
-	        queryMgrArray_[i].scanSequential_ = sequentialScan;
+		QueryManagerInfo* pQueryManagerInfo = (QueryManagerInfo*)SDBArrayGetPtr(pQueryManagerInfoArray_, i);
+
+		if ( pQueryManagerInfo->queryMgrId_ == queryMgrId ) {
+	        pQueryManagerInfo->scanSequential_ = sequentialScan;
 		}
 	}
 }
 
+
 bool MysqlTxn::isSequentialScan(unsigned short queryMgrId) {
 	for (int i=0; i < QueryManagerIdCount_; ++i) {
-		if ( queryMgrArray_[i].queryMgrId_ == queryMgrId ) {
-	        return queryMgrArray_[i].scanSequential_;
+		QueryManagerInfo* pQueryManagerInfo = (QueryManagerInfo*)SDBArrayGetPtr(pQueryManagerInfoArray_, i);
+
+		if ( pQueryManagerInfo->queryMgrId_ == queryMgrId ) {
+	        return pQueryManagerInfo->scanSequential_;
 		}
 	}
+
     return false;
 }
 
 
 unsigned short MysqlTxn::getDesignatorIdByQueryMrgId(unsigned short aQueryMgrId) {
 	for (int i=0; i < QueryManagerIdCount_; ++i) {
-		if ( queryMgrArray_[i].queryMgrId_ == aQueryMgrId ) {
-			return (queryMgrArray_[i].designatorId_);
+		QueryManagerInfo* pQueryManagerInfo = (QueryManagerInfo*)SDBArrayGetPtr(pQueryManagerInfoArray_, i);
+
+		if ( pQueryManagerInfo->queryMgrId_ == aQueryMgrId ) {
+			return (pQueryManagerInfo->designatorId_);
 		}
 	}
 
@@ -217,6 +236,7 @@ void MysqlTxn::addLockTableName(char* pLockTableName) {
 		numberOfLockTables_ += 1;
 	}
 }
+
 
 // unlock a table which was specified in an earlier LOCK TABLES statement
 // For DROP TABLE statement, it is fine if we do not find the given table name.

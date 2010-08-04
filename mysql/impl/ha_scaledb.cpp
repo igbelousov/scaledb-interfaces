@@ -70,7 +70,6 @@ static unsigned int scaledb_dead_lock_milliseconds;
 static my_bool scaledb_cluster = FALSE;
 static unsigned int scaledb_cluster_port;
 static char* scaledb_cluster_user = NULL;
-static unsigned int scaledb_heartbeat_seconds;
 static char* scaledb_debug_string = NULL;
 
 static int scaledb_init_func();
@@ -217,9 +216,9 @@ void convertSeparatorLowerCase( char* toQuery, char* fromQuery) {
 
 
 // A utility function to send SQL statement to execute on other nodes of a cluster machine
-bool sendStmtToOtherNodes(unsigned short dbId, char* pStatement, bool bIgnoreDB, bool bEngineOption) {
+bool sendStmtToOtherNodes(unsigned short userId, unsigned short dbId, char* pStatement, bool bIgnoreDB, bool bEngineOption) {
 	char* pStmtWithHint = SDBUtilAppendString(pStatement, SCALEDB_HINT_PASS_DDL);
-	bool bRetValue = ha_scaledb::sqlStmt(dbId, pStmtWithHint, bIgnoreDB, bEngineOption);
+	bool bRetValue = ha_scaledb::sqlStmt(userId, dbId, pStmtWithHint, bIgnoreDB, bEngineOption);
 	RELEASE_MEMORY(pStmtWithHint);
 	return bRetValue;
 }
@@ -311,20 +310,22 @@ static int scaledb_init_func(void *p)
 	}
 #endif
 
+	// Need to perform this step immediately after we instantiate ScaleDB storage engine
+	unsigned int userIdforOpen = SDBGetNewUserId();
+	SDBOpenMasterDbAndRecoverLog(userIdforOpen);
+	SDBRemoveUserById(userIdforOpen);
+
 	// Get all ScaleDB Configuration Parameters
 	scaledb_data_directory = SDBGetDataDirectory();
 	scaledb_log_directory = SDBGetLogDirectory();
-	scaledb_log_dir_append_host = SDBGetLogDirAppendHost();
 	scaledb_buffer_size_index = SDBGetBufferSizeIndex();
 	scaledb_buffer_size_data = SDBGetBufferSizeData();
 	scaledb_max_file_handles = SDBGetMaxFileHandles();
 	scaledb_aio_flag = SDBGetAioFlag();
 	scaledb_max_column_length_in_base_file = SDBGetMaxColumnLengthInBaseFile();
 	scaledb_dead_lock_milliseconds = SDBGetDeadlockMilliseconds();
-	scaledb_cluster = SDBNodeIsCluster();
 	scaledb_cluster_port = SDBGetClusterPort();
 	scaledb_cluster_user = SDBGetClusterUser();
-	scaledb_heartbeat_seconds = SDBGetHeartbeatSeconds();
 	scaledb_debug_string = SDBGetDebugString();
 
 	DBUG_RETURN(0);
@@ -851,7 +852,7 @@ static void scaledb_drop_database(handlerton* hton, char* path) {
 	unsigned int sqlCommand = thd_sql_command(thd);
 	if ( (SDBNodeIsCluster() == true) && ( !(ddlFlag & SDBFLAG_DDL_SECOND_NODE)) )
 		if (sqlCommand == SQLCOM_DROP_DB) {
-			dropDbReady = sendStmtToOtherNodes(dbId, thd->query(), true, false);
+			dropDbReady = sendStmtToOtherNodes(userId, dbId, thd->query(), true, false);
 		}
 
 	if (dropDbReady)
@@ -2235,7 +2236,7 @@ int ha_scaledb::delete_all_rows()
 			if ((SDBNodeIsCluster() == true) && 
 				!(stmtFlag & SDBFLAG_DDL_SECOND_NODE) ) {
 					char* stmtWithHint = SDBUtilAppendString(thd->query(), SCALEDB_HINT_CLOSEFILE);
-					truncateTableReady = sqlStmt(sdbDbId_, stmtWithHint);
+					truncateTableReady = sqlStmt(sdbUserId_, sdbDbId_, stmtWithHint);
 					RELEASE_MEMORY(stmtWithHint);
 			}
 
@@ -2248,7 +2249,7 @@ int ha_scaledb::delete_all_rows()
 			if ((SDBNodeIsCluster() == true) && 
 				!(stmtFlag & SDBFLAG_DDL_SECOND_NODE) ) {
 					char* stmtWithHint = SDBUtilAppendString(thd->query(), SCALEDB_HINT_OPENFILE);
-					truncateTableReady = sqlStmt(sdbDbId_, stmtWithHint);
+					truncateTableReady = sqlStmt(sdbUserId_, sdbDbId_, stmtWithHint);
 					RELEASE_MEMORY(stmtWithHint);
 			}
 			errorNum = convertToMysqlErrorCode( retValue );
@@ -4033,7 +4034,7 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 		// If we are creating a virtual view, then we can have an early exit.
 		if ((SDBNodeIsCluster() == true) && (errorNum == 0))
 			if ((sqlCommand == SQLCOM_CREATE_TABLE) && ( !(ddlFlag & SDBFLAG_DDL_SECOND_NODE) ) ) {
-				sendStmtToOtherNodes(sdbDbId_, thd->query(), false, true);
+				sendStmtToOtherNodes(sdbUserId_, sdbDbId_, thd->query(), false, true);
 			}
 
 			RELEASE_MEMORY(pCreateTableStmt);
@@ -4048,7 +4049,7 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 		// all other nodes can close the table to be altered.
 		if (sqlCommand==SQLCOM_ALTER_TABLE || sqlCommand==SQLCOM_CREATE_INDEX || sqlCommand==SQLCOM_DROP_INDEX) {
 			char* pFlushTableStmt = SDBUtilAppendString("flush table ", pSdbMysqlTxn_->getAlterTableName());
-			bool bFlushTableReady = sendStmtToOtherNodes(sdbDbId_, pFlushTableStmt, false, false);
+			bool bFlushTableReady = sendStmtToOtherNodes(sdbUserId_, sdbDbId_, pFlushTableStmt, false, false);
 			RELEASE_MEMORY(pFlushTableStmt);
 
 			if (!bFlushTableReady) {
@@ -4155,7 +4156,7 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 			// We need to check this only for a regular CREATE TABLE statement, not for CREATE TABLE ... SELECT
 			if (sdbTableNumber_ == SDB_FIRST_USER_TABLE_ID) {
 				char* ddlCreateDB = SDBUtilAppendString("CREATE DATABASE IF NOT EXISTS ", dbFsName);
-				createDatabaseReady = sendStmtToOtherNodes(sdbDbId_, ddlCreateDB, true, false);// need to ignore DB name for CREATE DATABASE stmt
+				createDatabaseReady = sendStmtToOtherNodes(sdbUserId_, sdbDbId_, ddlCreateDB, true, false);// need to ignore DB name for CREATE DATABASE stmt
 				RELEASE_MEMORY(ddlCreateDB);
 			}
 
@@ -4163,7 +4164,7 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 				// Now we pass the CREATE TABLE statement to other nodes
 				// need to send statement "SET SESSION STORAGE_ENGINE=SCALEDB" before CREATE TABLE
 				bool createTableReady = true;
-				createTableReady = sendStmtToOtherNodes(sdbDbId_, thd->query(), false, true); 
+				createTableReady = sendStmtToOtherNodes(sdbUserId_, sdbDbId_, thd->query(), false, true); 
 
 				if ( createTableReady == false )
 					retCode = CREATE_TABLE_FAILED_IN_CLUSTER;
@@ -4888,7 +4889,7 @@ int ha_scaledb::delete_table(const char* name)
 					pDropTableStmtTemp = SDBUtilAppendString("drop table `", pTableCsName);
 				}
 				char* pDropTableStmt = SDBUtilAppendStringFreeFirstParam(pDropTableStmtTemp, "` ");
-				dropTableReady = sendStmtToOtherNodes(sdbDbId_, pDropTableStmt, false, false);
+				dropTableReady = sendStmtToOtherNodes(sdbUserId_, sdbDbId_, pDropTableStmt, false, false);
 				RELEASE_MEMORY(pDropTableStmt);
 			}
 		}
@@ -4915,7 +4916,7 @@ int ha_scaledb::delete_table(const char* name)
 		// if the table to be dropped is the second temp table, then we proceed to replicate to other nodes.
 		// if not, then we are rolling back an ALTER TABLE statement by removing the first temp table; 
 		// hence there is no need to send ALTER TABLE statements to other nodes
-		bool bAlterTableReady = sendStmtToOtherNodes(sdbDbId_, thd->query(), false, false);
+		bool bAlterTableReady = sendStmtToOtherNodes(sdbUserId_, sdbDbId_, thd->query(), false, false);
 		if (!bAlterTableReady)
 			retCode = ALTER_TABLE_FAILED_IN_CLUSTER;
 	}
@@ -5102,7 +5103,7 @@ int ha_scaledb::rename_table(const char* fromTable, const char* toTable) {
 	// ALTER TABLE: primary node releases lockMetaInfo in ::delete_table
 	if ( (!(ddlFlag & SDBFLAG_DDL_SECOND_NODE))  && (sqlCommand==SQLCOM_RENAME_TABLE) ) {
 		if ( (SDBNodeIsCluster() == true) && (retCode == SUCCESS) ) {
-			renameTableReady = sendStmtToOtherNodes(sdbDbId_, thd->query(), false, false);
+			renameTableReady = sendStmtToOtherNodes(sdbUserId_, sdbDbId_, thd->query(), false, false);
 			if (!renameTableReady)
 				retCode = METAINFO_UNDEFINED_DATA_TABLE;
 		}
@@ -5146,7 +5147,7 @@ int ha_scaledb::rename_table(const char* fromTable, const char* toTable) {
 // When bIgnoreDB is set to true, then we pass NULL for db name in setting up a mysql connection. 
 // return true for success and false for failure
 // -------------------------------------------------------
-bool ha_scaledb::sqlStmt(unsigned short dbmsId, char* sqlStmt, bool bIgnoreDB, bool bEngineOption) {
+bool ha_scaledb::sqlStmt(unsigned short userId, unsigned short dbmsId, char* sqlStmt, bool bIgnoreDB, bool bEngineOption) {
 
 #ifdef SDB_DEBUG_LIGHT
 	if (mysqlInterfaceDebugLevel_) {
@@ -5156,15 +5157,20 @@ bool ha_scaledb::sqlStmt(unsigned short dbmsId, char* sqlStmt, bool bIgnoreDB, b
 	}
 #endif
 
-	unsigned int  nodesArray[METAINFO_SLM_MAX_NODES];
-	unsigned int  portsArray[METAINFO_SLM_MAX_NODES];
-	unsigned char numberOfNodes = SDBSetupClusterNodes(nodesArray, portsArray);
+	unsigned short nodesBuffLength = MAX_NODE_DATA_BUFFER_LENGTH;
+	char nodesDataBuffer[MAX_NODE_DATA_BUFFER_LENGTH];
+	SDBGetConnectedNodesList(userId, nodesBuffLength, nodesDataBuffer);
+
+	// The first 2 bytes show the number of nodes (other than itself) in a cluster
+	unsigned short numberOfNodes = *((unsigned short*) nodesDataBuffer);
 
 	if (!numberOfNodes){
 		return true;
 	}
 
-	bool overallRc = true;
+	char* pNodeDataOffset = nodesDataBuffer + 2;
+
+	//bool overallRc = true;
 	int queryLength = SDBUtilGetStrLength(sqlStmt);
 	char* pDbName = NULL;
 	if (bIgnoreDB == false) 
@@ -5173,43 +5179,49 @@ bool ha_scaledb::sqlStmt(unsigned short dbmsId, char* sqlStmt, bool bIgnoreDB, b
 	// loop through all non-primary nodes and execute the sqlStmt
 	for (unsigned char i = 0; i < numberOfNodes; ++i){
 
-		char ip[64];
-        SDBUtilGetIpFromInet(&nodesArray[i], ip, sizeof(ip));
-		int port = portsArray[i];
+		unsigned short ipStringLength = *((unsigned short*) pNodeDataOffset);
+		char* pIpString = pNodeDataOffset+2;	// skip ip string length
+
+		unsigned short portStringLength = *((unsigned short*) (pIpString+ipStringLength+1));	// there is '\0'
+		char* pPortString = pIpString + ipStringLength + 3;	// skip ip string, '\0', and port-string-length
+		int port = atoi(pPortString);
+
 		char* password = SDBGetClusterPassword();
 		char* user = SDBGetClusterUser();
 		char* socket = NULL;
 
 		// set up MySQL client connection
-     	SdbMysqlClient* pSdbMysqlClient = new SdbMysqlClient(ip, user, password, pDbName, socket, port, mysqlInterfaceDebugLevel_);
+     	SdbMysqlClient* pSdbMysqlClient = new SdbMysqlClient(pIpString, user, password, pDbName, socket, port, mysqlInterfaceDebugLevel_);
 
 		// Execute the statement on MySQL server on a non-primary node
 		int rc = 0;
 		rc = pSdbMysqlClient->executeQuery(sqlStmt, queryLength, bEngineOption);
-		if (rc && overallRc) { // there was an error code, 0 is success, so we set the overall function to failure
-#ifdef SDB_DEBUG_LIGHT
-			if (mysqlInterfaceDebugLevel_) {
-				SDBDebugStart();			// synchronize threads printout	
-				SDBDebugPrintHeader("Replicate DDL (or the like) to ip=");
-				SDBDebugPrintString(ip);
-				SDBDebugPrintString("; Statement=");
-				SDBDebugPrintString(sqlStmt);
-				SDBDebugPrintHeader("MySQL C API mysql_real_query return code = ");
-				SDBDebugPrintInt(rc);
-				SDBDebugEnd();			// synchronize threads printout	
-			}
-#endif
-			overallRc = false;
+		if (rc) { 
+			// Issue a warning message if the DDL fails in other nodes.
+			SDBDebugStart();			// synchronize threads printout	
+			SDBDebugPrintHeader("Warning: Fails to replicate DDL (or the like) to ip=");
+			SDBDebugPrintString(pIpString);
+			SDBDebugPrintString(", port=");
+			SDBDebugPrintString(pPortString);
+			SDBDebugPrintString(", Statement=");
+			SDBDebugPrintString(sqlStmt);
+			SDBDebugPrintHeader("\n fails in mysql_real_query return code = ");
+			SDBDebugPrintInt(rc);
+			SDBDebugPrintHeader(".  You may later copy the new MySQL .frm file to the failed node directly.");
+			SDBDebugEnd();			// synchronize threads printout	
 		}
 
 		delete pSdbMysqlClient;		// remove the client connection
+
+		pNodeDataOffset = pNodeDataOffset + ipStringLength + portStringLength + 6;	// move to next node data
     }
 
-	if (!overallRc){
-		SDBTerminate(0, "cluster ddl failed");
-	}
+	// No need to crash the system when other node fails.  We already output a warning message!
+	//if (!overallRc){
+	//	SDBTerminate(0, "cluster ddl failed");
+	//}
 
-	return overallRc;
+	return true;
 }
 
 
@@ -5958,11 +5970,6 @@ static MYSQL_SYSVAR_STR(cluster_user, scaledb_cluster_user,
 			"user name for connecting to mysql for DDL operations",
 			NULL, NULL, NULL);
 
-static MYSQL_SYSVAR_UINT(heartbeat_seconds, scaledb_heartbeat_seconds,
-			PLUGIN_VAR_NOCMDOPT | PLUGIN_VAR_READONLY,
-			"send a heartbeat message to the SLM server every X seconds.  Used in cluster only",
-			NULL, NULL, 15, 1, UINT_MAX, 0);
-
 static MYSQL_SYSVAR_STR(debug_string, scaledb_debug_string,
 			PLUGIN_VAR_NOCMDOPT ,
 			"The debug string used to print additional debug messages by ScaledDB engineers",
@@ -5982,7 +5989,6 @@ static struct st_mysql_sys_var* scaledb_system_variables[]= {
 	MYSQL_SYSVAR(cluster),
 	MYSQL_SYSVAR(cluster_port),
 	MYSQL_SYSVAR(cluster_user),
-	MYSQL_SYSVAR(heartbeat_seconds),
 	MYSQL_SYSVAR(debug_string),
 	NULL		// the last element of this array must be NULL
 };
