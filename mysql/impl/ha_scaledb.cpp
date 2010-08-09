@@ -1399,7 +1399,7 @@ unsigned short ha_scaledb::openUserDatabase(char* pDbName, char *pDbFsName, bool
 		}
 
 		if (sdbDbId_ == 0) {
-			sdbDbId_ = SDBOpenDatabase(userIdforOpen, pDbName, pDbFsName, pDbFsName, ddlFlag);
+			sdbDbId_ = SDBOpenDatabaseByName(userIdforOpen, pDbName, pDbFsName, pDbFsName, ddlFlag);
 		} else
 			SDBOpenDatabaseById(userIdforOpen, sdbDbId_);
 

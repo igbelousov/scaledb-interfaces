@@ -129,7 +129,7 @@ void SDBTerminateEngine(int errCode, const char *msg, char *file, int line);
 //
 //////////////////////////////////////////////////////////////////////////////
 */
-unsigned short SDBOpenDatabase(unsigned int userId, char *databaseName, char *databaseFsName=0, char *databaseCsName=0, unsigned short ddlFlag=0);
+unsigned short SDBOpenDatabaseByName(unsigned int userId, char *databaseName, char *databaseFsName=0, char *databaseCsName=0, unsigned short ddlFlag=0);
 void SDBOpenDatabaseById(unsigned int userId, unsigned short databaseId);
 
 unsigned short SDBGetDatabaseNumberByName(unsigned short userId, char *databaseName, bool openTables=false);
