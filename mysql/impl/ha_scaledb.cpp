@@ -3906,10 +3906,10 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 		DBUG_RETURN(HA_ERR_UNKNOWN_CHARSET);		
 	}
 
-	// TODO: As of 4/20/2010, we support charset in either ascii or latin1 only.
-	// After we support utf8, we need to revise this checking.
+	// As of 8/10/2010, we support charset in either ascii, latin1, or utf8 only.
 	if ( (strncmp(create_info->default_table_charset->csname, "ascii", 5) != 0) &&
-		 (strncmp(create_info->default_table_charset->csname, "latin1", 6) != 0) )
+		 (strncmp(create_info->default_table_charset->csname, "latin1", 6) != 0) &&
+		 (strncmp(create_info->default_table_charset->csname, "utf8", 4) != 0) )
 		DBUG_RETURN(HA_ERR_UNKNOWN_CHARSET);		
 
 	// Check if Database name and table name are US ASCII for now. 
