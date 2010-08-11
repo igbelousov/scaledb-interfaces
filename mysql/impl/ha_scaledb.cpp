@@ -814,7 +814,7 @@ static void scaledb_drop_database(handlerton* hton, char* path) {
 	unsigned short retValue = 0;
 	int errorNum = 0;
 	THD* thd = current_thd;
-	unsigned int userId = SDBGetSystemUserId();	// the system user
+	unsigned int userId = 0;
 	MysqlTxn* userTxn = (MysqlTxn *) *thd_ha_data(thd, hton);
 	if (userTxn == NULL) {
 		// MySQL calls all storage engine to drop a user database even the storage engine has no user tables in it.
@@ -1571,6 +1571,7 @@ int ha_scaledb::close(void) {
 
 	int errorCode = 0;
 	unsigned int userId = 0;
+	bool bGetNewUserId = false;
 	bool needToRemoveFromScaledbCache = false;
 	bool needToCommit = false;
 	unsigned short ddlFlag = 0;
@@ -1616,7 +1617,8 @@ int ha_scaledb::close(void) {
 		userId = sdbUserId_;
 	}
 	else {	// thd is NOT defined.  A system thread closes the opened tables.  Bug 969
-		userId = SDBGetSystemUserId();	// this is system user ID
+		userId = SDBGetNewUserId();	// avoid using system user ID
+		bGetNewUserId = true;
 		needToRemoveFromScaledbCache = true;
 		needToCommit = true;
 	}
@@ -1674,6 +1676,8 @@ int ha_scaledb::close(void) {
 
 	// set table number to 0 since this table handler is closed.
 	sdbTableNumber_ = 0;
+	if (bGetNewUserId)
+		SDBRemoveUserById(userId);
 	DBUG_RETURN(free_share(share));
 }
 
