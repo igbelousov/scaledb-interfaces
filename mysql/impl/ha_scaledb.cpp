@@ -2073,16 +2073,34 @@ int ha_scaledb::update_row(const unsigned char* old_row, unsigned char* new_row)
 
 	unsigned int retValue = 0;
 	bool funcRetValue = false;
-	retValue = placeMysqlRowInEngineBuffer( (unsigned char*) old_row, new_row, 2, false, funcRetValue );  // place old row into ScaleDB buffer 1 for comparison
-	if (retValue == 0)
-		retValue = placeMysqlRowInEngineBuffer( new_row, new_row, 1, false, funcRetValue );    // place new row into ScaleDB buffer 2 for comparison
+
+	// place old row into ScaleDB buffer 1 for comparison
+	retValue = placeMysqlRowInEngineBuffer( (unsigned char*) old_row, new_row, 2, false, funcRetValue );  
+	if (retValue == 0)	// place new row into ScaleDB buffer 2 for comparison
+		retValue = placeMysqlRowInEngineBuffer( new_row, new_row, 1, false, funcRetValue );
+
 	if (retValue > 0) {
 		dbug_tmp_restore_column_map(table->read_set, org_bitmap);
 		DBUG_RETURN( convertToMysqlErrorCode(retValue) );
 	}
 
-	uint64 queryId = ((THD*)ha_thd())->query_id;
+	THD* thd = ha_thd();
+	uint64 queryId = thd->query_id;
 	retValue = SDBUpdateRowAPI(sdbUserId_, sdbDbId_, sdbTableNumber_, sdbRowIdInScan_, queryId);
+
+	if (retValue == DATA_EXISTS) {	// bug 1203
+		// For UPDATE IGNORE statement, we need to change the error code so that MySQL does not send any more records to engine
+		char* pUpdateStmt = (char*) GET_MEMORY( thd->query_length() + 1 );
+		// convert LF to space, remove extra space, convert to lower case letters 
+		convertSeparatorLowerCase( pUpdateStmt, thd->query());
+		char* pUpdateKeyword = strstr(pUpdateStmt, "update ");
+		char* pIgnoreKeyword = strstr(pUpdateStmt, "ignore ");
+		if ( pUpdateKeyword && pIgnoreKeyword && (pUpdateKeyword < pIgnoreKeyword))
+			retValue = DATA_EXISTS_FATAL_ERROR;
+
+		RELEASE_MEMORY( (void*) pUpdateStmt);
+	}
+
 	errorNum = convertToMysqlErrorCode(retValue);
 
 #ifdef SDB_DEBUG_LIGHT
