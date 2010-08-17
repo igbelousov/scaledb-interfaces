@@ -4442,15 +4442,15 @@ int ha_scaledb::add_columns_to_table(THD* thd, TABLE *table_arg, unsigned short 
 		case MYSQL_TYPE_VARCHAR:  
 		case MYSQL_TYPE_VAR_STRING: 
 		case MYSQL_TYPE_TINY_BLOB:  // tiny	blob applies to to TEXT as well
-//			if ( pField->binary() ) 
-//				sdbFieldType = ENGINE_TYPE_BYTE_ARRAY;
-//			else
-//				sdbFieldType = ENGINE_TYPE_STRING;
-//			Fix for 1001, we treat all the variable length blobs, varchars, and text as a 
-//			binary array only, because they are padded by zero instead of any space if they
-//			fall short in length. ENGINE_TYPE_STRING means that they would get padded by space
-//			which is not desirable.
-			sdbFieldType = ENGINE_TYPE_BYTE_ARRAY;
+			if ( pField->binary() ) 
+				sdbFieldType = ENGINE_TYPE_BYTE_ARRAY;
+			else
+				sdbFieldType = ENGINE_TYPE_STRING;
+			//Fix for 1001, we treat all the variable length blobs, varchars, and text as a 
+			//binary array only, because they are padded by zero instead of any space if they
+			//fall short in length. ENGINE_TYPE_STRING means that they would get padded by space
+			//which is not desirable.
+			//sdbFieldType = ENGINE_TYPE_BYTE_ARRAY;
 
 			if( pField->field_length > scaledb_max_column_length_in_base_file )
 				sdbFieldSize = scaledb_max_column_length_in_base_file;
@@ -4462,15 +4462,10 @@ int ha_scaledb::add_columns_to_table(THD* thd, TABLE *table_arg, unsigned short 
 		case MYSQL_TYPE_BLOB:	// These 3 data types apply to to TEXT as well
 		case MYSQL_TYPE_MEDIUM_BLOB:  
 		case MYSQL_TYPE_LONG_BLOB: 
-//			if ( pField->binary() ) 
-//				sdbFieldType = ENGINE_TYPE_BYTE_ARRAY;
-//			else
-//				sdbFieldType = ENGINE_TYPE_STRING;
-//			Fix for 1001, we treat all the variable length blobs, varchars, and text as a 
-//			binary array only, because they are padded by zero instead of any space if they
-//			fall short in length. ENGINE_TYPE_STRING means that they would get padded by space
-//			which is not desirable.
-			sdbFieldType = ENGINE_TYPE_BYTE_ARRAY;
+			if ( pField->binary() ) 
+				sdbFieldType = ENGINE_TYPE_BYTE_ARRAY;
+			else
+				sdbFieldType = ENGINE_TYPE_STRING;
 
 			// We parse through the index keys, based on the participation of this field in the
 			// keys we decide how much of the field we want to store as part of the record and 
