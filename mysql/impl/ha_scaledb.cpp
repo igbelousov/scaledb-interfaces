@@ -94,7 +94,8 @@ static HASH scaledb_open_tables; ///< Hash used to track the number of open tabl
 pthread_mutex_t scaledb_mutex;   ///< This is the mutex used to init the hash; variable for scaledb share methods
 
 
-// convert ScaleDB error code to MySQL error code
+// convert ScaleDB error code to MySQL error code.
+// This method can be used as a centralized breakpoint to see what error code returned to MySQL.
 static int convertToMysqlErrorCode(int scaledbErrorCode) {
 	int mysqlErrorCode = 0;
 
@@ -102,32 +103,50 @@ static int convertToMysqlErrorCode(int scaledbErrorCode) {
 		case SUCCESS: 
 			mysqlErrorCode = 0;
 			break;
+
 		case DATA_EXISTS: 
+		case METAINFO_DUPLICATE_FOREIGN_KEY_CONSTRAINT:
 			mysqlErrorCode = HA_ERR_FOUND_DUPP_KEY;
 			break;
+
 		case KEY_DOES_NOT_EXIST: 
 			mysqlErrorCode = HA_ERR_KEY_NOT_FOUND;
 			break;
+
 		case WRONG_PARENT_KEY: 
-			//			mysqlErrorCode = HA_ERR_CANNOT_ADD_FOREIGN;
 			mysqlErrorCode = HA_ERR_NO_REFERENCED_ROW;
 			break;
-			//	case QUERY_KEY_DOES_NOT_EXIST: 
-			//		mysqlErrorCode = HA_ERR_KEY_NOT_FOUND;
-			//		break;
+
+	//	case QUERY_KEY_DOES_NOT_EXIST: 
+	//		mysqlErrorCode = HA_ERR_KEY_NOT_FOUND;
+	//		break;
+
 		case DEAD_LOCK: 
 		case LOCK_TABLE_FAILED:
 			mysqlErrorCode = HA_ERR_LOCK_WAIT_TIMEOUT;
 			break;
+
 		case METAINFO_ATTEMPT_DROP_REFERENCED_TABLE: 
 		case ATTEMPT_TO_DELETE_KEY_WITH_SUBORDINATES:
 			mysqlErrorCode = HA_ERR_ROW_IS_REFERENCED;
 			break;
+
 		case QUERY_END:
 		case STOP_TRAVERSAL:
 		case QUERY_KEY_DOES_NOT_EXIST: 
 			mysqlErrorCode = HA_ERR_END_OF_FILE;
 			break;
+
+		case METAINFO_WRONG_PARENT_DESIGNATOR_NAME:
+		case METAINFO_WRONG_FOREIGN_FIELD_NAME:
+		case METAINFO_WRONG_FOREIGN_TABLE_NAME:
+			mysqlErrorCode = HA_ERR_CANNOT_ADD_FOREIGN;
+			break;
+
+		case METAINFO_FAIL_TO_CREATE_INDEX:
+			mysqlErrorCode = HA_ERR_WRONG_INDEX;
+			break;
+
 		default:
 			mysqlErrorCode = HA_ERR_GENERIC;
 			break;
@@ -446,6 +465,7 @@ static int free_share(SCALEDB_SHARE *share)
 	return 0;
 }
 
+
 /* We close user connection when he logs off.
 We need to free MysqlTxn object for this user session.
 */
@@ -529,11 +549,11 @@ static int scaledb_savepoint_set(handlerton *hton, THD *thd, void *sv) {
 	DBUG_RETURN(0);
 }
 
+
 /*
 rollback to a specified savepoint.
 The user's savepoint name is saved at sv + savepoint_offset
 */
-
 static int scaledb_savepoint_rollback(handlerton *hton, THD *thd, void *sv) {
 
 #ifdef SDB_DEBUG_LIGHT
@@ -2866,10 +2886,6 @@ void ha_scaledb::prepareIndexQueryManager(unsigned int indexNum, const uchar* ke
 			SDBDebugPrintHeader(" QueryManagerId= ");
 			SDBDebugPrintInt( sdbQueryMgrId_ );
 			SDBDebugPrintString(" \n");
-			//pQm_->showQueryDef();
-			//pQm_->showSearchKey(true);
-			//pQm_->debugPath(true);
-			//pQm_->showIndexTraversal(true);
 			SDBDebugEnd();			// synchronize threads printout	
 		}
 #endif
@@ -2897,7 +2913,6 @@ int ha_scaledb::prepareIndexKeyQuery(const uchar* key, uint key_len, enum ha_rke
 	int keyLengthLeft = (int) key_len;
 	unsigned int realVarLength;
 	unsigned int mysqlVarLengthBytes;
-	int columnLen = 0;
 	int offsetLength;
 	bool keyValueIsNull;
 	bool stringField;
@@ -2931,6 +2946,7 @@ int ha_scaledb::prepareIndexKeyQuery(const uchar* key, uint key_len, enum ha_rke
 	}
 
 	for ( int i=0; i < numOfKeyFields; ++i ) {
+
 		pKeyPart = pKey->key_part + i;
 		pField = pKeyPart->field;
 		fieldType = pField->type();
@@ -2939,7 +2955,6 @@ int ha_scaledb::prepareIndexKeyQuery(const uchar* key, uint key_len, enum ha_rke
 		offsetLength = 0;
 		keyValueIsNull = false;
 		stringField = false;
-		//pkeyValuePtr[i] = NULL;
 
 		if ( (keyOffset != NULL) && (keyLengthLeft >= 0) ) {
 
@@ -2954,74 +2969,29 @@ int ha_scaledb::prepareIndexKeyQuery(const uchar* key, uint key_len, enum ha_rke
 				}
 			}
 
-			switch ( fieldType ) {  // byte-flip integer field, 
-			// case statements should be listed in the decending use frequency
-			case MYSQL_TYPE_LONG:	
-			case MYSQL_TYPE_TIMESTAMP:	// TIMESTAMP is treated as a 4-byte integer
-			case MYSQL_TYPE_FLOAT:		// FLOAT is treated as a 4-byte number
-				columnLen = 4;	// no need to flip byte here.  The engine should do it.
-				break;
+			// The key field length pKeyPart->length may be different from the length of a key column.  
+			// This is because MySQL may use a subset prefix of a string column as the key.  
+			// Hence the column length may be 100, but the key field length may be 20.
+			// Also pKeyPart->store_length contains null bytes, length bytes, and key value.
 
-			case MYSQL_TYPE_SHORT:
-				columnLen = 2;	// no need to flip byte here.  The engine should do it.
-				break;
+			if (fieldType == MYSQL_TYPE_VARCHAR ||	
+				fieldType == MYSQL_TYPE_VAR_STRING ||
+				fieldType == MYSQL_TYPE_TINY_BLOB ||
+				fieldType == MYSQL_TYPE_BLOB ||
+				fieldType == MYSQL_TYPE_MEDIUM_BLOB ||
+				fieldType == MYSQL_TYPE_LONG_BLOB ) {
 
-			case MYSQL_TYPE_DATE:	// DATE is treated as an 3-byte integer
-			case MYSQL_TYPE_TIME:		// TIME is treated as a 3-byte integer
-			case MYSQL_TYPE_INT24:
-				columnLen = 3;
-				break;
+				mysqlVarLengthBytes = pKeyPart->store_length - pKeyPart->length - offsetLength;
+				if (mysqlVarLengthBytes == 1)
+					realVarLength = (unsigned int) *(keyOffset+offsetLength);
+				else if (mysqlVarLengthBytes == 2)
+					realVarLength = (unsigned int) *( (unsigned short*)(keyOffset+offsetLength));
+				else if (mysqlVarLengthBytes == 4)
+					realVarLength = *( (unsigned int*)(keyOffset+offsetLength));
 
-			case MYSQL_TYPE_LONGLONG:	
-			case MYSQL_TYPE_DATETIME:	// DATETIME is treated as an 8-byte integer
-			case MYSQL_TYPE_DOUBLE:		// DOUBLE is treated as a 8-byte number
-				columnLen = 8;
-				break;
-
-			case MYSQL_TYPE_TINY:  case MYSQL_TYPE_YEAR:
-				columnLen = 1;
-				break;
-
-			case MYSQL_TYPE_BIT:
-				columnLen = ((Field_bit*) pField)->pack_length();
-				break;
-
-			case MYSQL_TYPE_SET:
-				columnLen = ((Field_set*) pField)->pack_length();
-				break;
-
-			case MYSQL_TYPE_NEWDECIMAL:
-				columnLen = ((Field_new_decimal*) pField)->bin_size;
-				break;
-
-			case MYSQL_TYPE_ENUM:
-				columnLen = ((Field_enum*) pField)->pack_length();
-				break;
-
-			case MYSQL_TYPE_VARCHAR:	
-			case MYSQL_TYPE_VAR_STRING:
-			case MYSQL_TYPE_TINY_BLOB:
-			case MYSQL_TYPE_BLOB:
-			case MYSQL_TYPE_MEDIUM_BLOB:  
-			case MYSQL_TYPE_LONG_BLOB: 
-				realVarLength = (unsigned int) *( (unsigned short*)(keyOffset+offsetLength));
-				mysqlVarLengthBytes = 2;
-				columnLen = pField->field_length + mysqlVarLengthBytes ;
 				stringField = true;
-				break;
+			}
 
-			case MYSQL_TYPE_STRING:
-				columnLen = pField->field_length;
-				break;
-
-			default:
-				SDBTerminate(IDENTIFIER_INTERFACE + ERRORNUM_INTERFACE_MYSQL + 1, 
-					"This data type cannot be used as index.");		// ERROR - 16010001
-				break;
-			}	// switch
-
-			keyOffset = keyOffset + offsetLength; 
-			keyLengthLeft = keyLengthLeft - offsetLength;
 		}	// if ( (keyOffset != NULL) && (keyLengthLeft >= 0) ) 
 
 		//        if ( !virtualTableFlag_ ) {
@@ -3029,9 +2999,9 @@ int ha_scaledb::prepareIndexKeyQuery(const uchar* key, uint key_len, enum ha_rke
 		if ( keyValueIsNull )	// user specifies "column is NULL" in SQL statement
 			pCurrentKeyValue = NULL;
 		else {
-			pCurrentKeyValue = keyOffset+mysqlVarLengthBytes;
+			pCurrentKeyValue = keyOffset+offsetLength+mysqlVarLengthBytes;
 			if (bRangeQuery_)
-				pCurrentEndKeyValue = pEndKeyOffset+mysqlVarLengthBytes;
+				pCurrentEndKeyValue = pEndKeyOffset+offsetLength+mysqlVarLengthBytes;
 		}
 
 		pFieldName = (char*) pField->field_name;
@@ -3039,8 +3009,22 @@ int ha_scaledb::prepareIndexKeyQuery(const uchar* key, uint key_len, enum ha_rke
 			pFieldName = pFieldName + 3;	// skip first 3 letters Lx_ in the generated column name
 
 		char *designatorName = pSdbMysqlTxn_->getDesignatorNameByQueryMrgId(sdbQueryMgrId_);
+		bool bLikeOperator = false;
 		if ( stringField ) {
-			retValue =SDBDefineQueryPrefix(sdbQueryMgrId_, sdbDbId_, sdbDesignatorId_, pFieldName, pCurrentKeyValue, false, realVarLength, false);
+			if ( (realVarLength == pKeyPart->length) && (find_flag == HA_READ_KEY_OR_NEXT) ) {
+				// Bug 1001: Most likely, there is a LIKE operator in the WHERE clause
+				// We need to adjust realVarLength value by removing the trailing zeroes.
+				bLikeOperator = true;
+
+				char* pChar = pCurrentKeyValue + realVarLength -1;	// start with the last character of the field value
+				while ((*pChar == '\0') && (pChar > pCurrentKeyValue)) 
+					pChar = pChar - 1;
+
+				realVarLength = pChar - pCurrentKeyValue + 1;	// real length without the trailing zeros.
+			}
+
+			retValue =SDBDefineQueryPrefix(sdbQueryMgrId_, sdbDbId_, sdbDesignatorId_, pFieldName, pCurrentKeyValue, 
+											bLikeOperator, realVarLength, false);
 		}
 		else{
 			if (bRangeQuery_) {	// Example: SELECT * FROM t1 WHERE c1 BETWEEN 5 AND 8;
@@ -3062,28 +3046,28 @@ int ha_scaledb::prepareIndexKeyQuery(const uchar* key, uint key_len, enum ha_rke
 		switch (find_flag) {
 			// case statements are listed in decending use frequency
 			case HA_READ_KEY_EXACT:
-				SDBQueryCursorSetFlags(sdbQueryMgrId_, sdbDesignatorId_, false,SDB_KEY_SEARCH_DIRECTION_EQ, true, true);
+				SDBQueryCursorSetFlags(sdbQueryMgrId_, sdbDesignatorId_, false, SDB_KEY_SEARCH_DIRECTION_EQ, true, true);
 				break;
 
 			case HA_READ_AFTER_KEY:
-				SDBQueryCursorSetFlags(sdbQueryMgrId_, sdbDesignatorId_, true,SDB_KEY_SEARCH_DIRECTION_GT, false, true);
+				SDBQueryCursorSetFlags(sdbQueryMgrId_, sdbDesignatorId_, true, SDB_KEY_SEARCH_DIRECTION_GT, false, true);
 				break;
 
 			case HA_READ_KEY_OR_NEXT:
-				SDBQueryCursorSetFlags(sdbQueryMgrId_, sdbDesignatorId_, false,SDB_KEY_SEARCH_DIRECTION_GE, false, true);
+				SDBQueryCursorSetFlags(sdbQueryMgrId_, sdbDesignatorId_, false, SDB_KEY_SEARCH_DIRECTION_GE, bLikeOperator, true);
 				break;
 
 			case HA_READ_BEFORE_KEY:
-				SDBQueryCursorSetFlags(sdbQueryMgrId_, sdbDesignatorId_, true,SDB_KEY_SEARCH_DIRECTION_LT, false, true);
+				SDBQueryCursorSetFlags(sdbQueryMgrId_, sdbDesignatorId_, true, SDB_KEY_SEARCH_DIRECTION_LT, false, true);
 				break;
 
 			case HA_READ_PREFIX_LAST:
 			case HA_READ_PREFIX_LAST_OR_PREV:
-				SDBQueryCursorSetFlags(sdbQueryMgrId_, sdbDesignatorId_, false,SDB_KEY_SEARCH_DIRECTION_LE, false, true);
+				SDBQueryCursorSetFlags(sdbQueryMgrId_, sdbDesignatorId_, false, SDB_KEY_SEARCH_DIRECTION_LE, false, true);
 				break;
 
 			default:
-				SDBQueryCursorSetFlags(sdbQueryMgrId_, sdbDesignatorId_, false,SDB_KEY_SEARCH_DIRECTION_EQ, true, true);
+				SDBQueryCursorSetFlags(sdbQueryMgrId_, sdbDesignatorId_, false, SDB_KEY_SEARCH_DIRECTION_EQ, true, true);
 				break;
 		}
 
@@ -3092,11 +3076,11 @@ int ha_scaledb::prepareIndexKeyQuery(const uchar* key, uint key_len, enum ha_rke
 
 		//        }  // if ( !virtualTableFlag_ )
 
-		keyOffset = keyOffset + columnLen; 
+		keyOffset = keyOffset + pKeyPart->store_length; 
 		if (bRangeQuery_)
-			pEndKeyOffset = pEndKeyOffset + columnLen; 
+			pEndKeyOffset = pEndKeyOffset + pKeyPart->store_length; 
 
-		keyLengthLeft = keyLengthLeft - columnLen;
+		keyLengthLeft = keyLengthLeft - pKeyPart->store_length;
 		if ( keyLengthLeft == 0 ) 
 			break;
 	}	// for ( int i=0; i < numOfKeyFields; ++i )
@@ -4413,10 +4397,6 @@ int ha_scaledb::add_columns_to_table(THD* thd, TABLE *table_arg, unsigned short 
 
 		case MYSQL_TYPE_ENUM:
 			sdbFieldType = ENGINE_TYPE_U_NUMBER;
-
-			// In MySQL 5.1.20-beta, MySQL treats ENUM as string during create table and select.
-			// But it treats ENUM as INT during inserts.  This is wrong!  It happens to work now.
-			// It appears to get fixed in mysql-5.1.42.
 			sdbFieldSize = ((Field_enum*) pField)->pack_length();	// TBD: need validation
 			sdbMaxDataLength = 0;
 			break;
@@ -4446,11 +4426,6 @@ int ha_scaledb::add_columns_to_table(THD* thd, TABLE *table_arg, unsigned short 
 				sdbFieldType = ENGINE_TYPE_BYTE_ARRAY;
 			else
 				sdbFieldType = ENGINE_TYPE_STRING;
-			//Fix for 1001, we treat all the variable length blobs, varchars, and text as a 
-			//binary array only, because they are padded by zero instead of any space if they
-			//fall short in length. ENGINE_TYPE_STRING means that they would get padded by space
-			//which is not desirable.
-			//sdbFieldType = ENGINE_TYPE_BYTE_ARRAY;
 
 			if( pField->field_length > scaledb_max_column_length_in_base_file )
 				sdbFieldSize = scaledb_max_column_length_in_base_file;
@@ -4515,6 +4490,7 @@ int ha_scaledb::create_fks(THD* thd, TABLE *table_arg, char* tblName, SdbDynamic
 						   char* pCreateTableStmt, bool bIsAlterTableStmt) {
 
 	unsigned int errorNum = 0;
+	int retValue = 0;
 	int numOfKeys = (int) table_arg->s->keys ;
 
 	if ( thd->query_length() > 0 ) {
@@ -4532,8 +4508,8 @@ int ha_scaledb::create_fks(THD* thd, TABLE *table_arg, char* tblName, SdbDynamic
 		// then we are modifying other constraints.  We need to carry the existing foreign key constraints
 		// into the newly created table.
 		if (bIsAlterTableStmt && (!pCurrForeignKeyClause) ) {
-			errorNum = SDBCopyForeignKey(sdbUserId_, sdbDbId_, sdbTableNumber_, pSdbMysqlTxn_->getAlterTableName());
-			return errorNum;	// we should exit early for this case.
+			retValue = SDBCopyForeignKey(sdbUserId_, sdbDbId_, sdbTableNumber_, pSdbMysqlTxn_->getAlterTableName());
+			return convertToMysqlErrorCode(retValue);	// we should exit early for this case.
 		}
 
 		while ( pCurrForeignKeyClause != NULL ) {  // foreign key clause exists
@@ -4555,17 +4531,18 @@ int ha_scaledb::create_fks(THD* thd, TABLE *table_arg, char* tblName, SdbDynamic
 			char* pColumnNames = strstr( pOffset, "(" );	// points to column name
 
 			if (!pColumnNames) {
-				errorNum = HA_ERR_CANNOT_ADD_FOREIGN;
-				return errorNum;
+				retValue = METAINFO_WRONG_FOREIGN_FIELD_NAME;
+				break;	// early exit
 			}
+
 			pColumnNames++;
 
 			// set key number, index column names, number of keyfields
 			int keyNum = pKeyI->setKeyNumber( table_arg->key_info, numOfKeys, pColumnNames );
 
 			if (keyNum == -1){
-				errorNum = HA_ERR_CANNOT_ADD_FOREIGN;
-				return errorNum;
+				retValue = METAINFO_WRONG_FOREIGN_FIELD_NAME;
+				break;	// early exit
 			}
 
 			char* pTableName = strstr( pOffset, "references ") + 11;  // points to parent table name
@@ -4580,24 +4557,29 @@ int ha_scaledb::create_fks(THD* thd, TABLE *table_arg, char* tblName, SdbDynamic
 			if ( parentTableId == 0 ) 
 				parentTableId = SDBOpenTable(sdbUserId_, sdbDbId_, pParentTableName); 
 
-			if ( parentTableId == 0 ) 
-				return HA_ERR_CANNOT_ADD_FOREIGN;
+			if ( parentTableId == 0 ) {
+				retValue = METAINFO_WRONG_FOREIGN_TABLE_NAME;
+				break;	// early exit
+			}
 
 			// save the info about this foreign key for use when creating the associated designator
 	    	if (keyNum >= 0){
                 SDBArrayPutPtr(fkInfoArray, keyNum+1, pKeyI);
-				//fkInfoArray->useLocation(keyNum+1);
-				//fkInfoArray->putPtrInArray(keyNum+1, pKeyI);
 			}
 
-			unsigned short retValue = SDBDefineForeignKey(sdbUserId_, sdbDbId_, tblName, pParentTableName, pKeyI->getForeignKeyName(),
+			// For ALTER TABLE statement, Need to return an error code if the constraint already exists.
+			if (bIsAlterTableStmt && pSdbMysqlTxn_->getAlterTableName()) {
+				if ( SDBCheckConstraintIfExits(sdbUserId_, sdbDbId_, pSdbMysqlTxn_->getAlterTableName(), pKeyI->getForeignKeyName()) ) 
+				{
+					retValue = METAINFO_DUPLICATE_FOREIGN_KEY_CONSTRAINT;
+					break;
+				}
+			}
+
+			retValue = SDBDefineForeignKey(sdbUserId_, sdbDbId_, tblName, pParentTableName, pKeyI->getForeignKeyName(),
 				pKeyI->getIndexColumnNames(), pKeyI->getParentColumnNames() );
-
-
-			if ( retValue > 0 ) {
-				errorNum = HA_ERR_CANNOT_ADD_FOREIGN;
-				return errorNum;
-			}
+			if ( retValue > 0 ) 
+				break;	// early exit
 
 			// Need to add a non-unique secondary index here based on the foreign key constraint
 
@@ -4607,6 +4589,7 @@ int ha_scaledb::create_fks(THD* thd, TABLE *table_arg, char* tblName, SdbDynamic
 
 	}	// if ( thd->query_length() > 0 )
 
+	errorNum = convertToMysqlErrorCode(retValue);
 	return errorNum;
 }
 
@@ -4637,6 +4620,7 @@ int ha_scaledb::get_field_key_participation_length(THD* thd, TABLE *table_arg, F
 int ha_scaledb::add_indexes_to_table(THD* thd, TABLE *table_arg, char* tblName, unsigned short ddlFlag, 
 									 SdbDynamicArray* fkInfoArray, char* pCreateTableStmt) {
 	unsigned int errorNum = 0;
+	int retCode = 0;
 	unsigned int primaryKeyNum = table_arg->s->primary_key;
 	KEY_PART_INFO* pKeyPart;
 	int numOfKeys = (int) table_arg->s->keys ;
@@ -4685,8 +4669,8 @@ int ha_scaledb::add_indexes_to_table(THD* thd, TABLE *table_arg, char* tblName, 
 
 			// a foreign key and we can't find the parent designator
 			if (fKeyInfo && !parent){
-				errorNum = HA_ERR_CANNOT_ADD_FOREIGN;
-				return errorNum;
+				retCode = METAINFO_WRONG_PARENT_DESIGNATOR_NAME;
+				break;
 			}
 
 			unsigned short retValue = SDBCreateIndex(sdbUserId_, sdbDbId_, sdbTableNumber_, designatorName, 
@@ -4697,8 +4681,8 @@ int ha_scaledb::add_indexes_to_table(THD* thd, TABLE *table_arg, char* tblName, 
 			if (retValue == 0) {	// an error occurs
 				SDBRollBack(sdbUserId_);
 				SDBDeleteTableById(sdbUserId_, sdbDbId_, sdbTableNumber_);	// cleans up table name and field name
-				errorNum = HA_ERR_NO_SUCH_TABLE;
-				return errorNum;
+				retCode = METAINFO_FAIL_TO_CREATE_INDEX;
+				break;
 			}
 
 		} else {  // add secondary index (including the foreign key)
@@ -4731,8 +4715,8 @@ int ha_scaledb::add_indexes_to_table(THD* thd, TABLE *table_arg, char* tblName, 
 
 			// a foreign key and we can't find the parent designator
 			if (fKeyInfo && !parent){
-				errorNum = HA_ERR_CANNOT_ADD_FOREIGN;
-				return errorNum;
+				retCode = METAINFO_WRONG_PARENT_DESIGNATOR_NAME;
+				break;
 			}
 
 			unsigned short retValue = SDBCreateIndex(sdbUserId_, sdbDbId_, sdbTableNumber_, designatorName,  
@@ -4743,8 +4727,8 @@ int ha_scaledb::add_indexes_to_table(THD* thd, TABLE *table_arg, char* tblName, 
 			if (retValue == 0) {	// an error occurs as index number should be > 0
 				SDBRollBack(sdbUserId_);
 				SDBDeleteTableById(sdbUserId_, sdbDbId_, sdbTableNumber_);	// cleans up table name and field name
-				errorNum = HA_ERR_WRONG_INDEX;
-				return errorNum;
+				retCode = METAINFO_FAIL_TO_CREATE_INDEX;
+				break;
 			}
 		}
 
@@ -4752,6 +4736,7 @@ int ha_scaledb::add_indexes_to_table(THD* thd, TABLE *table_arg, char* tblName, 
 		RELEASE_MEMORY( designatorName );
 	}   // for (int i=0; i < numOfKeys; ++i )
 
+	errorNum = convertToMysqlErrorCode(retCode);
 	return errorNum;
 }
 

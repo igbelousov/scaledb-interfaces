@@ -255,6 +255,9 @@ char *SDBGetParentIndexByForeignFields(unsigned short dbmsId, char *tableName, c
 // copy the foreign key constraints of an existing table (identified by existingTableName) into a new table with tableId
 unsigned short SDBCopyForeignKey(unsigned int userId, unsigned short dbId, unsigned short tableId, char* existingTableName);
 
+// return true if a foreign key constraint exists
+bool SDBCheckConstraintIfExits(unsigned int userId, unsigned short dbId, char* pTableName, char* pConstraintName);
+
 unsigned short SDBRebuildIndexes(unsigned int userId, unsigned short dbId, char *tableName);
 unsigned short SDBRebuildIndexesByTableId(unsigned int userId, unsigned short dbId, unsigned short tableNumber);
 
