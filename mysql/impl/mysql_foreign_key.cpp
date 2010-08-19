@@ -110,12 +110,18 @@ char* MysqlForeignKey::getNextToken(char* token, char* cstr) {
 } 
 
 
-void MysqlForeignKey::setForeignKeyName(char* pForeignKeyName) {
+unsigned short MysqlForeignKey::setForeignKeyName(char* pForeignKeyName, char* pUserTableName/*=NULL*/, int fkNum/*=0*/) {
+	unsigned short keyNameLen = 0;
     char keyName[ METAINFO_MAX_IDENTIFIER_SIZE ] = { 0 };
 
     getNextToken( keyName, pForeignKeyName );
-	if ( *keyName != '(' )	// index name is optional
+	keyNameLen = (unsigned short) strlen(keyName);
+	if ( keyNameLen == 0 ) {	// index name is NOT specified
+		pForeignKeyName_ = SDBUtilFindDesignatorName(pUserTableName, "sdbfk", fkNum);
+	} else 						// index name is specified
 		pForeignKeyName_ = SDBUtilDuplicateString( keyName );
+
+	return keyNameLen;
 }
 
 

@@ -4512,6 +4512,7 @@ int ha_scaledb::create_fks(THD* thd, TABLE *table_arg, char* tblName, SdbDynamic
 			return convertToMysqlErrorCode(retValue);	// we should exit early for this case.
 		}
 
+		int foreignKeyNum = 0;
 		while ( pCurrForeignKeyClause != NULL ) {  // foreign key clause exists
 			pConstraintName = NULL;
 			if (pCurrConstraintClause && pCurrForeignKeyClause) {
@@ -4521,11 +4522,16 @@ int ha_scaledb::create_fks(THD* thd, TABLE *table_arg, char* tblName, SdbDynamic
 
 			MysqlForeignKey* pKeyI = new MysqlForeignKey();
 			char* pOffset = pCurrForeignKeyClause + 12;  // there are 12 characters in "foreign key "
-			if (pConstraintName)
-				pKeyI->setForeignKeyName( pConstraintName );// use constraint symbol as foreign key constraint name
-			else {
-				pKeyI->setForeignKeyName( pOffset );		// use index_name as foreign key constraint name
-				pOffset = pOffset + pKeyI->getForeignKeyNameLength();	// advance after index_name
+			if (pConstraintName)	// use constraint symbol as foreign key constraint name
+				pKeyI->setForeignKeyName( pConstraintName );
+			else {	// use index_name as foreign key constraint name
+				char* pUserTableName = tblName;
+				if (bIsAlterTableStmt)
+					pUserTableName = pSdbMysqlTxn_->getAlterTableName();
+
+				++foreignKeyNum;
+				unsigned short keyNameLen = pKeyI->setForeignKeyName( pOffset, pUserTableName, foreignKeyNum);	
+				pOffset = pOffset + keyNameLen;	// advance after index_name
 			}
 
 			char* pColumnNames = strstr( pOffset, "(" );	// points to column name

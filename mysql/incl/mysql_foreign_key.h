@@ -42,7 +42,7 @@ public:
 	// This utility function can get next MySQL token.
 	// Make it static so that it can be called without instantiating the object.
 	static char* getNextToken(char* token, char* cstr);
-	void setForeignKeyName(char* pForeignKeyName);
+	unsigned short setForeignKeyName(char* pForeignKeyName, char* pUserTableName=NULL, int fkNum=0);
 	char* getForeignKeyName() { return pForeignKeyName_; }
     unsigned short getForeignKeyNameLength() { return ((unsigned short) strlen( pForeignKeyName_ )); }
 
