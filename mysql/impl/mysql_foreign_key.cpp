@@ -110,6 +110,7 @@ char* MysqlForeignKey::getNextToken(char* token, char* cstr) {
 } 
 
 
+// save foreign key name and return the length of foreign key index name
 unsigned short MysqlForeignKey::setForeignKeyName(char* pForeignKeyName, char* pUserTableName/*=NULL*/, int fkNum/*=0*/) {
 	unsigned short keyNameLen = 0;
     char keyName[ METAINFO_MAX_IDENTIFIER_SIZE ] = { 0 };

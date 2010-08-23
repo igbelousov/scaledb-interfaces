@@ -254,6 +254,8 @@ unsigned short SDBDefineForeignKey(unsigned int userId, unsigned short dbId,
 char *SDBGetParentIndexByForeignFields(unsigned short dbmsId, char *tableName, char **fields, char **foreignFields);
 // copy the foreign key constraints of an existing table (identified by existingTableName) into a new table with tableId
 unsigned short SDBCopyForeignKey(unsigned int userId, unsigned short dbId, unsigned short tableId, char* existingTableName);
+// delete a single foreign key constraint of an existing table 
+unsigned short SDBDeleteForeignKeyConstraint(unsigned int userId, unsigned short dbId, unsigned short tableId, char* pConstraintName);
 
 // return true if a foreign key constraint exists
 bool SDBCheckConstraintIfExits(unsigned int userId, unsigned short dbId, char* pTableName, char* pConstraintName);

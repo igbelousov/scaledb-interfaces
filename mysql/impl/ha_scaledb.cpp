@@ -147,6 +147,14 @@ static int convertToMysqlErrorCode(int scaledbErrorCode) {
 			mysqlErrorCode = HA_ERR_WRONG_INDEX;
 			break;
 
+		case METAINFO_MISSING_FOREIGN_KEY_CONSTRAINT:
+			mysqlErrorCode = HA_ERR_DROP_INDEX_FK;
+			break;
+
+		case METAINFO_DELETE_ROW_BY_ROW:	// tell MySQL to call different method 
+			mysqlErrorCode = HA_ERR_WRONG_COMMAND;
+			break;
+
 		default:
 			mysqlErrorCode = HA_ERR_GENERIC;
 			break;
@@ -1860,6 +1868,7 @@ unsigned short ha_scaledb::placeMysqlRowInEngineBuffer(unsigned char* rowBuf1, u
 						mysqlVarLengthBytes = 2;
 						realVarLength = (unsigned int) *( (unsigned short*)pFieldValue );
 					}
+
 					retCode = SDBPrepareVarField(sdbUserId_, sdbDbId_, sdbTableNumber_, fieldId, 
 						(char*) pFieldValue + mysqlVarLengthBytes, realVarLength, groupType, false);
 				}
@@ -1890,7 +1899,8 @@ unsigned short ha_scaledb::placeMysqlRowInEngineBuffer(unsigned char* rowBuf1, u
 
 		if (retCode > 0)
 			break; 
-	}
+	}	// for (unsigned short i=0; i < table->s->fields; ++i)
+
 	return retCode;
 }
 
@@ -2207,7 +2217,6 @@ int ha_scaledb::delete_row(const unsigned char* buf) {
 		THD* thd = ha_thd();
 		scaledb_rollback(ht, thd, true);
 	}
-	errorNum = convertToMysqlErrorCode(retValue);
 
 #ifdef SDB_DEBUG_LIGHT
 	if (mysqlInterfaceDebugLevel_) {
@@ -2227,6 +2236,7 @@ int ha_scaledb::delete_row(const unsigned char* buf) {
 #endif
 
 	dbug_tmp_restore_column_map(table->read_set, org_bitmap);
+	errorNum = convertToMysqlErrorCode(retValue);
 	DBUG_RETURN( errorNum );
 }
 
@@ -2263,7 +2273,6 @@ int ha_scaledb::delete_all_rows()
 					stmtFlag |= SDBFLAG_CMD_OPEN_FILE;
 			}
 
-
 			// step 1: the primary node of a cluster needs to impose a table-level-write-lock.
 			// For non-cluster solution, we also need to impose a table-level-write-lock.
 			if ( !(stmtFlag & SDBFLAG_DDL_SECOND_NODE) ) {
@@ -2294,14 +2303,13 @@ int ha_scaledb::delete_all_rows()
 					truncateTableReady = sqlStmt(sdbUserId_, sdbDbId_, stmtWithHint);
 					RELEASE_MEMORY(stmtWithHint);
 			}
-			errorNum = convertToMysqlErrorCode( retValue );
+
 		} 
-		else	// need to tell MySQL to issue delete_row calls 1 by 1
-			errorNum = HA_ERR_WRONG_COMMAND;
-	} else
-		errorNum = convertToMysqlErrorCode( retValue );
+		else	// not TRUNCATE statement, need to tell MySQL to issue delete_row calls 1 by 1
+			retValue = METAINFO_DELETE_ROW_BY_ROW;
+	} 
 
-
+	errorNum = convertToMysqlErrorCode( retValue );
 	DBUG_RETURN(errorNum);
 }
 
@@ -2382,8 +2390,6 @@ retryFetch:
 	if (retValue == ROW_RETRY_FETCH)
 		goto retryFetch;
 
-	retValue = convertToMysqlErrorCode( retValue );
-
 #ifdef SDB_DEBUG_LIGHT
 	if (mysqlInterfaceDebugLevel_ >= 5) {
 		if (!retValue){
@@ -2396,7 +2402,8 @@ retryFetch:
 	}
 #endif
 
-	DBUG_RETURN( retValue );
+	int errorNum = convertToMysqlErrorCode( retValue );
+	DBUG_RETURN( errorNum );
 }
 
 
@@ -4514,6 +4521,7 @@ int ha_scaledb::create_fks(THD* thd, TABLE *table_arg, char* tblName, SdbDynamic
 
 		int foreignKeyNum = 0;
 		while ( pCurrForeignKeyClause != NULL ) {  // foreign key clause exists
+
 			pConstraintName = NULL;
 			if (pCurrConstraintClause && pCurrForeignKeyClause) {
 				if (pCurrForeignKeyClause - pCurrConstraintClause > 11)
@@ -4534,60 +4542,90 @@ int ha_scaledb::create_fks(THD* thd, TABLE *table_arg, char* tblName, SdbDynamic
 				pOffset = pOffset + keyNameLen;	// advance after index_name
 			}
 
-			char* pColumnNames = strstr( pOffset, "(" );	// points to column name
+			bool bAddForeignKey = true;	// the default is to add foreign key
+			if ( strstr( pCreateTableStmt, "drop foreign key ") )
+				bAddForeignKey = false;
 
-			if (!pColumnNames) {
-				retValue = METAINFO_WRONG_FOREIGN_FIELD_NAME;
-				break;	// early exit
-			}
+			if ( bAddForeignKey ) {
+				// define/add a foreign key constraint
+				char* pColumnNames = strstr( pOffset, "(" );	// points to column name
+				if (!pColumnNames) {
+					retValue = METAINFO_WRONG_FOREIGN_FIELD_NAME;
+					break;	// early exit
+				}
 
-			pColumnNames++;
+				pColumnNames++;
 
-			// set key number, index column names, number of keyfields
-			int keyNum = pKeyI->setKeyNumber( table_arg->key_info, numOfKeys, pColumnNames );
+				// set key number, index column names, number of keyfields
+				int keyNum = pKeyI->setKeyNumber( table_arg->key_info, numOfKeys, pColumnNames );
+				if (keyNum == -1){
+					retValue = METAINFO_WRONG_FOREIGN_FIELD_NAME;
+					break;	// early exit
+				}
 
-			if (keyNum == -1){
-				retValue = METAINFO_WRONG_FOREIGN_FIELD_NAME;
-				break;	// early exit
-			}
+				char* pTableName = strstr( pOffset, "references ") + 11;  // points to parent table name
+				pKeyI->setParentTableName( pTableName );
+				pOffset = pTableName + pKeyI->getParentTableNameLength();
+				pColumnNames = strstr( pOffset, "(" ) + 1;   // points to column name
+				pKeyI->setParentColumnNames( pColumnNames );
 
-			char* pTableName = strstr( pOffset, "references ") + 11;  // points to parent table name
-			pKeyI->setParentTableName( pTableName );
-			pOffset = pTableName + pKeyI->getParentTableNameLength();
-			pColumnNames = strstr( pOffset, "(" ) + 1;   // points to column name
-			pKeyI->setParentColumnNames( pColumnNames );
+				// test case 109.sql, Make sure the parent table is open.  
+				char* pParentTableName = pKeyI->getParentTableName();
+				unsigned short parentTableId  = SDBGetTableNumberByName( sdbUserId_, sdbDbId_, pParentTableName );
+				if ( parentTableId == 0 ) 
+					parentTableId = SDBOpenTable(sdbUserId_, sdbDbId_, pParentTableName); 
 
-			// test case 109.sql, Make sure the parent table is open.  
-			char* pParentTableName = pKeyI->getParentTableName();
-			unsigned short parentTableId  = SDBGetTableNumberByName( sdbUserId_, sdbDbId_, pParentTableName );
-			if ( parentTableId == 0 ) 
-				parentTableId = SDBOpenTable(sdbUserId_, sdbDbId_, pParentTableName); 
+				if ( parentTableId == 0 ) {
+					retValue = METAINFO_WRONG_FOREIGN_TABLE_NAME;
+					break;	// early exit
+				}
 
-			if ( parentTableId == 0 ) {
-				retValue = METAINFO_WRONG_FOREIGN_TABLE_NAME;
-				break;	// early exit
-			}
+				// save the info about this foreign key for use when creating the associated designator
+	    		if (keyNum >= 0){
+					SDBArrayPutPtr(fkInfoArray, keyNum+1, pKeyI);
+				}
 
-			// save the info about this foreign key for use when creating the associated designator
-	    	if (keyNum >= 0){
-                SDBArrayPutPtr(fkInfoArray, keyNum+1, pKeyI);
-			}
+				// For ALTER TABLE statement, Need to return an error code if the constraint already exists.
+				if (bIsAlterTableStmt && pSdbMysqlTxn_->getAlterTableName()) {
+					if ( SDBCheckConstraintIfExits(sdbUserId_, sdbDbId_, pSdbMysqlTxn_->getAlterTableName(), 
+							pKeyI->getForeignKeyName()) ) {
+						retValue = METAINFO_DUPLICATE_FOREIGN_KEY_CONSTRAINT;
+						break;
+					}
+				}
 
-			// For ALTER TABLE statement, Need to return an error code if the constraint already exists.
-			if (bIsAlterTableStmt && pSdbMysqlTxn_->getAlterTableName()) {
-				if ( SDBCheckConstraintIfExits(sdbUserId_, sdbDbId_, pSdbMysqlTxn_->getAlterTableName(), pKeyI->getForeignKeyName()) ) 
-				{
-					retValue = METAINFO_DUPLICATE_FOREIGN_KEY_CONSTRAINT;
+				retValue = SDBDefineForeignKey(sdbUserId_, sdbDbId_, tblName, pParentTableName, pKeyI->getForeignKeyName(),
+					pKeyI->getIndexColumnNames(), pKeyI->getParentColumnNames() );
+				if ( retValue > 0 ) 
+					break;	// early exit
+
+			} else {
+
+				// ALTER TABLE tableName DROP FOREIGN KEY fk_symbol
+				if (bIsAlterTableStmt && pSdbMysqlTxn_->getAlterTableName()) {
+
+					if ( SDBCheckConstraintIfExits(sdbUserId_, sdbDbId_, pSdbMysqlTxn_->getAlterTableName(), 
+						pKeyI->getForeignKeyName()) )  {
+						// First we copy all the existing foreign key constraits into the newly created table
+						retValue = SDBCopyForeignKey(sdbUserId_, sdbDbId_, sdbTableNumber_, pSdbMysqlTxn_->getAlterTableName());
+						if (retValue)
+							break;
+						// now we need to delete the foreign key constraint from the newly created table
+						retValue = SDBDeleteForeignKeyConstraint(sdbUserId_, sdbDbId_, sdbTableNumber_, pKeyI->getForeignKeyName() );
+						if (retValue)
+							break;
+					} else {
+						retValue = METAINFO_MISSING_FOREIGN_KEY_CONSTRAINT;
+						break;
+					}
+
+				} else {
+					// it is an error if this is not an ALTER TABLE DROP FOREIGN KEY statement
+					retValue = METAINFO_MISSING_FOREIGN_KEY_CONSTRAINT;
 					break;
 				}
-			}
 
-			retValue = SDBDefineForeignKey(sdbUserId_, sdbDbId_, tblName, pParentTableName, pKeyI->getForeignKeyName(),
-				pKeyI->getIndexColumnNames(), pKeyI->getParentColumnNames() );
-			if ( retValue > 0 ) 
-				break;	// early exit
-
-			// Need to add a non-unique secondary index here based on the foreign key constraint
+			}	//	if ( bAddForeignKey ) 
 
 			pCurrConstraintClause = strstr( pOffset, "constraint ");
 			pCurrForeignKeyClause = strstr( pOffset, "foreign key ");
@@ -4938,8 +4976,6 @@ int ha_scaledb::delete_table(const char* name)
 	pSdbMysqlTxn_->setDdlFlag(0);	// Bug1039: reset the flag as a subsequent statement may check this flag
 	pSdbMysqlTxn_->setActiveTrn( false );	// mark the end of long implicit transaction
 
-	errorNum = convertToMysqlErrorCode( retCode );
-
 #ifdef SDB_DEBUG_LIGHT
 	if (mysqlInterfaceDebugLevel_ > 1) {
 		if (retCode == SUCCESS)
@@ -4957,6 +4993,7 @@ int ha_scaledb::delete_table(const char* name)
 	}
 #endif
 
+	errorNum = convertToMysqlErrorCode( retCode );
 	DBUG_RETURN(errorNum);
 }
 
@@ -5124,9 +5161,6 @@ int ha_scaledb::rename_table(const char* fromTable, const char* toTable) {
 		&& (pSdbMysqlTxn_->getAlterTableName()==NULL) )
 		SDBCommit(sdbUserId_);
 
-
-	errorNum = convertToMysqlErrorCode( retCode );
-
 #ifdef SDB_DEBUG_LIGHT
 	if (mysqlInterfaceDebugLevel_ > 1) {
 		SDBPrintStructure(sdbDbId_);		// print metadata structure
@@ -5140,6 +5174,8 @@ int ha_scaledb::rename_table(const char* fromTable, const char* toTable) {
 		SDBShowUserLockStatus(sdbUserId_);
 	}
 #endif
+
+	errorNum = convertToMysqlErrorCode( retCode );
 	DBUG_RETURN(errorNum);
 }
 
