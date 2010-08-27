@@ -126,6 +126,10 @@ static int convertToMysqlErrorCode(int scaledbErrorCode) {
 			mysqlErrorCode = HA_ERR_LOCK_WAIT_TIMEOUT;
 			break;
 
+		case DATA_EXISTS_FATAL_ERROR:
+			mysqlErrorCode = HA_ERR_UNSUPPORTED;
+			break;
+
 		case METAINFO_ATTEMPT_DROP_REFERENCED_TABLE: 
 		case ATTEMPT_TO_DELETE_KEY_WITH_SUBORDINATES:
 			mysqlErrorCode = HA_ERR_ROW_IS_REFERENCED;
