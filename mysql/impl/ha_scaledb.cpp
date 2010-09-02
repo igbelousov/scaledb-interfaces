@@ -4512,7 +4512,9 @@ int ha_scaledb::create_fks(THD* thd, TABLE *table_arg, char* tblName, SdbDynamic
 		// MySQL creates a non-unique secondary index in the child table for a foreign key constraint
 
 		char* pCurrConstraintClause = strstr( pCreateTableStmt, "constraint ");
-		char* pCurrForeignKeyClause = strstr( pCreateTableStmt, "foreign key ");
+		char* pCurrForeignKeyClause = strstr( pCreateTableStmt, "foreign key"); // Note- do not use "foreign key " as it is possible that there is no 
+																				// lagging space after "foreign key" (BUG 1208).
+
 		char* pConstraintName = NULL;
 
 		// If the ALTER TABLE (including CREATE/DROP INDEX) statement has no FOREIGN KEY clause,
@@ -4533,7 +4535,7 @@ int ha_scaledb::create_fks(THD* thd, TABLE *table_arg, char* tblName, SdbDynamic
 			}
 
 			MysqlForeignKey* pKeyI = new MysqlForeignKey();
-			char* pOffset = pCurrForeignKeyClause + 12;  // there are 12 characters in "foreign key "
+			char* pOffset = pCurrForeignKeyClause + 11;  // there are 11 characters in "foreign key"
 			if (pConstraintName)	// use constraint symbol as foreign key constraint name
 				pKeyI->setForeignKeyName( pConstraintName );
 			else {	// use index_name as foreign key constraint name
@@ -4632,7 +4634,8 @@ int ha_scaledb::create_fks(THD* thd, TABLE *table_arg, char* tblName, SdbDynamic
 			}	//	if ( bAddForeignKey ) 
 
 			pCurrConstraintClause = strstr( pOffset, "constraint ");
-			pCurrForeignKeyClause = strstr( pOffset, "foreign key ");
+			pCurrForeignKeyClause = strstr( pOffset, "foreign key"); // Note- do not use "foreign key " as it is possible that there is no 
+																	 // lagging space after "foreign key" (BUG 1208).
 		}	// while ( pCurrForeignKeyClause != NULL )
 
 	}	// if ( thd->query_length() > 0 )
