@@ -175,7 +175,7 @@ static int convertToMysqlErrorCode(int scaledbErrorCode) {
 
 void fetchIdentifierName(const char* name, char* dbName, char* tblName, char* pathName) {
 	int i, j;
-	for (i=strlen(name); i>=0; --i) {
+	for (i=(int) strlen(name); i>=0; --i) {
 		if ((name[i] == '/') || (name[i] == '\\'))
 			break;
 	}
@@ -813,12 +813,12 @@ static const char *ha_scaledb_exts[] = {
 // This method allocated memory for char* dbName.  The calling method needs to release memory.
 char* fetchDatabaseName(char* pathName) {
 	int i;
-	for (i=strlen(pathName)-2; i>=0; --i) {
+	for (i=(int) strlen(pathName)-2; i>=0; --i) {
 		if ((pathName[i] == '/') || (pathName[i] == '\\'))
 			break;
 	}
 	int dbStartPos = i + 1;
-	int dbNameLen = strlen(pathName) - 1 - dbStartPos;
+	int dbNameLen = (int) strlen(pathName) - 1 - dbStartPos;
 	char* dbName = (char*) GET_MEMORY( dbNameLen + 1 );
 	memcpy(dbName, pathName+dbStartPos, dbNameLen);
 	dbName[dbNameLen] = '\0';
@@ -2922,7 +2922,7 @@ int ha_scaledb::prepareIndexKeyQuery(const uchar* key, uint key_len, enum ha_rke
 	Field* pField;
 	char* pFieldName = NULL;
 	int keyLengthLeft = (int) key_len;
-	unsigned int realVarLength;
+	int realVarLength;
 	unsigned int mysqlVarLengthBytes;
 	int offsetLength;
 	bool keyValueIsNull;
@@ -3031,7 +3031,7 @@ int ha_scaledb::prepareIndexKeyQuery(const uchar* key, uint key_len, enum ha_rke
 				while ((*pChar == '\0') && (pChar > pCurrentKeyValue)) 
 					pChar = pChar - 1;
 
-				realVarLength = pChar - pCurrentKeyValue + 1;	// real length without the trailing zeros.
+				realVarLength = (int) (pChar - pCurrentKeyValue + 1);	// real length without the trailing zeros.
 			}
 
 			retValue =SDBDefineQueryPrefix(sdbQueryMgrId_, sdbDbId_, sdbDesignatorId_, pFieldName, pCurrentKeyValue, 
@@ -5403,8 +5403,9 @@ unsigned short ha_scaledb::get_last_index_error_key()
 {
 	print_header_thread_info("MySQL Interface: executing ha_scaledb::get_last_index_error_key() ");
 
-	unsigned short last_designator = SDBGetLastIndexError(sdbUserId_);
-	unsigned short last_errkey = SDBGetLastIndexPositionInTable(sdbDbId_, last_designator);
+	//unsigned short last_designator = SDBGetLastIndexError(sdbUserId_);
+	//unsigned short last_errkey = SDBGetLastIndexPositionInTable(sdbDbId_, last_designator);
+	unsigned short last_errkey = SDBGetLastIndexPositionInTable(sdbDbId_, sdbDesignatorId_);
 
 	if (last_errkey == MAX_KEY)
 	{
@@ -5535,7 +5536,7 @@ bool ha_scaledb::get_error_message(int error, String *buf){
 	sprintf(detailed_error, "`%s`.`%s`, CONSTRAINT `%s` FOREIGN KEY (%s) REFERENCES `%s` (%s)", 
 		table->s->db.str, table->s->table_name.str, keyname, keys, foreignTableName, parentKeys);
 
-	buf->copy(detailed_error, strlen(detailed_error), &my_charset_latin1);
+	buf->copy(detailed_error, (unsigned int) strlen(detailed_error), &my_charset_latin1);
 	return false;
 }
 
