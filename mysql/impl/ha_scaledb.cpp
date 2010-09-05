@@ -5403,9 +5403,12 @@ unsigned short ha_scaledb::get_last_index_error_key()
 {
 	print_header_thread_info("MySQL Interface: executing ha_scaledb::get_last_index_error_key() ");
 
-	//unsigned short last_designator = SDBGetLastIndexError(sdbUserId_);
-	//unsigned short last_errkey = SDBGetLastIndexPositionInTable(sdbDbId_, last_designator);
-	unsigned short last_errkey = SDBGetLastIndexPositionInTable(sdbDbId_, sdbDesignatorId_);
+	unsigned short last_designator = SDBGetLastIndexError(sdbUserId_);
+	// if last_designator is not set yet, it is set in the first select statement.
+	// We can get it from sdbDesignatorId_.
+	if (last_designator == 0)
+		last_designator = sdbDesignatorId_;
+	unsigned short last_errkey = SDBGetLastIndexPositionInTable(sdbDbId_, last_designator);
 
 	if (last_errkey == MAX_KEY)
 	{
