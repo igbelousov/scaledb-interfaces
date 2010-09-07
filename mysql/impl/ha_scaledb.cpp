@@ -844,7 +844,6 @@ static void scaledb_drop_database(handlerton* hton, char* path) {
 #endif
 
 	unsigned short retValue = 0;
-	int errorNum = 0;
 	THD* thd = current_thd;
 	unsigned int userId = 0;
 	MysqlTxn* userTxn = (MysqlTxn *) *thd_ha_data(thd, hton);
