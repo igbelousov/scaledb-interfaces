@@ -247,11 +247,11 @@ void convertSeparatorLowerCase( char* toQuery, char* fromQuery) {
 
 
 // A utility function to send SQL statement to execute on other nodes of a cluster machine
-bool sendStmtToOtherNodes(unsigned short userId, unsigned short dbId, char* pStatement, bool bIgnoreDB, bool bEngineOption) {
+int sendStmtToOtherNodes(unsigned short userId, unsigned short dbId, char* pStatement, bool bIgnoreDB, bool bEngineOption) {
 	char* pStmtWithHint = SDBUtilAppendString(pStatement, SCALEDB_HINT_PASS_DDL);
-	bool bRetValue = ha_scaledb::sqlStmt(userId, dbId, pStmtWithHint, bIgnoreDB, bEngineOption);
+	int retCode = ha_scaledb::sqlStmt(userId, dbId, pStmtWithHint, bIgnoreDB, bEngineOption);
 	RELEASE_MEMORY(pStmtWithHint);
-	return bRetValue;
+	return retCode;
 }
 
 
@@ -879,14 +879,13 @@ static void scaledb_drop_database(handlerton* hton, char* path) {
 
 	// The primary node need to pass the DDL statement to engine so that it can be propagated to other nodes
 	// We also need to make sure that the scaledb hint is not found in the user query.
-	bool dropDbReady = true;
 	unsigned int sqlCommand = thd_sql_command(thd);
 	if ( (SDBNodeIsCluster() == true) && ( !(ddlFlag & SDBFLAG_DDL_SECOND_NODE)) )
 		if (sqlCommand == SQLCOM_DROP_DB) {
-			dropDbReady = sendStmtToOtherNodes(userId, dbId, thd->query(), true, false);
+			retValue = sendStmtToOtherNodes(userId, dbId, thd->query(), true, false);
 		}
 
-	if (dropDbReady)
+	if (retValue == SUCCESS)
 		retValue = SDBLockAndRemoveDatabaseMetaInfo(userId, dbId, ddlFlag, pDbName);
 
 	RELEASE_MEMORY( pDbName );
@@ -2283,19 +2282,17 @@ int ha_scaledb::delete_all_rows()
 					DBUG_RETURN(convertToMysqlErrorCode(LOCK_TABLE_FAILED));
 			}
 
-			bool truncateTableReady = true;
-
 			// step 2: the primary node sends the TRUNCATE TABLE statement with a hint so that 
 			// all the non-primary nodes will close the table files
 			if ((SDBNodeIsCluster() == true) && 
 				!(stmtFlag & SDBFLAG_DDL_SECOND_NODE) ) {
 					char* stmtWithHint = SDBUtilAppendString(thd->query(), SCALEDB_HINT_CLOSEFILE);
-					truncateTableReady = sqlStmt(sdbUserId_, sdbDbId_, stmtWithHint);
+					retValue = sqlStmt(sdbUserId_, sdbDbId_, stmtWithHint);
 					RELEASE_MEMORY(stmtWithHint);
 			}
 
 			// step 3 and main execution body for both primary node and secondary nodes
-			if (truncateTableReady)
+			if (retValue == SUCCESS)
 				retValue = SDBTruncateTable(sdbUserId_, sdbDbId_, tblName, stmtFlag);
 
 			// step 4: the primary node sends the TRUNCATE TABLE statement with open file hint so that 
@@ -2303,7 +2300,7 @@ int ha_scaledb::delete_all_rows()
 			if ((SDBNodeIsCluster() == true) && 
 				!(stmtFlag & SDBFLAG_DDL_SECOND_NODE) ) {
 					char* stmtWithHint = SDBUtilAppendString(thd->query(), SCALEDB_HINT_OPENFILE);
-					truncateTableReady = sqlStmt(sdbUserId_, sdbDbId_, stmtWithHint);
+					retValue = sqlStmt(sdbUserId_, sdbDbId_, stmtWithHint);
 					RELEASE_MEMORY(stmtWithHint);
 			}
 
@@ -4050,11 +4047,11 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 		// If we are creating a virtual view, then we can have an early exit.
 		if ((SDBNodeIsCluster() == true) && (errorNum == 0))
 			if ((sqlCommand == SQLCOM_CREATE_TABLE) && ( !(ddlFlag & SDBFLAG_DDL_SECOND_NODE) ) ) {
-				sendStmtToOtherNodes(sdbUserId_, sdbDbId_, thd->query(), false, true);
+				retCode = sendStmtToOtherNodes(sdbUserId_, sdbDbId_, thd->query(), false, true);
 			}
 
 			RELEASE_MEMORY(pCreateTableStmt);
-			DBUG_RETURN(errorNum);
+			DBUG_RETURN( convertToMysqlErrorCode(retCode) );
 	}
 
 	// On a cluster system, primary node needs to send FLUSH TABLE statement to secondary nodes here
@@ -4065,10 +4062,10 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 		// all other nodes can close the table to be altered.
 		if (sqlCommand==SQLCOM_ALTER_TABLE || sqlCommand==SQLCOM_CREATE_INDEX || sqlCommand==SQLCOM_DROP_INDEX) {
 			char* pFlushTableStmt = SDBUtilAppendString("flush table ", pSdbMysqlTxn_->getAlterTableName());
-			bool bFlushTableReady = sendStmtToOtherNodes(sdbUserId_, sdbDbId_, pFlushTableStmt, false, false);
+			retCode = sendStmtToOtherNodes(sdbUserId_, sdbDbId_, pFlushTableStmt, false, false);
 			RELEASE_MEMORY(pFlushTableStmt);
 
-			if (!bFlushTableReady) {
+			if (retCode) {
 				SDBRollBack(sdbUserId_);
 				RELEASE_MEMORY( pCreateTableStmt );
 				DBUG_RETURN( convertToMysqlErrorCode(retCode) );
@@ -4166,23 +4163,21 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 
 	if ((SDBNodeIsCluster() == true) && (errorNum == 0))
 		if ((sqlCommand == SQLCOM_CREATE_TABLE) && (!(ddlFlag & SDBFLAG_DDL_SECOND_NODE)) ) {
-			bool createDatabaseReady = true;
 
 			// if this is the first user table in the database, we need to issue CREATE DATABASE stmt to other nodes.
 			// We need to check this only for a regular CREATE TABLE statement, not for CREATE TABLE ... SELECT
 			if (sdbTableNumber_ == SDB_FIRST_USER_TABLE_ID) {
 				char* ddlCreateDB = SDBUtilAppendString("CREATE DATABASE IF NOT EXISTS ", dbFsName);
-				createDatabaseReady = sendStmtToOtherNodes(sdbUserId_, sdbDbId_, ddlCreateDB, true, false);// need to ignore DB name for CREATE DATABASE stmt
+				retCode = sendStmtToOtherNodes(sdbUserId_, sdbDbId_, ddlCreateDB, true, false);// need to ignore DB name for CREATE DATABASE stmt
 				RELEASE_MEMORY(ddlCreateDB);
 			}
 
-			if ( createDatabaseReady ) {
+			if ( retCode == SUCCESS ) {
 				// Now we pass the CREATE TABLE statement to other nodes
 				// need to send statement "SET SESSION STORAGE_ENGINE=SCALEDB" before CREATE TABLE
-				bool createTableReady = true;
-				createTableReady = sendStmtToOtherNodes(sdbUserId_, sdbDbId_, thd->query(), false, true); 
+				retCode = sendStmtToOtherNodes(sdbUserId_, sdbDbId_, thd->query(), false, true); 
 
-				if ( createTableReady == false )
+				if ( retCode )
 					retCode = CREATE_TABLE_FAILED_IN_CLUSTER;
 			}
 			else retCode = CREATE_DATABASE_FAILED_IN_CLUSTER;
@@ -4920,7 +4915,6 @@ int ha_scaledb::delete_table(const char* name)
 		}
 
 		// The primary node needs to propagate the DDL to other nodes.
-		bool dropTableReady = true;
 		if ( SDBNodeIsCluster() == true ) {
 			char* passedDDL = NULL;
 			if ( (sqlCommand == SQLCOM_DROP_TABLE) || (sqlCommand == SQLCOM_DROP_DB) ) {
@@ -4941,14 +4935,14 @@ int ha_scaledb::delete_table(const char* name)
 					pDropTableStmtTemp = SDBUtilAppendString("drop table `", pTableCsName);
 				}
 				char* pDropTableStmt = SDBUtilAppendStringFreeFirstParam(pDropTableStmtTemp, "` ");
-				dropTableReady = sendStmtToOtherNodes(sdbUserId_, sdbDbId_, pDropTableStmt, false, false);
+				retCode = sendStmtToOtherNodes(sdbUserId_, sdbDbId_, pDropTableStmt, false, false);
 				RELEASE_MEMORY(pDropTableStmt);
 			}
 		}
 
 		// pass the DDL statement to engine so that it can be propagated to other nodes
 		// The user statement may be DROP TABLE, ALTER TABLE or CREATE/DROP INDEX,
-		if (dropTableReady == true) {
+		if (retCode == SUCCESS) {
 			// remove the table name from lock table vector if it exists
 			pSdbMysqlTxn_->removeLockTableName(pTableName );
 
@@ -4968,8 +4962,8 @@ int ha_scaledb::delete_table(const char* name)
 		// if the table to be dropped is the second temp table, then we proceed to replicate to other nodes.
 		// if not, then we are rolling back an ALTER TABLE statement by removing the first temp table; 
 		// hence there is no need to send ALTER TABLE statements to other nodes
-		bool bAlterTableReady = sendStmtToOtherNodes(sdbUserId_, sdbDbId_, thd->query(), false, false);
-		if (!bAlterTableReady)
+		retCode = sendStmtToOtherNodes(sdbUserId_, sdbDbId_, thd->query(), false, false);
+		if (retCode)
 			retCode = ALTER_TABLE_FAILED_IN_CLUSTER;
 	}
 
@@ -5124,39 +5118,32 @@ int ha_scaledb::rename_table(const char* fromTable, const char* toTable) {
 	// We need to make sure it is a RENAME TABLE command because this method is also called
 	// when a user has ALTER TABLE or CREATE/DROP INDEX commands.
 	// We also need to make sure that the scaledb hint is not found in the user query.
-	bool renameTableReady = true;
 
-	if ( renameTableReady ) {
-
-		// For RENAME TABLE, we need to impose the exclusive table level lock.
-		// For ALTER TABLE, we already imposed the exclusive table level lock in rnd_init. 
-		if ( sqlCommand == SQLCOM_RENAME_TABLE ) {
-			if (SDBLockTable(sdbUserId_, sdbDbId_, sdbTableNumber_, REFERENCE_LOCK_EXCLUSIVE) == false) {
-				SDBCommit(sdbUserId_);	// release lockMetaInfo
-				DBUG_RETURN(convertToMysqlErrorCode(LOCK_TABLE_FAILED));
-			}
+	// For RENAME TABLE, we need to impose the exclusive table level lock.
+	// For ALTER TABLE, we already imposed the exclusive table level lock in rnd_init. 
+	if ( sqlCommand == SQLCOM_RENAME_TABLE ) {
+		if (SDBLockTable(sdbUserId_, sdbDbId_, sdbTableNumber_, REFERENCE_LOCK_EXCLUSIVE) == false) {
+			SDBCommit(sdbUserId_);	// release lockMetaInfo
+			DBUG_RETURN(convertToMysqlErrorCode(LOCK_TABLE_FAILED));
 		}
-
-		// TODO: To be enabled later for fast ALTER TABLE statement.
-		// For ALTER TABLE statement, we need to enable indexes on the scratch table before renaming it to the final table
-		//if (sqlCommand == SQLCOM_ALTER_TABLE) {
-		//	char* pScratchTableName = pSdbMysqlTxn_->getScratchTableName();
-		//	if ( SDBGetUtilCompareStrings(fromTable, pScratchTableName, true) ) 
-		//		pSdbEngine->enableTableIndexes(sdbDbId, userFromTblName);
-		//}
-
-		retCode = SDBRenameTable(sdbUserId_, sdbDbId_, userFromTblName, fromTblFsName, 
-			userToTblName, toTblFsName, userToTblName, true, ddlFlag);
 	}
-	else retCode = METAINFO_UNDEFINED_DATA_TABLE;
+
+	// TODO: To be enabled later for fast ALTER TABLE statement.
+	// For ALTER TABLE statement, we need to enable indexes on the scratch table before renaming it to the final table
+	//if (sqlCommand == SQLCOM_ALTER_TABLE) {
+	//	char* pScratchTableName = pSdbMysqlTxn_->getScratchTableName();
+	//	if ( SDBGetUtilCompareStrings(fromTable, pScratchTableName, true) ) 
+	//		pSdbEngine->enableTableIndexes(sdbDbId, userFromTblName);
+	//}
+
+	retCode = SDBRenameTable(sdbUserId_, sdbDbId_, userFromTblName, fromTblFsName, 
+		userToTblName, toTblFsName, userToTblName, true, ddlFlag);
 
 	// RENAME TABLE: primary node needs to release lock on MetaInfo
 	// ALTER TABLE: primary node releases lockMetaInfo in ::delete_table
 	if ( (!(ddlFlag & SDBFLAG_DDL_SECOND_NODE))  && (sqlCommand==SQLCOM_RENAME_TABLE) ) {
 		if ( (SDBNodeIsCluster() == true) && (retCode == SUCCESS) ) {
-			renameTableReady = sendStmtToOtherNodes(sdbUserId_, sdbDbId_, thd->query(), false, false);
-			if (!renameTableReady)
-				retCode = METAINFO_UNDEFINED_DATA_TABLE;
+			retCode = sendStmtToOtherNodes(sdbUserId_, sdbDbId_, thd->query(), false, false);
 		}
 
 		SDBCommit(sdbUserId_);
@@ -5197,7 +5184,7 @@ int ha_scaledb::rename_table(const char* fromTable, const char* toTable) {
 // When bIgnoreDB is set to true, then we pass NULL for db name in setting up a mysql connection. 
 // return true for success and false for failure
 // -------------------------------------------------------
-bool ha_scaledb::sqlStmt(unsigned short userId, unsigned short dbmsId, char* sqlStmt, bool bIgnoreDB, bool bEngineOption) {
+int ha_scaledb::sqlStmt(unsigned short userId, unsigned short dbmsId, char* sqlStmt, bool bIgnoreDB, bool bEngineOption) {
 
 #ifdef SDB_DEBUG_LIGHT
 	if (mysqlInterfaceDebugLevel_) {
@@ -5212,11 +5199,14 @@ bool ha_scaledb::sqlStmt(unsigned short userId, unsigned short dbmsId, char* sql
 	SDBGetConnectedNodesList(userId, nodesBuffLength, nodesDataBuffer);
 
 	// The first 2 bytes show the number of nodes (other than itself) in a cluster
-	unsigned short numberOfNodes = *((unsigned short*) nodesDataBuffer);
+	signed short numberOfNodes = *((signed short*) nodesDataBuffer);
 
 	if (!numberOfNodes){
-		return true;
+		return SUCCESS;
 	}
+
+	if (numberOfNodes < 0)	// No response from other nodes
+		return DEAD_LOCK;
 
 	char* pNodeDataOffset = nodesDataBuffer + 2;
 
@@ -5271,7 +5261,7 @@ bool ha_scaledb::sqlStmt(unsigned short userId, unsigned short dbmsId, char* sql
 	//	SDBTerminate(0, "cluster ddl failed");
 	//}
 
-	return true;
+	return SUCCESS;
 }
 
 

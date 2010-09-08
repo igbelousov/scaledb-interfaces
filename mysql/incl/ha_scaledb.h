@@ -306,7 +306,7 @@ public:
 
 	// this function is called to issue DDL statements to the other nodes on a cluster
 	// This function is static because other static functions will call it.
-	static bool sqlStmt(unsigned short userId, unsigned short dbmsId, char* sqlStmt, bool bIgnoreDB=false, bool bEngineOption=false);
+	static int sqlStmt(unsigned short userId, unsigned short dbmsId, char* sqlStmt, bool bIgnoreDB=false, bool bEngineOption=false);
 
     // return last key which actually resulted in an error (duplicate error)
     unsigned short get_last_index_error_key();
