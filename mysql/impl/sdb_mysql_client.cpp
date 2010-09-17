@@ -1,18 +1,18 @@
 /* Copyright (C) 2009 - ScaleDB Inc.
 
-   This program is free software; you can redistribute it and/or modify
-   it under the terms of the GNU General Public License as published by
-   the Free Software Foundation; version 2 of the License.
+ This program is free software; you can redistribute it and/or modify
+ it under the terms of the GNU General Public License as published by
+ the Free Software Foundation; version 2 of the License.
 
-   This program is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU General Public License for more details.
+ This program is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ GNU General Public License for more details.
 
-   You should have received a copy of the GNU General Public License
-   along with this program; if not, write to the Free Software
-   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA 
-*/
+ You should have received a copy of the GNU General Public License
+ along with this program; if not, write to the Free Software
+ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ */
 
 #include "../incl/sdb_mysql_client.h"
 #include "../../scaledb/incl/SdbStorageAPI.h"
@@ -20,19 +20,19 @@
 #include "../../../cengine/engine_util/incl/debug_class.h"
 #endif
 
-SdbMysqlClient::SdbMysqlClient(char* host, char* user, char* password, char* dbName, char* socket, 
-							   unsigned int port, unsigned char debugLevel) : 
-	mysql_(0), host_(host), user_(user), password_(password), dbName_(dbName), socket_(socket), 
-							port_(port), connected_(false), debugLevel_(debugLevel) {
+SdbMysqlClient::SdbMysqlClient(char* host, char* user, char* password, char* dbName, char* socket,
+        unsigned int port, unsigned char debugLevel) :
+	mysql_(0), host_(host), user_(user), password_(password), dbName_(dbName), socket_(socket),
+	        port_(port), connected_(false), debugLevel_(debugLevel) {
 
 #ifdef __DEBUG_CLASS_CALLS
 	DebugClass::countClassConstructor("SdbMysqlClient");
 #endif
 	mysql_ = mysql_init(NULL);
-	mysql_->reconnect= 1;
+	mysql_->reconnect = 1;
 }
 
-SdbMysqlClient::~SdbMysqlClient(){
+SdbMysqlClient::~SdbMysqlClient() {
 #ifdef __DEBUG_CLASS_CALLS
 	DebugClass::countClassDestructor("SdbMysqlClient");
 #endif
@@ -47,7 +47,7 @@ SdbMysqlClient::~SdbMysqlClient(){
 // public function to connect and execute a query on a generic RDBMS system
 // 0 is success, other numbers are failure codes
 //////////////////////////////////////////////////////////////////////
-int SdbMysqlClient::executeQuery(char* query, unsigned long length, bool bEngineOption){
+int SdbMysqlClient::executeQuery(char* query, unsigned long length, bool bEngineOption) {
 
 #ifdef SDB_DEBUG
 	if (debugLevel_) {
@@ -68,7 +68,8 @@ int SdbMysqlClient::executeQuery(char* query, unsigned long length, bool bEngine
 	int retCode = 0;
 
 	if (bEngineOption == true) {
-		retCode = sendQuery( SET_STORAGE_ENGINE_SCALEDB, (unsigned long)strlen(SET_STORAGE_ENGINE_SCALEDB) );
+		retCode = sendQuery(SET_STORAGE_ENGINE_SCALEDB, (unsigned long) strlen(
+		        SET_STORAGE_ENGINE_SCALEDB));
 		if (retCode)
 			return retCode;
 	}
@@ -82,7 +83,7 @@ int SdbMysqlClient::executeQuery(char* query, unsigned long length, bool bEngine
 // private function to connect to a generic RDBMS system
 // assumes any required initialization step is successfully done
 //////////////////////////////////////////////////////////////////////
-bool SdbMysqlClient::connect(){
+bool SdbMysqlClient::connect() {
 
 	bool result = false;
 
@@ -109,7 +110,6 @@ bool SdbMysqlClient::connect(){
 
 	if (!mysql_) {
 
-
 #ifdef SDB_DEBUG
 		if (debugLevel_) {
 			SDBDebugStart();
@@ -118,7 +118,6 @@ bool SdbMysqlClient::connect(){
 		}
 #endif
 
-
 		return result;
 	}
 
@@ -126,7 +125,7 @@ bool SdbMysqlClient::connect(){
 	// (Got timeout reading communication packets ) issued by the method cli_read_query_result in client.c file.  
 	// To play safe, we set the connect timeout to an high limit in case the server is very busy.  
 #ifdef SDB_DEBUG
-	unsigned int timeoutInSeconds = 3600;	// to use with a debugger breakpoint
+	unsigned int timeoutInSeconds = 3600; // to use with a debugger breakpoint
 #else
 	unsigned int timeoutInSeconds = 3600;
 #endif
@@ -154,17 +153,16 @@ bool SdbMysqlClient::connect(){
 	if (debugLevel_) {
 		SDBDebugStart();
 		SDBDebugPrintString("\nmysql_real_connect returned: ");
-		if (result){
+		if (result) {
 			SDBDebugPrintString("true");
 		}
-		else{
+		else {
 			SDBDebugPrintString("false");
 		}
 		SDBDebugPrintNewLine(1);
 		SDBDebugEnd();
 	}
 #endif
-
 
 	connected_ = result;
 
@@ -177,7 +175,7 @@ int SdbMysqlClient::sendQuery(char* query, unsigned long length) {
 	rc = mysql_real_query(mysql_, query, length);
 
 	unsigned int mysqlErrorNum = 0;
-	if (rc)	{	// if there is an error, we fetch MySQL error number. 
+	if (rc) { // if there is an error, we fetch MySQL error number.
 		mysqlErrorNum = mysql_errno(mysql_);
 #ifdef SDB_DEBUG_LIGHT
 		if (debugLevel_) {
@@ -189,7 +187,7 @@ int SdbMysqlClient::sendQuery(char* query, unsigned long length) {
 			SDBDebugPrintString("; MySQL error message: ");
 			const char* msg = mysql_error(mysql_);
 			if (msg) {
-				SDBDebugPrintString((char*)msg);
+				SDBDebugPrintString((char*) msg);
 			}
 			SDBDebugPrintNewLine(1);
 			SDBDebugEnd();

@@ -499,7 +499,7 @@ void SDBUtilGetIpFromInet(unsigned int *inet, char *dest, unsigned int sizeOfBuf
 //TODO: FIX THIS..
 void* SDBGetSdbMemoryPtr();
 void* SDBGetTableDesignators(unsigned short dbId, unsigned short tableId);
-void SDBSetThreadName(char *szThreadName, unsigned int threadId=-1);
+void SDBSetThreadName(char *pThreadName);
 
 
 /*

@@ -1,18 +1,18 @@
 /* Copyright (C) 2009 - ScaleDB Inc.
 
-   This program is free software; you can redistribute it and/or modify
-   it under the terms of the GNU General Public License as published by
-   the Free Software Foundation; version 2 of the License.
+ This program is free software; you can redistribute it and/or modify
+ it under the terms of the GNU General Public License as published by
+ the Free Software Foundation; version 2 of the License.
 
-   This program is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU General Public License for more details.
+ This program is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ GNU General Public License for more details.
 
-   You should have received a copy of the GNU General Public License
-   along with this program; if not, write to the Free Software
-   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA 
-*/
+ You should have received a copy of the GNU General Public License
+ along with this program; if not, write to the Free Software
+ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ */
 
 //
 //  File Name: mysql_txn.h
@@ -36,8 +36,8 @@
 #define _MYSQL_TXN_H
 
 /*
-Note that ScaleDB's header files must come before MySQL header file.
-This is because we have STL header files which must be declared before C header files.
+ Note that ScaleDB's header files must come before MySQL header file.
+ This is because we have STL header files which must be declared before C header files.
  */
 #include "../../scaledb/incl/SdbStorageAPI.h"
 
@@ -45,18 +45,17 @@ This is because we have STL header files which must be declared before C header 
 #define INITIAL_LOCK_TABLES_IN_VECTOR  10
 #define MAX_BLOB_COLUMNS 64
 
-
 // need this structure to handle two cases:
 // - multiple indexes referenced in same table without alias
 // - same table referenced multiple times with alias
-struct QueryManagerInfo {  	
+struct QueryManagerInfo {
 	unsigned short queryMgrId_;
 	unsigned short designatorId_;
-	char* pDesignatorName_;  
-	void* pHandler_;	// pointer to handler object which is currently being used
-	char* pKey_;		// points to the key value used in index_next_same
+	char* pDesignatorName_;
+	void* pHandler_; // pointer to handler object which is currently being used
+	char* pKey_; // points to the key value used in index_next_same
 	unsigned int keyLength_;
-    bool scanSequential_;
+	bool scanSequential_;
 };
 
 // Compiler usually takes 16 bytes for this structure
@@ -71,42 +70,42 @@ class MysqlTxn {
 
 public:
 
-    // constructor and destructor
-    MysqlTxn();
-    ~MysqlTxn(); 
+	// constructor and destructor
+	MysqlTxn();
+	~MysqlTxn();
 
-	unsigned long getMysqlThreadId() { return mysqlThreadId_; }
-	void setMysqlThreadId(unsigned long aThreadId) { mysqlThreadId_ = aThreadId; }
-	unsigned int getScaleDbUserId() { return scaleDbUserId_; }
-	void setScaleDbUserId(unsigned int aUserId) { scaleDbUserId_ = aUserId; }
-	unsigned int getScaledbDbId() { return scaledbDbId_; }
-	void setScaledbDbId(unsigned int aScaledbDbId) { scaledbDbId_ = aScaledbDbId; }
-	unsigned int getScaleDbTxnId() { return scaleDbTxnId_; }
-	void setScaleDbTxnId(unsigned int aTxnId) { scaleDbTxnId_ = aTxnId; }
-	bool getActiveTxn() { return (activeTxn_>0 ? true : false); }	// go around compiler bug
-	void setActiveTrn(bool aBool)  { activeTxn_ = (aBool) ? 1 : 0; }
+	unsigned long getMysqlThreadId() {return mysqlThreadId_;}
+	void setMysqlThreadId(unsigned long aThreadId) {mysqlThreadId_ = aThreadId;}
+	unsigned int getScaleDbUserId() {return scaleDbUserId_;}
+	void setScaleDbUserId(unsigned int aUserId) {scaleDbUserId_ = aUserId;}
+	unsigned int getScaledbDbId() {return scaledbDbId_;}
+	void setScaledbDbId(unsigned int aScaledbDbId) {scaledbDbId_ = aScaledbDbId;}
+	unsigned int getScaleDbTxnId() {return scaleDbTxnId_;}
+	void setScaleDbTxnId(unsigned int aTxnId) {scaleDbTxnId_ = aTxnId;}
+	bool getActiveTxn() {return (activeTxn_>0 ? true : false);} // go around compiler bug
+	void setActiveTrn(bool aBool) {activeTxn_ = (aBool) ? 1 : 0;}
 
-	unsigned short getDdlFlag() { return ddlFlag_; }
-	void setDdlFlag(unsigned short ddlFlag)  { ddlFlag_ = ddlFlag; }
-	void setOrOpDdlFlag(unsigned short value)  { ddlFlag_ = ddlFlag_ | value ; }	//apply logical OR operation
+	unsigned short getDdlFlag() {return ddlFlag_;}
+	void setDdlFlag(unsigned short ddlFlag) {ddlFlag_ = ddlFlag;}
+	void setOrOpDdlFlag(unsigned short value) {ddlFlag_ = ddlFlag_ | value;} //apply logical OR operation
 
 	// save the query manager id for a given designator in a given table handler
-	void addQueryManagerId(bool isRealIndex, char* pDesignatorName, void* pHandler, char* pKey, 
+	void addQueryManagerId(bool isRealIndex, char* pDesignatorName, void* pHandler, char* pKey,
 			unsigned int aKenLength, unsigned short aQueryMgrId, unsigned char mysqlInterfaceDebugLevel=0);
 	// Find the query manager id based on the designator name for a given table handler
-	unsigned short findQueryManagerId(char* aDesignatorName, void* pHandler, char* aKey, 
+	unsigned short findQueryManagerId(char* aDesignatorName, void* pHandler, char* aKey,
 			unsigned int aKenLength, bool virtualTableFlag = false);
 
 	void freeAllQueryManagerIds(unsigned char mysqlInterfaceDebugLevel=0);
 	char* getDesignatorNameByQueryMrgId(unsigned short aQueryMgrId);
 	unsigned short getDesignatorIdByQueryMrgId(unsigned short aQueryMgrId);
 
-    void setLastStmtSavePointId(uint64 id) {
-        lastStmtSavePointId_ = id;
-    }
-    uint64 getLastStmtSavePointId() {
-        return lastStmtSavePointId_;
-    }
+	void setLastStmtSavePointId(uint64 id) {
+		lastStmtSavePointId_ = id;
+	}
+	uint64 getLastStmtSavePointId() {
+		return lastStmtSavePointId_;
+	}
 
 	// add a table name specified in LOCK TABLES statement
 	void addLockTableName(char* pLockTableName);
@@ -116,41 +115,40 @@ public:
 	// unlock all tables which were specified in earlier LOCK TABLES statements
 	void releaseAllLockTables();
 	// get the net number of lock tables
-	unsigned int getNumberOfLockTables() { return SDBArrayGetNumberOfNetElements(pLockTablesArray_); }
+	unsigned int getNumberOfLockTables() {return SDBArrayGetNumberOfNetElements(pLockTablesArray_);}
 
-    void setScanType(unsigned short queryMgrId, bool sequentialScan=false);
-    bool isSequentialScan(unsigned short queryMgrId);
+	void setScanType(unsigned short queryMgrId, bool sequentialScan=false);
+	bool isSequentialScan(unsigned short queryMgrId);
 
 	void addAlterTableName(char* pAlterTableName);
 	void removeAlterTableName();
-	char* getAlterTableName() { return pAlterTableName_; }
+	char* getAlterTableName() {return pAlterTableName_;}
 
-	int lockCount_;   // number of table locks used in a statement
-	int numberOfLockTables_;		// number of tables specified in LOCK TABLES statement
-	unsigned long  txnIsolationLevel_;	// transaciton isolation level
+	int lockCount_; // number of table locks used in a statement
+	int numberOfLockTables_; // number of tables specified in LOCK TABLES statement
+	unsigned long txnIsolationLevel_; // transaciton isolation level
 	int QueryManagerIdCount_;
 
 private:
 	unsigned long mysqlThreadId_;
-	unsigned int scaleDbUserId_;	// The UserId is actually a session id.
-    unsigned int scaleDbTxnId_;
-	unsigned short scaledbDbId_;	// current DbId used by ScaleDB
+	unsigned int scaleDbUserId_; // The UserId is actually a session id.
+	unsigned int scaleDbTxnId_;
+	unsigned short scaledbDbId_; // current DbId used by ScaleDB
 
-	unsigned int  activeTxn_;		// whether or not it is within a transaction at the moment	
-									// need to use integer rather than bool due to a compiler bug??
-	SdbDynamicArray* pLockTablesArray_;	// pointer to vector holding all lock table names
-    uint64  lastStmtSavePointId_;   // last stmt save point id
+	unsigned int activeTxn_; // whether or not it is within a transaction at the moment
+	// need to use integer rather than bool due to a compiler bug??
+	SdbDynamicArray* pLockTablesArray_; // pointer to vector holding all lock table names
+	uint64 lastStmtSavePointId_; // last stmt save point id
 
 	// flag to indicate if it is a non-primary node in cluster.
-	// We cannot put this flag in a table handler because ALTER TABLE and CREATE TABLE ... SELECT both use multiple handlers.
-	unsigned short ddlFlag_ ;		// This flag has multiple bit values.  Need to deal bits individually.
+	// We cannot put this flag in a table handler because ALTER TABLE and CREATE TABLE ... SELECT
+	// both use multiple handlers.
+	unsigned short ddlFlag_; // This flag has multiple bit values.  Need to deal bits individually.
 
-	char* pAlterTableName_;			// table name used in ALTER TABLE, CREATE/DROP INDEX statement
+	char* pAlterTableName_; // table name used in ALTER TABLE, CREATE/DROP INDEX statement
 
 	SdbDynamicArray* pQueryManagerInfoArray_;
 };
 
 #endif   // _MYSQL_TXN_H
-
 #endif	// SDB_MYSQL
-
