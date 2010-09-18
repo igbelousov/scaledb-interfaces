@@ -1495,6 +1495,9 @@ int ha_scaledb::open(const char *name, int mode, uint test_if_locked) {
 					sdbTableNumber_ = SDBOpenTable(userIdforOpen, sdbDbId_, pTblFsName);
 			}
 		}
+
+		if (sdbTableNumber_ == 0)
+			retCode = TABLE_NAME_UNDEFINED;
 	}
 
 	// We can commit without problem for this new user
