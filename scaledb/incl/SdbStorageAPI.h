@@ -489,6 +489,7 @@ char *SDBUtilDuplicateString(char *ptr);
 char *SDBUtilDoubleSpecialCharInString(char* pName, char specialChar);
 char *SDBUtilGetStrInLower(char *ptr);
 bool SDBUtilCompareStrings(const char *str1, const char *str2, bool inLower, unsigned short length = 0);
+char* SDBUtilStrstrCaseInsensitive(char* s1, char* s2);
 char *SDBUtilDecodeCharsInStrings(char *before);
 char* SDBUtilFindDesignatorName(char* pTblFsName, char* pKeyName, int externalKeyNum, bool useExternalKeyNum=true);
 void SDBUtilIntToMemoryLocation(unsigned long long number, unsigned char* destination, unsigned short bytesToCopy);

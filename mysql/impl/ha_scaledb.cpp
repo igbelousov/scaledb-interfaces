@@ -194,34 +194,41 @@ void fetchIdentifierName(const char* name, char* dbName, char* tblName, char* pa
 	pathName[j] = '\0';
 }
 
-/* convert LF to space, remove extra separators, convert to lower case letters 
+/* convert LF to space, remove extra separators; 
+   convert to lower case letters if bLowerCase is true.  
+   Do NOT conver to lower case letters if bLowerCase is false.
  */
-
-void convertSeparatorLowerCase(char* toQuery, char* fromQuery) {
+void convertSeparatorLowerCase(char* toQuery, char* fromQuery, bool bLowerCase) {
 	int i = 0;
 	int j = 0;
 
 	while (fromQuery[i] != '\0') {
 		if (fromQuery[i] == '`') { // need to handle the quote character of an identifier
+
 			do { // need to copy the entire identifier name without skipping blanks until next backtick
-				if ((fromQuery[i] >= 'A') && (fromQuery[i] <= 'Z'))
+				if (bLowerCase && (fromQuery[i] >= 'A') && (fromQuery[i] <= 'Z'))
 					toQuery[j++] = fromQuery[i++] - 'A' + 'a';
 				else
 					toQuery[j++] = fromQuery[i++];
 			} while (fromQuery[i] != '`');
 
 			toQuery[j++] = fromQuery[i++];
+
 		} else {
-			if ((fromQuery[i] >= 'A') && (fromQuery[i] <= 'Z'))
-				toQuery[j] = fromQuery[i] - 'A' + 'a';
-			else if ((fromQuery[i] == ' ') || (fromQuery[i] == '\t') || (fromQuery[i] == '\f')
+
+			if ((fromQuery[i] == ' ') || (fromQuery[i] == '\t') || (fromQuery[i] == '\f')
 			        || (fromQuery[i] == '\n') || (fromQuery[i] == '\r')) {
+
 				while ((fromQuery[i + 1] == ' ') || (fromQuery[i + 1] == '\t') || (fromQuery[i + 1]
 				        == '\f') || (fromQuery[i + 1] == '\n') || (fromQuery[i + 1] == '\r'))
 					i = i + 1; // remove the extra separator
+
 				toQuery[j] = ' ';
-			} else
+			} else if (bLowerCase && (fromQuery[i] >= 'A') && (fromQuery[i] <= 'Z')) {
+				toQuery[j] = fromQuery[i] - 'A' + 'a';
+			} else {
 				toQuery[j] = fromQuery[i];
+			}
 
 			++i;
 			++j;
@@ -233,6 +240,7 @@ void convertSeparatorLowerCase(char* toQuery, char* fromQuery) {
 	else
 		toQuery[j] = '\0'; // set NULL after last byte
 }
+
 
 // A utility function to send SQL statement to execute on other nodes of a cluster machine
 int sendStmtToOtherNodes(unsigned short userId, unsigned short dbId, char* pStatement,
@@ -2078,15 +2086,10 @@ int ha_scaledb::update_row(const unsigned char* old_row, unsigned char* new_row)
 
 	if (retValue == DATA_EXISTS) { // bug 1203
 		// For UPDATE IGNORE statement, we need to change the error code so that MySQL does not send any more records to engine
-		char* pUpdateStmt = (char*) GET_MEMORY(thd->query_length() + 1);
-		// convert LF to space, remove extra space, convert to lower case letters 
-		convertSeparatorLowerCase(pUpdateStmt, thd->query());
-		char* pUpdateKeyword = strstr(pUpdateStmt, "update ");
-		char* pIgnoreKeyword = strstr(pUpdateStmt, "ignore ");
+		char* pUpdateKeyword = SDBUtilStrstrCaseInsensitive(thd->query(), (char*) "update ");
+		char* pIgnoreKeyword = SDBUtilStrstrCaseInsensitive(thd->query(), (char*) "ignore ");
 		if (pUpdateKeyword && pIgnoreKeyword && (pUpdateKeyword < pIgnoreKeyword))
 			retValue = DATA_EXISTS_FATAL_ERROR;
-
-		RELEASE_MEMORY((void*) pUpdateStmt);
 	}
 
 	errorNum = convertToMysqlErrorCode(retValue);
@@ -3808,8 +3811,8 @@ THR_LOCK_DATA **ha_scaledb::store_lock(THD *thd, THR_LOCK_DATA **to, enum thr_lo
 // This method returns true if the DDL statement has string "engine = scaledb"
 bool hasEngineEqualScaledb(char* sqlStatement) {
 	bool retValue = false;
-	char* pEngine = strstr(sqlStatement, "engine");
-	char* pScaledb = strstr(sqlStatement, "scaledb");
+	char* pEngine = SDBUtilStrstrCaseInsensitive(sqlStatement, (char*) "engine");
+	char* pScaledb = SDBUtilStrstrCaseInsensitive(sqlStatement, (char*) "scaledb");
 	if ((pEngine) && (pScaledb) && (pEngine > sqlStatement) && (pScaledb > pEngine))
 		retValue = true;
 
@@ -3936,9 +3939,14 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 
 	bool bCreateTableSelect = false;
 	char* pCreateTableStmt = (char*) GET_MEMORY(thd->query_length() + 1);
-	// convert LF to space, remove extra space, convert to lower case letters 
-	convertSeparatorLowerCase(pCreateTableStmt, thd->query());
-	char* pSelect = strstr(pCreateTableStmt, "select ");
+	// convert LF to space, remove extra space, convert to lower case letters if needed.
+	// MySQL variable lower_case_table_names defines if a table name is case sensitive.
+	if (lower_case_table_names)	// On Windows, table names are in lower case
+		convertSeparatorLowerCase(pCreateTableStmt, thd->query(), true);
+	else	// On Linux, table names are case sensitive
+		convertSeparatorLowerCase(pCreateTableStmt, thd->query(), false);
+
+	char* pSelect = SDBUtilStrstrCaseInsensitive(pCreateTableStmt, (char*) "select ");
 	if ((sqlCommand == SQLCOM_CREATE_TABLE) && (pSelect)) // DDL contains key word 'select'
 		bCreateTableSelect = true;
 
@@ -4460,9 +4468,9 @@ int ha_scaledb::create_fks(THD* thd, TABLE *table_arg, char* tblName, SdbDynamic
 		//		REFERENCES tbl_name (index_col_name,...)
 		// MySQL creates a non-unique secondary index in the child table for a foreign key constraint
 
-		char* pCurrConstraintClause = strstr(pCreateTableStmt, "constraint ");
-		char* pCurrForeignKeyClause = strstr(pCreateTableStmt, "foreign key"); // Note- do not use "foreign key " as it is possible that there is no
-		// lagging space after "foreign key" (BUG 1208).
+		char* pCurrConstraintClause = SDBUtilStrstrCaseInsensitive(pCreateTableStmt, (char*) "constraint ");
+		char* pCurrForeignKeyClause = SDBUtilStrstrCaseInsensitive(pCreateTableStmt, (char*) "foreign key"); 
+		// BUG 1208- do not use "foreign key " as it is possible that there is no lagging space after "foreign key" .
 
 		char* pConstraintName = NULL;
 
@@ -4500,7 +4508,7 @@ int ha_scaledb::create_fks(THD* thd, TABLE *table_arg, char* tblName, SdbDynamic
 			}
 
 			bool bAddForeignKey = true; // the default is to add foreign key
-			if (strstr(pCreateTableStmt, "drop foreign key "))
+			if (SDBUtilStrstrCaseInsensitive(pCreateTableStmt, (char*) "drop foreign key "))
 				bAddForeignKey = false;
 
 			if (bAddForeignKey) {
@@ -4520,7 +4528,7 @@ int ha_scaledb::create_fks(THD* thd, TABLE *table_arg, char* tblName, SdbDynamic
 					break; // early exit
 				}
 
-				char* pTableName = strstr(pOffset, "references ") + 11; // points to parent table name
+				char* pTableName = SDBUtilStrstrCaseInsensitive(pOffset, (char*) "references ") + 11; // points to parent table name
 				pKeyI->setParentTableName(pTableName);
 				pOffset = pTableName + pKeyI->getParentTableNameLength();
 				pColumnNames = strstr(pOffset, "(") + 1; // points to column name
@@ -4588,9 +4596,9 @@ int ha_scaledb::create_fks(THD* thd, TABLE *table_arg, char* tblName, SdbDynamic
 
 			} //	if ( bAddForeignKey )
 
-			pCurrConstraintClause = strstr(pOffset, "constraint ");
-			pCurrForeignKeyClause = strstr(pOffset, "foreign key"); // Note- do not use "foreign key " as it is possible that there is no
-			// lagging space after "foreign key" (BUG 1208).
+			pCurrConstraintClause = SDBUtilStrstrCaseInsensitive(pOffset, (char*) "constraint ");
+			pCurrForeignKeyClause = SDBUtilStrstrCaseInsensitive(pOffset, (char*) "foreign key"); 
+			// BUG 1208- do not use "foreign key " as it is possible that there is no lagging space after "foreign key".
 		} // while ( pCurrForeignKeyClause != NULL )
 
 	} // if ( thd->query_length() > 0 )
@@ -4632,8 +4640,7 @@ int ha_scaledb::add_indexes_to_table(THD* thd, TABLE *table_arg, char* tblName,
 
 	for (int i = 0; i < numOfKeys; ++i) {
 		KEY* pKey = table_arg->key_info + i;
-		char* keyNameInLower = SDBUtilGetStrInLower(pKey->name);
-		char* designatorName = SDBUtilFindDesignatorName(pTableFsName, keyNameInLower, i);
+		char* designatorName = SDBUtilFindDesignatorName(pTableFsName, pKey->name, i);
 
 		// MySQL does not set value properly in pKey->algorithm for HASH index.
 		// We need to parse USING HASH clause in a CREATE TABLE statement.  The syntax is:
@@ -4645,10 +4652,10 @@ int ha_scaledb::add_indexes_to_table(THD* thd, TABLE *table_arg, char* tblName,
 
 		if ((primaryKeyNum == 0) && (i == 0)) { // primary key specified
 
-			if (strstr(pCreateTableStmt, "using hash")) {
-				char* pPrimaryKeyClause = strstr(pCreateTableStmt, "primary key ");
+			if (SDBUtilStrstrCaseInsensitive(pCreateTableStmt, (char*) "using hash")) {
+				char* pPrimaryKeyClause = SDBUtilStrstrCaseInsensitive(pCreateTableStmt, (char*) "primary key ");
 				if (pPrimaryKeyClause) {
-					char* pUsingHash = strstr(pPrimaryKeyClause + 12, "using hash");
+					char* pUsingHash = SDBUtilStrstrCaseInsensitive(pPrimaryKeyClause + 12, (char*) "using hash");
 					if (pUsingHash - pPrimaryKeyClause == 12) // PRIMARY KEY immediately followed by USING HASH
 						isHashIndex = true;
 				}
@@ -4694,11 +4701,11 @@ int ha_scaledb::add_indexes_to_table(THD* thd, TABLE *table_arg, char* tblName,
 
 		} else { // add secondary index (including the foreign key)
 
-			if (keyNameInLower && strstr(pCreateTableStmt, "using hash")) {
+			if (pKey->name && SDBUtilStrstrCaseInsensitive(pCreateTableStmt, (char*) "using hash")) {
 				if (pKey->name) { // For now, we assume a user needs to specify index_name if he wants USING HASH
-					char* pIndexName = strstr(pCreateTableStmt, keyNameInLower);
-					unsigned short indexNameLen = SDBUtilGetStrLength(keyNameInLower);
-					char* pUsingHash = strstr(pIndexName + indexNameLen + 1, "using hash");
+					char* pIndexName = SDBUtilStrstrCaseInsensitive(pCreateTableStmt, pKey->name);
+					unsigned short indexNameLen = SDBUtilGetStrLength(pKey->name);
+					char* pUsingHash = SDBUtilStrstrCaseInsensitive(pIndexName + indexNameLen + 1, (char*) "using hash");
 					if (pUsingHash - pIndexName == indexNameLen + 1) // index_name immediately followed by USING HASH
 						isHashIndex = true;
 				}
@@ -4742,7 +4749,6 @@ int ha_scaledb::add_indexes_to_table(THD* thd, TABLE *table_arg, char* tblName,
 			}
 		}
 
-		RELEASE_MEMORY(keyNameInLower);
 		RELEASE_MEMORY(designatorName);
 	} // for (int i=0; i < numOfKeys; ++i )
 
