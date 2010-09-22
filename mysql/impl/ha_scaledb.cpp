@@ -883,7 +883,7 @@ ha_scaledb::ha_scaledb(handlerton *hton, TABLE_SHARE *table_arg) :
 
 	sdbDbId_ = 0;
 	sdbTableNumber_ = 0;
-	//pMetaInfo_ = NULL;
+	sdbDesignatorId_ = 0;
 	sdbQueryMgrId_ = 0;
 	//pQm_ = NULL;
 	pSdbMysqlTxn_ = NULL;
@@ -5367,9 +5367,12 @@ unsigned short ha_scaledb::get_last_index_error_key() {
 	unsigned short last_designator = SDBGetLastIndexError(sdbUserId_);
 	// if last_designator is not set yet, it is set in the first select statement.
 	// We can get it from sdbDesignatorId_.
-	if (last_designator == 0)
+	if ((last_designator == 0) && sdbDesignatorId_)
 		last_designator = sdbDesignatorId_;
-	unsigned short last_errkey = SDBGetLastIndexPositionInTable(sdbDbId_, last_designator);
+
+	unsigned short last_errkey = active_index;
+	if (last_designator)	// If ScaleDB designator id is defined, then map it to mysql index id
+		last_errkey = SDBGetLastIndexPositionInTable(sdbDbId_, last_designator);
 
 	if (last_errkey == MAX_KEY) {
 		int key = active_index != MAX_KEY ? active_index : 0;
