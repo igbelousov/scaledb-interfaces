@@ -1782,14 +1782,22 @@ unsigned short ha_scaledb::placeMysqlRowInEngineBuffer(unsigned char* rowBuf1,
 		case MYSQL_TYPE_FLOAT:
 		case MYSQL_TYPE_DOUBLE:
 			if (checkAutoIncField && pAutoIncrField && !setNull) { // check to see if this table has an auto_increment column
-				if (pAutoIncrField->field_index == i) {
-					if ((pFieldValue == NULL) || SDBUtilAreAllBytesZero(pFieldValue,
-					        pField->pack_length()))
-						// When auto_incrment column has value NULL or 0, we let engine set the next sequence value.
+				if (pAutoIncrField->field_index == i) {	// current field is an auto increment field
+
+					// default rule: When auto_incrment column has value NULL or 0, we let engine set the next sequence value.
+					if (pFieldValue == NULL) {
 						useNextAutoIncrValue = true;
+					} else if ( SDBUtilAreAllBytesZero(pFieldValue, pField->pack_length()) ) {
+						// Bug 606: When sql_mode='NO_AUTO_VALUE_ON_ZERO', we keep value 0 without assigning next sequence value.
+						THD* thd = ha_thd();
+						if ( (thd->variables.sql_mode & MODE_NO_AUTO_VALUE_ON_ZERO) == 0)
+							useNextAutoIncrValue = true;	// set to true when NO_AUTO_VALUE_ON_ZERO is not specified.
+					}
+
 					needToUpdateAutoIncrement = true;
 				}
 			}
+
 			if (useNextAutoIncrValue == false)
 				SDBPrepareNumberField(sdbUserId_, sdbDbId_, sdbTableNumber_, fieldId, pFieldValue,
 				        groupType);
@@ -5762,54 +5770,54 @@ ha_rows ha_scaledb::records_in_range(uint inx, key_range* min_key, key_range* ma
 		int64 maxValue = 0;
 
 		switch ( pField->type() ) {
-			case MYSQL_TYPE_SHORT:
+		case MYSQL_TYPE_SHORT:
 			if (pMinFieldValue )
-			minValue = (int64) ( *((short*) pMinFieldValue) );
+				minValue = (int64) ( *((short*) pMinFieldValue) );
 			if (pMaxFieldValue )
-			maxValue = (int64) ( *((short*) pMaxFieldValue) );
+				maxValue = (int64) ( *((short*) pMaxFieldValue) );
 			break;
 
-			case MYSQL_TYPE_INT24:
+		case MYSQL_TYPE_INT24:
 #ifdef SDB_BIG_ENDIAN
 			if (pMinFieldValue )
-			minValue = (((int64) *(pMinFieldValue)) << 16)
-			+ (((int64) *(pMinFieldValue+1)) << 8)
-			+ ((int64) *(pMinFieldValue+2));
+				minValue = (((int64) *(pMinFieldValue)) << 16)
+					+ (((int64) *(pMinFieldValue+1)) << 8)
+					+ ((int64) *(pMinFieldValue+2));
 			if (pMaxFieldValue )
-			maxValue = (((int64) *(pMaxFieldValue)) << 16)
-			+ (((int64) *(pMaxFieldValue+1)) << 8)
-			+ ((int64) *(pMaxFieldValue+2));
+				maxValue = (((int64) *(pMaxFieldValue)) << 16)
+					+ (((int64) *(pMaxFieldValue+1)) << 8)
+					+ ((int64) *(pMaxFieldValue+2));
 #else
 			if (pMinFieldValue )
-			minValue = (((int64) *(pMinFieldValue+2)) << 16)
-			+ (((int64) *(pMinFieldValue+1)) << 8)
-			+ ((int64) *(pMinFieldValue));
+				minValue = (((int64) *(pMinFieldValue+2)) << 16)
+					+ (((int64) *(pMinFieldValue+1)) << 8)
+					+ ((int64) *(pMinFieldValue));
 			if (pMaxFieldValue )
-			maxValue = (((int64) *(pMaxFieldValue+2)) << 16)
-			+ (((int64) *(pMaxFieldValue+1)) << 8)
-			+ ((int64) *(pMaxFieldValue));
+				maxValue = (((int64) *(pMaxFieldValue+2)) << 16)
+					+ (((int64) *(pMaxFieldValue+1)) << 8)
+					+ ((int64) *(pMaxFieldValue));
 #endif
 			break;
 
-			case MYSQL_TYPE_LONG:
+		case MYSQL_TYPE_LONG:
 			if (pMinFieldValue )
-			minValue = (int64) ( *((int*) pMinFieldValue) );
+				minValue = (int64) ( *((int*) pMinFieldValue) );
 			if (pMaxFieldValue )
-			maxValue = (int64) ( *((int*) pMaxFieldValue) );
+				maxValue = (int64) ( *((int*) pMaxFieldValue) );
 			break;
 
-			case MYSQL_TYPE_LONGLONG:
+		case MYSQL_TYPE_LONGLONG:
 			if (pMinFieldValue )
-			minValue = *((int64*) pMinFieldValue);
+				minValue = *((int64*) pMinFieldValue);
 			if (pMaxFieldValue )
-			maxValue = *((int64*) pMaxFieldValue);
+				maxValue = *((int64*) pMaxFieldValue);
 			break;
 
-			case MYSQL_TYPE_TINY:
+		case MYSQL_TYPE_TINY:
 			if (pMinFieldValue )
-			minValue = (int64) (*pMinFieldValue);
+				minValue = (int64) (*pMinFieldValue);
 			if (pMaxFieldValue )
-			maxValue = (int64) (*pMaxFieldValue);
+				maxValue = (int64) (*pMaxFieldValue);
 			break;
 
 			default:
@@ -5817,14 +5825,14 @@ ha_rows ha_scaledb::records_in_range(uint inx, key_range* min_key, key_range* ma
 		}
 
 		if ((min_key == NULL) && (max_key) )
-		diffValue = maxValue;
+			diffValue = maxValue;
 		else if ( (min_key) && (max_key == NULL) )
-		diffValue = stats.records - minValue;
+			diffValue = stats.records - minValue;
 		else
-		diffValue = maxValue - minValue;
+			diffValue = maxValue - minValue;
 
 		if (diffValue > (int64) stats.records)
-		diffValue = stats.records;
+			diffValue = stats.records;
 
 		// adjust number of records by a factor if the index is an auto_increment column
 		unsigned int sdbAutoIncScanFactor = SDB_AUTOINC_SCAN_FACTOR;
@@ -5832,12 +5840,12 @@ ha_rows ha_scaledb::records_in_range(uint inx, key_range* min_key, key_range* ma
 			sdbAutoIncScanFactor = METAINFO_BLOCK_SIZE / stats.mean_rec_length;
 
 			if (sdbAutoIncScanFactor == 0)
-			++sdbAutoIncScanFactor;
+				++sdbAutoIncScanFactor;
 		}
 
 		rangeRows = (uint64) (diffValue / sdbAutoIncScanFactor);
 		if (diffValue % sdbAutoIncScanFactor > 0)
-		++rangeRows;
+			++rangeRows;
 	}
 	else { // for non-auto-increment index column
 
@@ -5849,51 +5857,51 @@ ha_rows ha_scaledb::records_in_range(uint inx, key_range* min_key, key_range* ma
 
 		switch ( pField->type() ) {
 
-			case MYSQL_TYPE_VARCHAR:
-			case MYSQL_TYPE_VAR_STRING:
+		case MYSQL_TYPE_VARCHAR:
+		case MYSQL_TYPE_VAR_STRING:
 			realVarLength = (unsigned int) *( (unsigned short*)(keyOffset+offsetLength));
 			mysqlVarLengthBytes = 2;
 			bVarStringField = true;
 			break;
 
-			case MYSQL_TYPE_TINY_BLOB:
-			case MYSQL_TYPE_BLOB:
-			case MYSQL_TYPE_MEDIUM_BLOB:
-			case MYSQL_TYPE_LONG_BLOB:
+		case MYSQL_TYPE_TINY_BLOB:
+		case MYSQL_TYPE_BLOB:
+		case MYSQL_TYPE_MEDIUM_BLOB:
+		case MYSQL_TYPE_LONG_BLOB:
 			realVarLength = (unsigned int) *( (unsigned short*)(keyOffset+offsetLength));
 			mysqlVarLengthBytes = pKeyPart->store_length - pKeyPart->length;
 			bVarStringField = true;
 			break;
 
-			default:
+		default:
 			break;
 		} // switch
 
 		if ( pMaxFieldValue )
-		pMaxFieldValue = pMaxFieldValue + mysqlVarLengthBytes;
+			pMaxFieldValue = pMaxFieldValue + mysqlVarLengthBytes;
 		if ( bVarStringField )
-		retValue = pQm_->defineQuery(sdbDbId_, sdbDesignatorId_,
+			retValue = pQm_->defineQuery(sdbDbId_, sdbDesignatorId_,
 				(char*) pField->field_name, pMaxFieldValue, false, realVarLength, false);
 		else
-		retValue = pQm_->defineQuery(sdbDbId_, sdbDesignatorId_,
+			retValue = pQm_->defineQuery(sdbDbId_, sdbDesignatorId_,
 				(char*) pField->field_name, pMaxFieldValue);
 		if (retValue == SUCCESS)
-		retValue = pQm_->prepareEstimateCount(0, false);
+			retValue = pQm_->prepareEstimateCount(0, false);
 		if (retValue != SUCCESS)
-		DBUG_RETURN( rangeRows );
+			DBUG_RETURN( rangeRows );
 
 		if ( pMinFieldValue )
-		pMinFieldValue = pMinFieldValue + mysqlVarLengthBytes;
+			pMinFieldValue = pMinFieldValue + mysqlVarLengthBytes;
 		if ( bVarStringField )
-		retValue = pQm_->defineQuery(sdbDbId_, sdbDesignatorId_,
+			retValue = pQm_->defineQuery(sdbDbId_, sdbDesignatorId_,
 				(char*) pField->field_name, pMinFieldValue, false, realVarLength, false);
 		else
-		retValue = pQm_->defineQuery(sdbDbId_, sdbDesignatorId_,
+			retValue = pQm_->defineQuery(sdbDbId_, sdbDesignatorId_,
 				(char*) pField->field_name, pMinFieldValue);
 		if (retValue == SUCCESS)
-		retValue = pQm_->prepareEstimateCount(0, true);
+			retValue = pQm_->prepareEstimateCount(0, true);
 		if (retValue != SUCCESS)
-		DBUG_RETURN( rangeRows );
+			DBUG_RETURN( rangeRows );
 
 		rangeRows = pQm_->getEstimatedRowsCount();
 
@@ -5903,7 +5911,7 @@ ha_rows ha_scaledb::records_in_range(uint inx, key_range* min_key, key_range* ma
 
 	// the estimated number of rows has to be >= 1.  Otherwise, MySQL thinks it is an empty set.
 	if (rangeRows < 1)
-	rangeRows = 1;
+		rangeRows = 1;
 
 #ifdef SDB_DEBUG_LIGHT
 	if (mysqlInterfaceDebugLevel_ > 3) {
