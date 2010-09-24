@@ -1567,8 +1567,10 @@ int ha_scaledb::close(void) {
 		if (sqlCommand == SQLCOM_ALTER_TABLE || sqlCommand == SQLCOM_CREATE_INDEX || sqlCommand
 		        == SQLCOM_DROP_INDEX)
 			bIsAlterTableStmt = true;
-		if (strstr(thd->query(), SCALEDB_HINT_PASS_DDL))
-			ddlFlag |= SDBFLAG_DDL_SECOND_NODE; // this flag is used locally.
+
+                if ( thd->query() ) 
+			if (strstr(thd->query(), SCALEDB_HINT_PASS_DDL))
+				ddlFlag |= SDBFLAG_DDL_SECOND_NODE; // this flag is used locally.
 
 		// For ALTER TABLE, CREATE/DROP INDEX, secondary node should not close table because the temp table
 		// was never created and the table-to-be-altered is already closed in FLUSH TABLE statement.
