@@ -68,13 +68,14 @@ int SdbMysqlClient::executeQuery(char* query, unsigned long length, bool bEngine
 	int retCode = 0;
 
 	if (bEngineOption == true) {
+		// send this statement if needed: SET SESSION STORAGE_ENGINE=SCALEDB;
 		retCode = sendQuery(SET_STORAGE_ENGINE_SCALEDB, (unsigned long) strlen(
 		        SET_STORAGE_ENGINE_SCALEDB));
-		if (retCode)
-			return retCode;
 	}
 
-	retCode = sendQuery(query, length);
+	if (retCode == 0)
+		retCode = sendQuery(query, length);
+
 	return retCode;
 }
 
@@ -177,30 +178,23 @@ int SdbMysqlClient::sendQuery(char* query, unsigned long length) {
 	unsigned int mysqlErrorNum = 0;
 	if (rc) { // if there is an error, we fetch MySQL error number.
 		mysqlErrorNum = mysql_errno(mysql_);
-#ifdef SDB_DEBUG_LIGHT
-		if (debugLevel_) {
-			SDBDebugStart();
-			SDBDebugPrintString("\nmysql_real_query (");
-			SDBDebugPrintString(query);
-			SDBDebugPrintString(") fails with MySQL error number  ");
-			SDBDebugPrintInt(mysqlErrorNum);
-			SDBDebugPrintString("; MySQL error message: ");
-			const char* msg = mysql_error(mysql_);
-			if (msg) {
-				SDBDebugPrintString((char*) msg);
-			}
-			SDBDebugPrintNewLine(1);
-			SDBDebugEnd();
+
+		SDBDebugStart();
+		SDBDebugPrintString("\nmysql_real_query returns MySQL error number: ");
+		SDBDebugPrintInt(mysqlErrorNum);
+		SDBDebugPrintString("; MySQL error message: ");
+		const char* msg = mysql_error(mysql_);
+		if (msg) {
+			SDBDebugPrintString((char*) msg);
 		}
-#endif
-
-		SDBTerminate(0, "Replicate DDL to other node failed");
-	}
-
-	// clear the state after the query
-	MYSQL_RES* resultSet = mysql_store_result(mysql_);
-	if (resultSet) {
-		mysql_free_result(resultSet);
+		SDBDebugPrintNewLine(1);
+		SDBDebugEnd();
+	} else {
+		// No error found.  clear the state after the query
+		MYSQL_RES* resultSet = mysql_store_result(mysql_);
+		if (resultSet) {
+			mysql_free_result(resultSet);
+		}
 	}
 
 	// If it is error 1007: Can't create database '%s'; database exists,

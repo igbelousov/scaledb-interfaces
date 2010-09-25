@@ -1568,7 +1568,7 @@ int ha_scaledb::close(void) {
 		        == SQLCOM_DROP_INDEX)
 			bIsAlterTableStmt = true;
 
-                if ( thd->query() ) 
+		if ( thd->query() ) 
 			if (strstr(thd->query(), SCALEDB_HINT_PASS_DDL))
 				ddlFlag |= SDBFLAG_DDL_SECOND_NODE; // this flag is used locally.
 
@@ -4126,11 +4126,8 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 	}
 #endif
 
-	if (sqlCommand == SQLCOM_CREATE_TABLE)
-		SDBCloseTable(sdbUserId_, sdbDbId_, pTableName, true, true);
-	else
-		// do not commit for ALTER TABLE statement
-		SDBCloseTable(sdbUserId_, sdbDbId_, pTableName, true, false);
+	// Bug 1079: CREATE TABLE statement will commit at the end of this method.
+	SDBCloseTable(sdbUserId_, sdbDbId_, pTableName, true, false);
 
 	// pass the DDL statement to engine so that it can be propagated to other nodes.
 	// We need to make sure it is a regular CREATE TABLE command because this method is called
