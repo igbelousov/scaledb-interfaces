@@ -243,7 +243,7 @@ char* SDBGetForeignKeyClause(unsigned short userId, unsigned short dbId, unsigne
 unsigned short SDBCreateIndex(unsigned int userId, unsigned short dbId, unsigned short tableId, 
 							  char *indexName, char **keyFields, unsigned short *keySizes, 
 							  bool isPrimaryKey, bool isNonUniqueIndex, char * parentIndexName, 
-							  unsigned short ddlFlag, unsigned short externalId, bool isHashIndex);
+							  unsigned short ddlFlag, unsigned short externalId, unsigned char indexType);
 
 unsigned short SDBDropIndex(unsigned int userId, unsigned short dbId, unsigned short tableId, char *indexName);
 
@@ -281,6 +281,8 @@ unsigned short SDBGetTableRowLengthByIndex(unsigned short dbId, unsigned short i
 
 unsigned short SDBGetLastIndexError(unsigned short userId);
 unsigned short SDBGetLastIndexPositionInTable(unsigned short dbId, unsigned short indexId);
+
+unsigned short SDBGetSystemLevelIndexType();
 
 /*
 //////////////////////////////////////////////////////////////////////////////

@@ -4644,6 +4644,7 @@ int ha_scaledb::add_indexes_to_table(THD* thd, TABLE *table_arg, char* tblName,
 	KEY_PART_INFO* pKeyPart;
 	int numOfKeys = (int) table_arg->s->keys;
 	char* pTableFsName = SDBGetTableFileSystemNameByTableNumber(sdbDbId_, sdbTableNumber_);
+	unsigned char sdbIndexType = INDEX_TYPE_IMPLICIT;
 
 	for (int i = 0; i < numOfKeys; ++i) {
 		KEY* pKey = table_arg->key_info + i;
@@ -4664,7 +4665,7 @@ int ha_scaledb::add_indexes_to_table(THD* thd, TABLE *table_arg, char* tblName,
 				if (pPrimaryKeyClause) {
 					char* pUsingHash = SDBUtilStrstrCaseInsensitive(pPrimaryKeyClause + 12, (char*) "using hash");
 					if (pUsingHash - pPrimaryKeyClause == 12) // PRIMARY KEY immediately followed by USING HASH
-						isHashIndex = true;
+						sdbIndexType = INDEX_TYPE_HASH;
 				}
 			}
 
@@ -4695,7 +4696,7 @@ int ha_scaledb::add_indexes_to_table(THD* thd, TABLE *table_arg, char* tblName,
 
 			unsigned short retValue = SDBCreateIndex(sdbUserId_, sdbDbId_, sdbTableNumber_,
 			        designatorName, keyFields, keySizes, true, false, parent, ddlFlag, 0,
-			        isHashIndex);
+			        sdbIndexType);
 			// Need to free keyFields, but not the field names used by MySQL.
 			RELEASE_MEMORY(keyFields);
 			RELEASE_MEMORY(keySizes);
@@ -4714,7 +4715,7 @@ int ha_scaledb::add_indexes_to_table(THD* thd, TABLE *table_arg, char* tblName,
 					unsigned short indexNameLen = SDBUtilGetStrLength(pKey->name);
 					char* pUsingHash = SDBUtilStrstrCaseInsensitive(pIndexName + indexNameLen + 1, (char*) "using hash");
 					if (pUsingHash - pIndexName == indexNameLen + 1) // index_name immediately followed by USING HASH
-						isHashIndex = true;
+						sdbIndexType = INDEX_TYPE_HASH;
 				}
 			}
 
@@ -4744,7 +4745,7 @@ int ha_scaledb::add_indexes_to_table(THD* thd, TABLE *table_arg, char* tblName,
 
 			unsigned short retValue = SDBCreateIndex(sdbUserId_, sdbDbId_, sdbTableNumber_,
 			        designatorName, keyFields, keySizes, false, !isUniqueIndex, parent, ddlFlag, i,
-			        isHashIndex);
+			        sdbIndexType);
 			// Need to free keyFields, but not the field names used by MySQL.
 			RELEASE_MEMORY(keyFields);
 			RELEASE_MEMORY(keySizes);

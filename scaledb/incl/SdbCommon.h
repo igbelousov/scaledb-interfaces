@@ -138,6 +138,13 @@ typedef enum SdbKeySearchDirection {
 
 #define DEFAULT_LOCK_LEVEL 2
 
+// index type
+#define INDEX_TYPE_IMPLICIT		0
+#define INDEX_TYPE_TRIE			1
+#define INDEX_TYPE_BTREE		2
+#define INDEX_TYPE_HASH			3
+
+
 // SDB ERROR CODES
 #define SUCCESS 0
 #define DATA_EXISTS 1
