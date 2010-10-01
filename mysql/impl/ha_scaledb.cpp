@@ -4644,32 +4644,49 @@ int ha_scaledb::add_indexes_to_table(THD* thd, TABLE *table_arg, char* tblName,
 	KEY_PART_INFO* pKeyPart;
 	int numOfKeys = (int) table_arg->s->keys;
 	char* pTableFsName = SDBGetTableFileSystemNameByTableNumber(sdbDbId_, sdbTableNumber_);
-	unsigned char sdbIndexType = INDEX_TYPE_IMPLICIT;
 
+	// set up the default index type at table level
+	unsigned char sdbTableLevelIndexType = INDEX_TYPE_IMPLICIT;
+	if (table_arg->s->comment.length) {
+		if ( SDBUtilStrstrCaseInsensitive(table_arg->s->comment.str, SCALEDB_HINT_INDEX_BTREE) )
+			sdbTableLevelIndexType = INDEX_TYPE_BTREE;
+		else if ( SDBUtilStrstrCaseInsensitive(table_arg->s->comment.str, SCALEDB_HINT_INDEX_TRIE) )
+			sdbTableLevelIndexType = INDEX_TYPE_TRIE;
+	}
+
+	unsigned char sdbIndexType = INDEX_TYPE_IMPLICIT;
 	for (int i = 0; i < numOfKeys; ++i) {
 		KEY* pKey = table_arg->key_info + i;
-		char* designatorName = SDBUtilFindDesignatorName(pTableFsName, pKey->name, i);
 
-		// MySQL does not set value properly in pKey->algorithm for HASH index.
-		// We need to parse USING HASH clause in a CREATE TABLE statement.  The syntax is:
-		//col_name column_definition
-		// | [CONSTRAINT [symbol]] PRIMARY KEY [index_type] (index_col_name,...) [index_option] ...
-		// | {INDEX|KEY} [index_name] [index_type] (index_col_name,...) [index_option] ...
-		// | [CONSTRAINT [symbol]] UNIQUE [INDEX|KEY] [index_name] [index_type] (index_col_name,...) [index_option] ...
-		bool isHashIndex = false;
+		// set the index type
+		switch (pKey->algorithm) {
+		case HA_KEY_ALG_UNDEF:
+			sdbIndexType = sdbTableLevelIndexType;
+			break;
+
+		case HA_KEY_ALG_BTREE:
+			sdbIndexType = sdbTableLevelIndexType;	// remove this line later
+			// TODO: enable the following line after Btree is fully developed.
+			//sdbIndexType = INDEX_TYPE_BTREE;
+			break;
+
+		case HA_KEY_ALG_RTREE:
+			sdbIndexType = sdbTableLevelIndexType;
+			break;
+
+		case HA_KEY_ALG_HASH:
+			sdbIndexType = INDEX_TYPE_HASH;
+			break;
+
+		default:
+			sdbIndexType = sdbTableLevelIndexType;
+			break;
+		}
+
+		char* designatorName = SDBUtilFindDesignatorName(pTableFsName, pKey->name, i);
 
 		if ((primaryKeyNum == 0) && (i == 0)) { // primary key specified
 
-			if (SDBUtilStrstrCaseInsensitive(pCreateTableStmt, (char*) "using hash")) {
-				char* pPrimaryKeyClause = SDBUtilStrstrCaseInsensitive(pCreateTableStmt, (char*) "primary key ");
-				if (pPrimaryKeyClause) {
-					char* pUsingHash = SDBUtilStrstrCaseInsensitive(pPrimaryKeyClause + 12, (char*) "using hash");
-					if (pUsingHash - pPrimaryKeyClause == 12) // PRIMARY KEY immediately followed by USING HASH
-						sdbIndexType = INDEX_TYPE_HASH;
-				}
-			}
-
-			KEY* pKey = table_arg->key_info + i;
 			int numOfKeyFields = (int) pKey->key_parts;
 			char** keyFields = (char **) GET_MEMORY((numOfKeyFields + 1) * sizeof(char *));
 			unsigned short* keySizes = (unsigned short*) GET_MEMORY((numOfKeyFields + 1)
@@ -4708,16 +4725,6 @@ int ha_scaledb::add_indexes_to_table(THD* thd, TABLE *table_arg, char* tblName,
 			}
 
 		} else { // add secondary index (including the foreign key)
-
-			if (pKey->name && SDBUtilStrstrCaseInsensitive(pCreateTableStmt, (char*) "using hash")) {
-				if (pKey->name) { // For now, we assume a user needs to specify index_name if he wants USING HASH
-					char* pIndexName = SDBUtilStrstrCaseInsensitive(pCreateTableStmt, pKey->name);
-					unsigned short indexNameLen = SDBUtilGetStrLength(pKey->name);
-					char* pUsingHash = SDBUtilStrstrCaseInsensitive(pIndexName + indexNameLen + 1, (char*) "using hash");
-					if (pUsingHash - pIndexName == indexNameLen + 1) // index_name immediately followed by USING HASH
-						sdbIndexType = INDEX_TYPE_HASH;
-				}
-			}
 
 			int numOfKeyFields = (int) pKey->key_parts;
 			bool isUniqueIndex = (pKey->flags & HA_NOSAME) ? true : false;

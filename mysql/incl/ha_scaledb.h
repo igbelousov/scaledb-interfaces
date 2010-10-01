@@ -45,6 +45,8 @@
 #define SCALEDB_HINT_PASS_DDL	" /*SCALEDBHINT: PASS DDL*/"
 #define SCALEDB_HINT_CLOSEFILE	" /*SCALEDBHINT: CLOSEFILE*/"
 #define SCALEDB_HINT_OPENFILE	" /*SCALEDBHINT: OPENFILE*/"
+#define SCALEDB_HINT_INDEX_BTREE	"SCALEDBHINT: INDEX TYPE BTREE"
+#define SCALEDB_HINT_INDEX_TRIE		"SCALEDBHINT: INDEX TYPE TRIE"
 #define MYSQL_TEMP_TABLE_PREFIX "#sql"		// ususally the first temp table used in ALTER TABLE
 #define MYSQL_TEMP_TABLE_PREFIX2 "#sql2"	// the second temp table used in ALTER TABLE statement
 #define MYSQL_ENGINE_EQUAL_SCALEDB " engine=scaledb "	// 16 bytes
@@ -66,85 +68,13 @@ typedef struct st_scaledb_share {
 	uint table_name_length, use_count;
 	pthread_mutex_t mutex;
 	THR_LOCK lock;
-}SCALEDB_SHARE;
+} SCALEDB_SHARE;
 
 #define SDB_EXTRA_DUP_IGNORE	1   // ignore any duplicates
 #define SDB_EXTRA_DUP_REPLACE	2   // replace any duplicates
 
 class ha_scaledb: public handler
 {
-private:
-	THR_LOCK_DATA lock; ///< MySQL lock
-	SCALEDB_SHARE *share; ///< Shared lock info
-
-	bool beginningOfScan_; // set to true only we begin scanning a table and have not fetched rows yet.
-	bool deleteAllRows_; // set to true if delete_all_rows() method is called.
-	unsigned short sdbDbId_; // DbId used by ScaleDB
-	unsigned short sdbTableNumber_; // table number used by ScaleDB
-	unsigned int sdbUserId_; // user id assigned by ScaleDB storage engine
-	unsigned short sdbQueryMgrId_; // current query Manager ID
-	MysqlTxn* pSdbMysqlTxn_; // pointer to MysqlTxn object
-	//	String fieldBuf;			// the buffer to hold a field of a response record
-	char* sdbDesignatorName_; // current designator name
-	unsigned short sdbDesignatorId_; // current designator id
-	unsigned int sdbRowIdInScan_; // RowId used in sequential table scan
-	unsigned int extraChecks_; // Extra information from handler
-	unsigned int readDebugCounter_; // counter for debugging
-	unsigned int deleteRowCount_;
-	int sqlCommand_; // SQL command defined in ::external_lock.  Use this variable to avoid repetitively calling
-	// thd_sql_command() function.  Example: DATA LOAD command
-	unsigned short sdbCommandType_; // specifies command to be passed to ScaleDB engine
-	unsigned short numberOfFrontFixedColumns_; // the number of fixed length columns at the front of a record
-	unsigned short frontFixedColumnsLength_; // the length of all fixed length columns at the front of a record
-	// this value is 0 if the first column is has variable length
-
-	bool releaseLocksAfterRead_; // flag to indicate whether we hold the locks after reading data
-	bool virtualTableFlag_; // flag to show if it is a virtual table
-	bool bRangeQuery_; // flag is set to true if range condition is specified.
-	// This flag is set in ::records_in_range method
-
-
-	unsigned short getOffsetByDesignator(unsigned short designator);
-	// This method packs a MySQL row into ScaleDB engine row buffer 
-	// When we prepare the old row value for update operation, 
-	// rowBuf1 points to old MySQL row buffer and rowBuf2 points to new MySQL row buffer.
-	// For all other cases, these 2 row buffers point to same row buffer
-	unsigned short placeMysqlRowInEngineBuffer(unsigned char* rowBuf1, unsigned char* rowBuf2, unsigned short groupType,
-			bool checkAutoIncField, bool &needToUpdateAutoIncrement);
-	// This method unpacks a single ScaleDB column and saves it into MySQL buffer
-	void placeEngineFieldInMysqlBuffer(unsigned char *destBuff, char *ptrToField, Field* pField);
-
-	// This method saves a MySQL transaction information for a given user thread.
-	// When isTransient is true (outside the pair of external_locks calls), we do NOT save information into ha_scaledb.
-	// When it is false, we save the returned pointer (possible others) into ha_scaledb member variables.
-	MysqlTxn* placeSdbMysqlTxnInfo(THD* thd, bool isTransient=false);
-	bool addSdbKeyFields();
-
-	// This method is outside of a user transaction.  It opens a user database and saves value in sdbDbId_.
-	// It does not open individual table files.
-	unsigned short openUserDatabase(char* pDbName, char *pDbFsName, bool bIsPrimaryNode, bool bIsAlterTableStmt, unsigned short ddlFlag=0);
-
-	// prepare index query
-	int prepareIndexKeyQuery(const uchar* key, uint key_len, enum ha_rkey_function find_flag);
-
-	// prepare index scan query manager
-	void prepareIndexQueryManager(unsigned int indexNum, const uchar* key, uint key_len);
-
-	// prepare query manager using any avaiable key
-	void prepareFirstKeyQueryManager();
-
-	// prepare query manager 
-	void prepareIndexOrSequentialQueryManager();
-
-	// output handle and MySQL user thread id
-	void outputHandleAndThd();
-
-	// initialize DB id and Table id.  Returns non-zero if there is an error
-	unsigned short initializeDbTableId(char* pDbName=NULL, char* pTblName=NULL,
-			bool isFileName=false, bool allowTableClosed=false);
-
-	int has_overflow_fields(THD* thd, TABLE *table_arg);
-
 public:
 	ha_scaledb(handlerton *hton, TABLE_SHARE *table_arg);
 	~ha_scaledb();
@@ -338,6 +268,80 @@ public:
 	// enable keys -- only myisam supports this.  Other storage engines do NOT support it.
 	// need to comment out this method as it does not work well with foreign key constraint
 	//int enable_indexes(uint mode);
+
+
+private:
+	THR_LOCK_DATA lock; ///< MySQL lock
+	SCALEDB_SHARE *share; ///< Shared lock info
+
+	bool beginningOfScan_; // set to true only we begin scanning a table and have not fetched rows yet.
+	bool deleteAllRows_; // set to true if delete_all_rows() method is called.
+	unsigned short sdbDbId_; // DbId used by ScaleDB
+	unsigned short sdbTableNumber_; // table number used by ScaleDB
+	unsigned int sdbUserId_; // user id assigned by ScaleDB storage engine
+	unsigned short sdbQueryMgrId_; // current query Manager ID
+	MysqlTxn* pSdbMysqlTxn_; // pointer to MysqlTxn object
+	//	String fieldBuf;			// the buffer to hold a field of a response record
+	char* sdbDesignatorName_; // current designator name
+	unsigned short sdbDesignatorId_; // current designator id
+	unsigned int sdbRowIdInScan_; // RowId used in sequential table scan
+	unsigned int extraChecks_; // Extra information from handler
+	unsigned int readDebugCounter_; // counter for debugging
+	unsigned int deleteRowCount_;
+	int sqlCommand_; // SQL command defined in ::external_lock.  Use this variable to avoid repetitively calling
+	// thd_sql_command() function.  Example: DATA LOAD command
+	unsigned short sdbCommandType_; // specifies command to be passed to ScaleDB engine
+	unsigned short numberOfFrontFixedColumns_; // the number of fixed length columns at the front of a record
+	unsigned short frontFixedColumnsLength_; // the length of all fixed length columns at the front of a record
+	// this value is 0 if the first column is has variable length
+
+	bool releaseLocksAfterRead_; // flag to indicate whether we hold the locks after reading data
+	bool virtualTableFlag_; // flag to show if it is a virtual table
+	bool bRangeQuery_; // flag is set to true if range condition is specified.
+	// This flag is set in ::records_in_range method
+
+	unsigned short getOffsetByDesignator(unsigned short designator);
+	// This method packs a MySQL row into ScaleDB engine row buffer 
+	// When we prepare the old row value for update operation, 
+	// rowBuf1 points to old MySQL row buffer and rowBuf2 points to new MySQL row buffer.
+	// For all other cases, these 2 row buffers point to same row buffer
+	unsigned short placeMysqlRowInEngineBuffer(unsigned char* rowBuf1, unsigned char* rowBuf2, unsigned short groupType,
+			bool checkAutoIncField, bool &needToUpdateAutoIncrement);
+	// This method unpacks a single ScaleDB column and saves it into MySQL buffer
+	void placeEngineFieldInMysqlBuffer(unsigned char *destBuff, char *ptrToField, Field* pField);
+
+	// This method saves a MySQL transaction information for a given user thread.
+	// When isTransient is true (outside the pair of external_locks calls), we do NOT save information into ha_scaledb.
+	// When it is false, we save the returned pointer (possible others) into ha_scaledb member variables.
+	MysqlTxn* placeSdbMysqlTxnInfo(THD* thd, bool isTransient=false);
+	bool addSdbKeyFields();
+
+	// This method is outside of a user transaction.  It opens a user database and saves value in sdbDbId_.
+	// It does not open individual table files.
+	unsigned short openUserDatabase(char* pDbName, char *pDbFsName, bool bIsPrimaryNode, 
+			bool bIsAlterTableStmt, unsigned short ddlFlag=0);
+
+	// prepare index query
+	int prepareIndexKeyQuery(const uchar* key, uint key_len, enum ha_rkey_function find_flag);
+
+	// prepare index scan query manager
+	void prepareIndexQueryManager(unsigned int indexNum, const uchar* key, uint key_len);
+
+	// prepare query manager using any avaiable key
+	void prepareFirstKeyQueryManager();
+
+	// prepare query manager 
+	void prepareIndexOrSequentialQueryManager();
+
+	// output handle and MySQL user thread id
+	void outputHandleAndThd();
+
+	// initialize DB id and Table id.  Returns non-zero if there is an error
+	unsigned short initializeDbTableId(char* pDbName=NULL, char* pTblName=NULL,
+			bool isFileName=false, bool allowTableClosed=false);
+
+	int has_overflow_fields(THD* thd, TABLE *table_arg);
+
 };
 
 #endif	// SDB_MYSQL
