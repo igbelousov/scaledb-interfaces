@@ -86,7 +86,7 @@ public:
 	// level 1: prints out the function call for every method in ha_scaledb class
 	// level 2: print out metadata structure after create/delete/rename tables,
 	//          and MySQL user thread id plus handle which are useful in multi-user testing
-	// level 3: print out file access statistics and user activities of a session
+	// level 3: print every fetch record, print out file access statistics and user activities of a session 
 	// level 4: print out memory usage
 	// level 5: for debugging commit operation and user lock status
 	// level 6: print out query search, index traversal, and its path

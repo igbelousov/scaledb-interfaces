@@ -2356,15 +2356,18 @@ int ha_scaledb::fetchSingleRow(unsigned char* buf) {
 		goto retryFetch;
 
 #ifdef SDB_DEBUG_LIGHT
-	if (mysqlInterfaceDebugLevel_ >= 5) {
-		if (!retValue) {
-			SDBDebugStart(); // synchronize threads printout
-			SDBDebugPrintHeader(
-			        "MySQL Interface: ha_scaledb::fetchSingleRow is returning with the following row fetched:\n");
-			SDBDebugPrintHexByteArray((char*) buf, 0, table->s->reclength);
-			SDBDebugPrintNewLine();
-			SDBDebugEnd(); // synchronize threads printout
-		}
+	if (mysqlInterfaceDebugLevel_ > 2 /* && (debugCounter_ < 100) */) {
+		// print out every fetched record.  May set a limit using the above condition
+		SDBDebugStart(); // synchronize threads printout
+		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::fetchSingleRow from table: ");
+		SDBDebugPrintString(table->s->table_name.str);
+		SDBDebugPrintString(", alias: ");
+		SDBDebugPrintString((char *) table->alias);
+		SDBDebugPrintString(", using Query Manager ID: ");
+		SDBDebugPrintInt(sdbQueryMgrId_);
+		SDBDebugPrintHeader("ha_scaledb::fetchSingleRow fetches this row: ");
+		SDBDebugPrintHexByteArray((char*) buf, 0, table->s->reclength);
+		SDBDebugEnd(); // synchronize threads printout
 	}
 #endif
 
@@ -2963,7 +2966,7 @@ int ha_scaledb::prepareIndexKeyQuery(const uchar* key, uint key_len,
 
 		} // if ( (keyOffset != NULL) && (keyLengthLeft >= 0) )
 
-		//        if ( !virtualTableFlag_ ) {
+		//if ( !virtualTableFlag_ ) {
 
 		if (keyValueIsNull) // user specifies "column is NULL" in SQL statement
 			pCurrentKeyValue = NULL;
@@ -3019,9 +3022,15 @@ int ha_scaledb::prepareIndexKeyQuery(const uchar* key, uint key_len,
 			        SDB_KEY_SEARCH_DIRECTION_EQ, true, true);
 			break;
 
-		case HA_READ_AFTER_KEY:
-			SDBQueryCursorSetFlags(sdbQueryMgrId_, sdbDesignatorId_, true,
-			        SDB_KEY_SEARCH_DIRECTION_GT, false, true);
+		case HA_READ_AFTER_KEY:	
+			if (stringField)
+				// bug 1049: set distinct flag to false for string key field
+				SDBQueryCursorSetFlags(sdbQueryMgrId_, sdbDesignatorId_, false,
+				        SDB_KEY_SEARCH_DIRECTION_GT, false, true);
+			else
+				// set distinct flag to true for integer key field
+				SDBQueryCursorSetFlags(sdbQueryMgrId_, sdbDesignatorId_, true,
+				        SDB_KEY_SEARCH_DIRECTION_GT, false, true);
 			break;
 
 		case HA_READ_KEY_OR_NEXT:
@@ -3030,8 +3039,14 @@ int ha_scaledb::prepareIndexKeyQuery(const uchar* key, uint key_len,
 			break;
 
 		case HA_READ_BEFORE_KEY:
-			SDBQueryCursorSetFlags(sdbQueryMgrId_, sdbDesignatorId_, true,
-			        SDB_KEY_SEARCH_DIRECTION_LT, false, true);
+			if (stringField)
+				// bug 1049: set distinct flag to false for string key field
+				SDBQueryCursorSetFlags(sdbQueryMgrId_, sdbDesignatorId_, false,
+				        SDB_KEY_SEARCH_DIRECTION_LT, false, true);
+			else
+				// set distinct flag to true for integer key field
+				SDBQueryCursorSetFlags(sdbQueryMgrId_, sdbDesignatorId_, true,
+				        SDB_KEY_SEARCH_DIRECTION_LT, false, true);
 			break;
 
 		case HA_READ_PREFIX_LAST:
@@ -3049,7 +3064,7 @@ int ha_scaledb::prepareIndexKeyQuery(const uchar* key, uint key_len,
 		if (retValue != SUCCESS)
 			SDBTerminate(0, "ScaleDB internal error: wrong designator name!");
 
-		//        }  // if ( !virtualTableFlag_ )
+		//}  // if ( !virtualTableFlag_ )
 
 		keyOffset = keyOffset + pKeyPart->store_length;
 		if (bRangeQuery_)
