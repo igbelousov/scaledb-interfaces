@@ -4680,9 +4680,7 @@ int ha_scaledb::add_indexes_to_table(THD* thd, TABLE *table_arg, char* tblName,
 			break;
 
 		case HA_KEY_ALG_BTREE:
-			sdbIndexType = sdbTableLevelIndexType;	// remove this line later
-			// TODO: enable the following line after Btree is fully developed.
-			//sdbIndexType = INDEX_TYPE_BTREE;
+			sdbIndexType = INDEX_TYPE_BTREE;
 			break;
 
 		case HA_KEY_ALG_RTREE:
@@ -5740,7 +5738,7 @@ ha_rows ha_scaledb::records_in_range(uint inx, key_range* min_key, key_range* ma
 	}
 #endif
 
-	ha_rows rangeRows = 1;
+	ha_rows rangeRows = 0;
 
 	// give low estimate for virtual view since we have to use its primary key
 	if (virtualTableFlag_)
@@ -5756,7 +5754,7 @@ ha_rows ha_scaledb::records_in_range(uint inx, key_range* min_key, key_range* ma
 		bRangeQuery_ = true; // set the flag when the range conditions are fully specified.
 
 	// TODO: The following code is disabled until we have a new design in estimating record statistics using histogram
-#ifdef ENABLE_RANGE_COUNT
+//#ifdef ENABLE_RANGE_COUNT
 	Field* pAutoIncrField = table->found_next_number_field; // points to auto_increment field
 	KEY* pKey = table->key_info + inx;
 	unsigned int numOfKeyFields = pKey->key_parts;
@@ -5851,85 +5849,26 @@ ha_rows ha_scaledb::records_in_range(uint inx, key_range* min_key, key_range* ma
 		else if ( (min_key) && (max_key == NULL) )
 			diffValue = stats.records - minValue;
 		else
-			diffValue = maxValue - minValue;
+			diffValue = maxValue - minValue + 1;
 
 		if (diffValue > (int64) stats.records)
 			diffValue = stats.records;
 
 		// adjust number of records by a factor if the index is an auto_increment column
-		unsigned int sdbAutoIncScanFactor = SDB_AUTOINC_SCAN_FACTOR;
-		if ( stats.mean_rec_length > 0 ) {
-			sdbAutoIncScanFactor = METAINFO_BLOCK_SIZE / stats.mean_rec_length;
+		//unsigned int sdbAutoIncScanFactor = SDB_AUTOINC_SCAN_FACTOR;
+		//if ( stats.mean_rec_length > 0 ) {
+		//	sdbAutoIncScanFactor = METAINFO_BLOCK_SIZE / stats.mean_rec_length;
 
-			if (sdbAutoIncScanFactor == 0)
-				++sdbAutoIncScanFactor;
-		}
+		//	if (sdbAutoIncScanFactor == 0)
+		//		++sdbAutoIncScanFactor;
+		//}
 
-		rangeRows = (uint64) (diffValue / sdbAutoIncScanFactor);
-		if (diffValue % sdbAutoIncScanFactor > 0)
-			++rangeRows;
+		rangeRows = (uint64) diffValue;
+		//if (diffValue % sdbAutoIncScanFactor > 0)
+		//	++rangeRows;
 	}
-	else { // for non-auto-increment index column
+	//else { // TODO: for non-auto-increment index column
 
-		sdbQueryMgrId_ = 0;
-		prepareIndexQueryManager(inx, NULL, 0); // also resets query
-
-		int retValue = SUCCESS;
-		bool bVarStringField = false;
-
-		switch ( pField->type() ) {
-
-		case MYSQL_TYPE_VARCHAR:
-		case MYSQL_TYPE_VAR_STRING:
-			realVarLength = (unsigned int) *( (unsigned short*)(keyOffset+offsetLength));
-			mysqlVarLengthBytes = 2;
-			bVarStringField = true;
-			break;
-
-		case MYSQL_TYPE_TINY_BLOB:
-		case MYSQL_TYPE_BLOB:
-		case MYSQL_TYPE_MEDIUM_BLOB:
-		case MYSQL_TYPE_LONG_BLOB:
-			realVarLength = (unsigned int) *( (unsigned short*)(keyOffset+offsetLength));
-			mysqlVarLengthBytes = pKeyPart->store_length - pKeyPart->length;
-			bVarStringField = true;
-			break;
-
-		default:
-			break;
-		} // switch
-
-		if ( pMaxFieldValue )
-			pMaxFieldValue = pMaxFieldValue + mysqlVarLengthBytes;
-		if ( bVarStringField )
-			retValue = pQm_->defineQuery(sdbDbId_, sdbDesignatorId_,
-				(char*) pField->field_name, pMaxFieldValue, false, realVarLength, false);
-		else
-			retValue = pQm_->defineQuery(sdbDbId_, sdbDesignatorId_,
-				(char*) pField->field_name, pMaxFieldValue);
-		if (retValue == SUCCESS)
-			retValue = pQm_->prepareEstimateCount(0, false);
-		if (retValue != SUCCESS)
-			DBUG_RETURN( rangeRows );
-
-		if ( pMinFieldValue )
-			pMinFieldValue = pMinFieldValue + mysqlVarLengthBytes;
-		if ( bVarStringField )
-			retValue = pQm_->defineQuery(sdbDbId_, sdbDesignatorId_,
-				(char*) pField->field_name, pMinFieldValue, false, realVarLength, false);
-		else
-			retValue = pQm_->defineQuery(sdbDbId_, sdbDesignatorId_,
-				(char*) pField->field_name, pMinFieldValue);
-		if (retValue == SUCCESS)
-			retValue = pQm_->prepareEstimateCount(0, true);
-		if (retValue != SUCCESS)
-			DBUG_RETURN( rangeRows );
-
-		rangeRows = pQm_->getEstimatedRowsCount();
-
-		sdbQueryMgrId_ = 0;
-		pQm_ = NULL;
-	} // end of non-auto-increment index column
 
 	// the estimated number of rows has to be >= 1.  Otherwise, MySQL thinks it is an empty set.
 	if (rangeRows < 1)
@@ -5946,7 +5885,7 @@ ha_rows ha_scaledb::records_in_range(uint inx, key_range* min_key, key_range* ma
 	}
 #endif
 
-#endif
+//#endif
 	DBUG_RETURN(rangeRows);
 }
 

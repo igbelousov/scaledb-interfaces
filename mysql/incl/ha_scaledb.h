@@ -40,6 +40,7 @@
 #define DEFAULT_CHAIN_LENGTH 512
 #define ERRORNUM_INTERFACE_MYSQL 10000
 #define MYSQL_INDEX_NUMBER_SIZE 4
+#define SDB_AUTOINC_SCAN_FACTOR 30
 #define EXTRA_SAVEPOINT_OFFSET 32	// need to use this offset to reach the actual user specified savepoint
 #define SCALEDB_HINT_PREFIX		" /*SCALEDBHINT:"	// all hints sent to non-primary nodes must have same prefix
 #define SCALEDB_HINT_PASS_DDL	" /*SCALEDBHINT: PASS DDL*/"
@@ -105,9 +106,9 @@ public:
 
 				// no need to set HA_PRIMARY_KEY_IN_READ_INDEX.  We do not maintain data file
 				// in primary key sequence order.  We just append records to the end during inserts.
-				//HA_PRIMARY_KEY_IN_READ_INDEX |			// Bug 532
+	//			HA_PRIMARY_KEY_IN_READ_INDEX |			// Bug 532
 				// TODO: Without primary key, we can still call position().
-				//HA_PRIMARY_KEY_REQUIRED_FOR_POSITION |
+	//			HA_PRIMARY_KEY_REQUIRED_FOR_POSITION |
 
 				HA_BINLOG_ROW_CAPABLE |
 				HA_BINLOG_STMT_CAPABLE |
