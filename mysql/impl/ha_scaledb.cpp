@@ -5435,7 +5435,8 @@ unsigned short ha_scaledb::get_last_index_error_key() {
 		unsigned short tableId = SDBGetTableNumberByName(sdbUserId_, sdbDbId_,
 		        table->s->table_name.str);
 		char* dupeValue = SDBGetFileDataField(sdbUserId_, tableId, last_errkey + 1);
-		memcpy(table->field[last_errkey]->ptr, dupeValue, length);
+		if (dupeValue)		// set key value if it is defined.
+			memcpy(table->field[last_errkey]->ptr, dupeValue, length);
 	}
 	return last_errkey;
 }
