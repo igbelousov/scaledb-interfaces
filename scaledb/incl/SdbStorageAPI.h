@@ -352,7 +352,7 @@ unsigned int SDBUpdateRowAPI(unsigned short userId, unsigned short dbmsId, unsig
 							 unsigned long long queryId=0);
 
 unsigned int SDBDeleteRowAPI(unsigned short userId, unsigned short dbmsId, unsigned short tableId, unsigned int rowId , 
-							 unsigned short source, unsigned long long queryId=0);
+							 unsigned long long queryId=0);
 
 
 unsigned short SDBPrepareStrField(unsigned short userId, unsigned short dbmsId, unsigned short tableId, 
@@ -393,9 +393,7 @@ unsigned short SDBPrepareSequentialScan(unsigned int userId, unsigned short quer
 unsigned short SDBGetSeqRowByPosition(unsigned int userId, unsigned short queryMgrId, unsigned int rowId);
 
 unsigned short SDBPrepareQuery(unsigned int userId, unsigned short queryMgrId, unsigned short partitionId, 
-							   unsigned long long queryId, bool releaseLocksAfterRead) ;
-
-unsigned short SDBNext(unsigned int userId, unsigned short queryMgrId);
+							   unsigned long long queryId, bool releaseLocksAfterRead, unsigned short sdbCommandType) ;
 
 void SDBResetQuery(unsigned short queryMgrId);
 
@@ -417,8 +415,8 @@ unsigned short SDBDefineQueryPrefix(unsigned short queryMgrId, unsigned short db
 									char* key, bool useStarForPrefixEnd, int keyPrefixSize, bool usePoundSign);
 unsigned short SDBDefineRangeQuery(unsigned short queryMgrId, unsigned short dbId, unsigned short indexId, char *fieldName, 
 								bool includeStartValue, char* startKey, bool includeEndValue, char* endKey);
-unsigned short SDBQueryCursorNextSequential(unsigned int userId, unsigned short queryMgrId);
-unsigned short SDBQueryCursorNext(unsigned int userId, unsigned short queryMgrId);
+unsigned short SDBQueryCursorNextSequential(unsigned int userId, unsigned short queryMgrId, unsigned short sdbCommandType);
+unsigned short SDBQueryCursorNext(unsigned int userId, unsigned short queryMgrId, unsigned short sdbCommandType);
 bool SDBQueryCursorFieldIsNull(unsigned short queryMgrId, unsigned short fieldId);
 bool SDBQueryCursorFieldIsNullByIndex(unsigned short queryMgrId, unsigned short indexId, unsigned short fieldId);
 void SDBQueryCursorFreeBuffers(unsigned short queryMgrId);

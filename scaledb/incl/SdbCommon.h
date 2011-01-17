@@ -112,10 +112,14 @@ typedef enum SdbKeySearchDirection {
 // Tables with id 1 to 7 are all our meta tables (or data dictionary tables.
 #define SDB_FIRST_USER_TABLE_ID 16
 
-// Command type
-#define SDB_COMMAND_INSERT		1
-#define SDB_COMMAND_LOAD		2
-#define SDB_COMMAND_ALTER_TABLE 3
+// ScaleDB Command type used in ScaleDB engine
+#define SDB_COMMAND_SELECT		1
+#define SDB_COMMAND_INSERT		2
+#define SDB_COMMAND_DELETE		3
+#define SDB_COMMAND_UPDATE		4
+#define SDB_COMMAND_LOAD		5
+#define SDB_COMMAND_CREATE_TABLE 6
+#define SDB_COMMAND_ALTER_TABLE  7
 
 // Transaction Isolation Level
 #define SDB_ISOLATION_READ_UNCOMMITTED		0

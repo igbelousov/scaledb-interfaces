@@ -957,9 +957,12 @@ unsigned short ha_scaledb::initializeDbTableId(char* pDbName, char* pTblName, bo
 				if (sdbTableNumber_ == 0) {
 					if (allowTableClosed)
 						return TABLE_NAME_UNDEFINED;
-					else
+					else {
 						// Try one more time by opening the table
 						sdbTableNumber_ = SDBOpenTable(sdbUserId_, sdbDbId_, pTblName); // bug137
+						if (this->sdbTableNumber_ == 0) 
+							retValue = TABLE_NAME_UNDEFINED;
+					}
 				}
 			}
 
@@ -1016,7 +1019,7 @@ void rollback_last_stmt_trx(THD *thd, handlerton *hton) {
 // and that we must store a savepoint to our transaction handler, so that we are able to roll back
 // the SQL statement in case of an error. */
 int ha_scaledb::external_lock(THD* thd, /* handle to the user thread */
-int lock_type) /* lock type */
+							  int lock_type) /* lock type */
 {
 	DBUG_ENTER("ha_scaledb::external_lock");
 	DBUG_PRINT("enter", ("lock_type: %d", lock_type));
@@ -1058,11 +1061,24 @@ int lock_type) /* lock type */
 
 	this->sqlCommand_ = thd_sql_command(thd);
 	switch (sqlCommand_) {
+	case SQLCOM_SELECT:
+		sdbCommandType_ = SDB_COMMAND_SELECT;
+		break;
 	case SQLCOM_INSERT:
+	case SQLCOM_INSERT_SELECT:
 		sdbCommandType_ = SDB_COMMAND_INSERT;
+		break;
+	case SQLCOM_DELETE:
+		sdbCommandType_ = SDB_COMMAND_DELETE;
+		break;
+	case SQLCOM_UPDATE:
+		sdbCommandType_ = SDB_COMMAND_UPDATE;
 		break;
 	case SQLCOM_LOAD:
 		sdbCommandType_ = SDB_COMMAND_LOAD;
+		break;
+	case SQLCOM_CREATE_TABLE:
+		sdbCommandType_ = SDB_COMMAND_CREATE_TABLE;
 		break;
 	case SQLCOM_ALTER_TABLE:
 	case SQLCOM_CREATE_INDEX:
@@ -1208,7 +1224,7 @@ int lock_type) /* lock type */
 		 trans_register_ha(thd, false, ht);
 		 }
 		 */
-	} else { // need to release locks
+	} else { // (lock_type == F_UNLCK), need to release locks
 		beginningOfScan_ = false;
 		if (pSdbMysqlTxn_->lockCount_ > 0) {
 
@@ -1245,6 +1261,7 @@ int lock_type) /* lock type */
 			pSdbMysqlTxn_->removeAlterTableName();
 		}
 
+		sdbCommandType_ = 0;	// Reset command type
 	} // else {	// need to release locks
 
 	DBUG_RETURN(0);
@@ -1263,11 +1280,24 @@ int ha_scaledb::start_stmt(THD* thd, thr_lock_type lock_type) {
 
 	this->sqlCommand_ = thd_sql_command(thd);
 	switch (sqlCommand_) {
+	case SQLCOM_SELECT:
+		sdbCommandType_ = SDB_COMMAND_SELECT;
+		break;
 	case SQLCOM_INSERT:
+	case SQLCOM_INSERT_SELECT:
 		sdbCommandType_ = SDB_COMMAND_INSERT;
+		break;
+	case SQLCOM_DELETE:
+		sdbCommandType_ = SDB_COMMAND_DELETE;
+		break;
+	case SQLCOM_UPDATE:
+		sdbCommandType_ = SDB_COMMAND_UPDATE;
 		break;
 	case SQLCOM_LOAD:
 		sdbCommandType_ = SDB_COMMAND_LOAD;
+		break;
+	case SQLCOM_CREATE_TABLE:
+		sdbCommandType_ = SDB_COMMAND_CREATE_TABLE;
 		break;
 	case SQLCOM_ALTER_TABLE:
 	case SQLCOM_CREATE_INDEX:
@@ -1601,7 +1631,7 @@ int ha_scaledb::close(void) {
 		userId = SDBGetNewUserId(); // avoid using system user ID
 		bGetNewUserId = true;
 		needToRemoveFromScaledbCache = true;
-		needToCommit = true;
+		needToCommit = false;	// should not commit if a user has pending updates.
 	}
 
 	// MySQL may call this method multiple times on same table if a table is referenced more than
@@ -1892,13 +1922,17 @@ int ha_scaledb::write_row(unsigned char* buf) {
 		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::write_row(...) on table ");
 		SDBDebugPrintString(table->s->table_name.str);
 		SDBDebugPrintString(" ");
-		//SDBDebugPrintString("id= ");
-		//int bug481Id = *( (int*)table->field[0]->ptr );  // get first column value which is an integer
-		//SDBDebugPrintInt(bug481Id);
 		if (mysqlInterfaceDebugLevel_ > 1)
 			outputHandleAndThd();
 		SDBDebugEnd(); // synchronize threads printout
 	}
+
+	// print out the integer key value
+	//SDBDebugStart(); // synchronize threads printout
+	//SDBDebugPrintString("\nid = ");
+	//int intValue = *( (int*)table->field[0]->ptr );  // get first column value which is an integer
+	//SDBDebugPrintInt(intValue);
+	//SDBDebugEnd(); // synchronize threads printout
 #endif
 
 	int errorNum = 0;
@@ -2180,8 +2214,7 @@ int ha_scaledb::delete_row(const unsigned char* buf) {
 	        funcRetValue);
 
 	if (retValue == 0) {
-		retValue = SDBDeleteRowAPI(sdbUserId_, sdbDbId_, sdbTableNumber_, sdbRowIdInScan_, 0,
-		        ((THD*) ha_thd())->query_id);
+		retValue = SDBDeleteRowAPI(sdbUserId_, sdbDbId_, sdbTableNumber_, sdbRowIdInScan_, ((THD*) ha_thd())->query_id);
 	}
 
 	if (retValue != SUCCESS && retValue != ATTEMPT_TO_DELETE_KEY_WITH_SUBORDINATES) {
@@ -2339,9 +2372,9 @@ int ha_scaledb::fetchSingleRow(unsigned char* buf) {
 	retryFetch: int retValue = 0;
 
 	if (active_index == MAX_KEY)
-		retValue = SDBQueryCursorNextSequential(sdbUserId_, sdbQueryMgrId_);
+		retValue = SDBQueryCursorNextSequential(sdbUserId_, sdbQueryMgrId_, sdbCommandType_);
 	else
-		retValue = SDBQueryCursorNext(sdbUserId_, sdbQueryMgrId_);
+		retValue = SDBQueryCursorNext(sdbUserId_, sdbQueryMgrId_, sdbCommandType_);
 
 	if (retValue != SUCCESS) {
 		// no row
@@ -2680,7 +2713,7 @@ int ha_scaledb::fetchVirtualRow(unsigned char* buf) {
 	print_header_thread_info("MySQL Interface: executing ha_scaledb::fetchVirtualRow(...) ");
 
 	int errorNum = 0;
-	errorNum = SDBQueryCursorNext(sdbUserId_, sdbQueryMgrId_); // always use the Multi-Table Index to fetch record
+	errorNum = SDBQueryCursorNext(sdbUserId_, sdbQueryMgrId_, sdbCommandType_); // always use the Multi-Table Index to fetch record
 
 	if (errorNum != SUCCESS) {
 		// no row
@@ -2902,13 +2935,12 @@ int ha_scaledb::prepareIndexKeyQuery(const uchar* key, uint key_len,
 			SDBQueryCursorGetFirst(sdbQueryMgrId_, sdbDbId_, sdbDesignatorId_);
 			SDBQueryCursorDefineQueryAllValues(sdbQueryMgrId_, sdbDbId_, sdbDesignatorId_, false);
 			return SDBPrepareQuery(sdbUserId_, sdbQueryMgrId_, 0, ((THD*) ha_thd())->query_id,
-			        releaseLocksAfterRead_);
+			        releaseLocksAfterRead_, sdbCommandType_);
 		}
 		if (find_flag == HA_READ_BEFORE_KEY) {
 			SDBQueryCursorGetLast(sdbQueryMgrId_, sdbDbId_, sdbDesignatorId_);
 			SDBQueryCursorDefineQueryAllValues(sdbQueryMgrId_, sdbDbId_, sdbDesignatorId_, false);
-			return SDBPrepareQuery(sdbUserId_, sdbQueryMgrId_, 0, ((THD*) ha_thd())->query_id,
-			        releaseLocksAfterRead_);
+			return SDBPrepareQuery(sdbUserId_, sdbQueryMgrId_, 0, ((THD*) ha_thd())->query_id, releaseLocksAfterRead_, sdbCommandType_);
 		}
 	}
 
@@ -3079,8 +3111,7 @@ int ha_scaledb::prepareIndexKeyQuery(const uchar* key, uint key_len,
 	//	retValue = pSdbEngine->query( sdbQueryMgrId_ )->defineQuery(sdbDbId_, sdbDesignatorId_, pkeyValuePtr, false);
 
 	// we execute the query
-	retValue = SDBPrepareQuery(sdbUserId_, sdbQueryMgrId_, 0, ((THD*) ha_thd())->query_id,
-	        releaseLocksAfterRead_);
+	retValue = SDBPrepareQuery(sdbUserId_, sdbQueryMgrId_, 0, ((THD*) ha_thd())->query_id, releaseLocksAfterRead_, sdbCommandType_);
 
 	return retValue;
 }
@@ -4142,7 +4173,7 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 #endif
 
 	// Bug 1079: CREATE TABLE statement will commit at the end of this method.
-	SDBCloseTable(sdbUserId_, sdbDbId_, pTableName, true, false);
+	retCode = SDBCloseTable(sdbUserId_, sdbDbId_, pTableName, true, false);
 
 	// pass the DDL statement to engine so that it can be propagated to other nodes.
 	// We need to make sure it is a regular CREATE TABLE command because this method is called

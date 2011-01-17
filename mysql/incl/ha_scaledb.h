@@ -289,9 +289,9 @@ private:
 	unsigned int extraChecks_; // Extra information from handler
 	unsigned int readDebugCounter_; // counter for debugging
 	unsigned int deleteRowCount_;
-	int sqlCommand_; // SQL command defined in ::external_lock.  Use this variable to avoid repetitively calling
+	int sqlCommand_; // MySQL command defined in ::external_lock.  Use this variable to avoid repetitively calling
 	// thd_sql_command() function.  Example: DATA LOAD command
-	unsigned short sdbCommandType_; // specifies command to be passed to ScaleDB engine
+	unsigned short sdbCommandType_; // ScaleDB command type which specifies command to be passed to ScaleDB engine
 	unsigned short numberOfFrontFixedColumns_; // the number of fixed length columns at the front of a record
 	unsigned short frontFixedColumnsLength_; // the length of all fixed length columns at the front of a record
 	// this value is 0 if the first column is has variable length
