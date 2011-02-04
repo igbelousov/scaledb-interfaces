@@ -4192,6 +4192,10 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 			}
 
 			if (retCode == SUCCESS) {
+				
+				// commit the changes such that a differnt node would be able to read the updates.
+				SDBCommit(sdbUserId_);
+
 				// Now we pass the CREATE TABLE statement to other nodes
 				// need to send statement "SET SESSION STORAGE_ENGINE=SCALEDB" before CREATE TABLE
 				retCode = sendStmtToOtherNodes(sdbUserId_, sdbDbId_, thd->query(), false, true);
