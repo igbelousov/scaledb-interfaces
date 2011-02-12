@@ -2114,8 +2114,8 @@ int ha_scaledb::update_row(const unsigned char* old_row, unsigned char* new_row)
 	bool funcRetValue = false;
 
 	// place old row into ScaleDB buffer 1 for comparison
-	retValue = placeMysqlRowInEngineBuffer((unsigned char*) old_row, new_row, 2, false,
-	        funcRetValue);
+	retValue = placeMysqlRowInEngineBuffer((unsigned char*) old_row, new_row, 2, false, funcRetValue);
+
 	if (retValue == 0) // place new row into ScaleDB buffer 2 for comparison
 		retValue = placeMysqlRowInEngineBuffer(new_row, new_row, 1, false, funcRetValue);
 
