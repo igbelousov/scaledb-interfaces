@@ -321,8 +321,10 @@ unsigned short SDBRollBack(unsigned int userId, char *savePointName = NULL);
 
 unsigned short SDBSetSavePoint(unsigned short userId, char *savePointName);
 bool SDBRemoveSavePoint(unsigned int userId, char *savePoinName);
-unsigned short SDBRollBackToSavePointId(unsigned int userId, unsigned long long savePointId);
+unsigned long long SDBRollBackToSavePointId(unsigned int userId, unsigned long long savePointId);
 unsigned long long SDBGetSavePointId(unsigned int userId);
+void SDBSetStmtId(unsigned int userId);
+unsigned long long  SDBGetStmtId(unsigned int userId);
 
 void SDBSetIsolationLevel(unsigned int userId, unsigned short isolationLevel);
 
@@ -346,7 +348,7 @@ unsigned int SDBUpdateRow(unsigned short userId, unsigned short dbId, unsigned s
 						  unsigned long long queryId=0);
 
 unsigned int SDBInsertRowAPI(unsigned short userId, unsigned short dbmsId, unsigned short tableId, unsigned int rowId , 
-							 unsigned short source, unsigned long long queryId=0, unsigned short sdbCommandType=0);
+							 unsigned long long queryId=0, unsigned short sdbCommandType=0);
 
 unsigned int SDBUpdateRowAPI(unsigned short userId, unsigned short dbmsId, unsigned short tableId, unsigned int rowId , 
 							 unsigned long long queryId=0);

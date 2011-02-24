@@ -149,6 +149,10 @@ static int convertToMysqlErrorCode(int scaledbErrorCode) {
 		mysqlErrorCode = HA_ERR_WRONG_COMMAND;
 		break;
 
+	case SDB_ROLLBACK_COMPONENT_FAILURE:	// Rollback transaction becouse of a component failure
+		mysqlErrorCode = HA_ERR_CORRUPT_EVENT;
+		break;
+
 	default:
 		mysqlErrorCode = HA_ERR_GENERIC;
 		break;
@@ -651,6 +655,9 @@ bool all) /* true if it is a real commit, false if it is an end of statement */
 	}
 #endif
 
+	unsigned short retCode = 0;
+	unsigned short mySqlRetCode = 0;
+
 	unsigned int sqlCommand = thd_sql_command(thd);
 	if (sqlCommand == SQLCOM_LOCK_TABLES)
 		DBUG_RETURN(0); // do nothing if it is a LOCK TABLES statement.
@@ -679,7 +686,10 @@ bool all) /* true if it is a real commit, false if it is an end of statement */
 			// For all other cases, we should perform the normal commit.
 			// This includes UNLOCK TABLE statement to release locks.
 			// This also includes the case that, when auto_commit==0, an additional commit method is called before ALTER TABLE is executed.
-			SDBCommit(userId);
+			retCode = SDBCommit(userId);
+			if (retCode){
+				mySqlRetCode = HA_ERR_GENERIC;
+			}
 			// After calling commit(), lockCount_ should be 0 except ALTER TABLE, CREATE/DROP INDEX.
 			userTxn->lockCount_ = 0;
 			if (userTxn->getDdlFlag() & SDBFLAG_ALTER_TABLE_KEYS)
@@ -694,8 +704,8 @@ bool all) /* true if it is a real commit, false if it is an end of statement */
 		SDBDebugFlush();
 	}
 #endif
-
-	DBUG_RETURN(0);
+	
+	DBUG_RETURN(mySqlRetCode);
 }
 
 /*
@@ -997,15 +1007,22 @@ void start_new_stmt_trx(THD *thd, handlerton *hton) {
 	MysqlTxn* userTxn = (MysqlTxn *) *thd_ha_data(thd, hton);
 
 	if (userTxn) {
-		userTxn->setLastStmtSavePointId(SDBGetSavePointId(userTxn->getScaleDbUserId()));
+		SDBSetStmtId( userTxn->getScaleDbUserId() );		// set the current log id as an id for this statement
+//		userTxn->setLastStmtSavePointId(SDBGetSavePointId(userTxn->getScaleDbUserId()));
 	}
 }
 
 void rollback_last_stmt_trx(THD *thd, handlerton *hton) {
 	MysqlTxn* userTxn = (MysqlTxn *) *thd_ha_data(thd, hton);
+	uint64 lastStmtId;
+	unsigned int userId;
 
 	if (userTxn) {
-		SDBRollBackToSavePointId(userTxn->getScaleDbUserId(), userTxn->getLastStmtSavePointId());
+		userId = userTxn->getScaleDbUserId();
+		lastStmtId = SDBGetStmtId( userId );
+		SDBRollBackToSavePointId( userId, lastStmtId);
+
+//		userTxn->setLastStmtSavePointId(previousSavePointId); // after the rollback the previous savepoint is the next one to use
 	}
 }
 
@@ -1957,7 +1974,7 @@ int ha_scaledb::write_row(unsigned char* buf) {
 	        (unsigned char *) buf, 0, true, needToUpdateAutoIncrement);
 
 	if (retValue == 0) {
-		retValue = SDBInsertRowAPI(sdbUserId_, sdbDbId_, sdbTableNumber_, 0, 0,
+		retValue = SDBInsertRowAPI(sdbUserId_, sdbDbId_, sdbTableNumber_, 0, 
 		        ((THD*) ha_thd())->query_id, sdbCommandType_);
 	}
 
@@ -5543,30 +5560,39 @@ bool ha_scaledb::get_error_message(int error, String *buf) {
 		foreignTableName = "";
 	}
 
-	for (unsigned int i = 0; i < key->key_parts; ++i) {
-		KEY_PART_INFO* kp = &key->key_part[i];
-		strcat(keys, "`");
-		strcat(keys, kp->field->field_name);
-		strcat(keys, "`");
+	
+	// The below is commented out as we get this error when we try to drop a parent table (that has a child table).
+	//  In that case the info on the keys is not available. 
 
-		if (i + 1 < key->key_parts) {
-			strcat(keys, ", ");
-		}
-	}
+	//for (unsigned int i = 0; i < key->key_parts; ++i) {
+	//	KEY_PART_INFO* kp = &key->key_part[i];
+	//	strcat(keys, "`");
+	//	strcat(keys, kp->field->field_name);
+	//	strcat(keys, "`");
 
-	unsigned short parentKeyFields = SDBGetNumberOfKeyFields(sdbDbId_, parentDesignator);
-	for (unsigned int i = 0; i < parentKeyFields; ++i) {
-		strcat(parentKeys, "`");
-		strcat(parentKeys, SDBGetKeyFieldNameInIndex(sdbDbId_, parentDesignator, i + 1));
-		strcat(parentKeys, "`");
+	//	if (i + 1 < key->key_parts) {
+	//		strcat(keys, ", ");
+	//	}
+	//}
 
-		if (i + 1 < key->key_parts) {
-			strcat(parentKeys, ", ");
-		}
-	}
+	//unsigned short parentKeyFields = SDBGetNumberOfKeyFields(sdbDbId_, parentDesignator);
+	//for (unsigned int i = 0; i < parentKeyFields; ++i) {
+	//	strcat(parentKeys, "`");
+	//	strcat(parentKeys, SDBGetKeyFieldNameInIndex(sdbDbId_, parentDesignator, i + 1));
+	//	strcat(parentKeys, "`");
 
-	sprintf(detailed_error, "`%s`.`%s`, CONSTRAINT `%s` FOREIGN KEY (%s) REFERENCES `%s` (%s)",
-	        table->s->db.str, table->s->table_name.str, keyname, keys, foreignTableName, parentKeys);
+	//	if (i + 1 < key->key_parts) {
+	//		strcat(parentKeys, ", ");
+	//	}
+	//}
+
+	//sprintf(detailed_error, "`%s`.`%s`, CONSTRAINT `%s` FOREIGN KEY (%s) REFERENCES `%s` (%s)",
+	//        table->s->db.str, table->s->table_name.str, keyname, keys, foreignTableName, parentKeys);
+
+
+	sprintf(detailed_error, "DBMS: `%s` - FOREIGN KEY CONSTRAINT WITH TABLES: `%s`.`%s` ",
+	      table->s->db.str, table->s->table_name.str, foreignTableName );
+
 
 	buf->copy(detailed_error, (unsigned int) strlen(detailed_error), &my_charset_latin1);
 	return false;
@@ -5767,9 +5793,9 @@ ha_rows ha_scaledb::records_in_range(uint inx, key_range* min_key, key_range* ma
 #ifdef SDB_DEBUG_LIGHT
 	if (mysqlInterfaceDebugLevel_) {
 		SDBDebugStart(); // synchronize threads printout
-		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::records_in_range(...) ");
 		if (mysqlInterfaceDebugLevel_ > 1)
 			outputHandleAndThd();
+		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::records_in_range: ");
 		SDBDebugEnd(); // synchronize threads printout
 	}
 #endif
@@ -5777,12 +5803,27 @@ ha_rows ha_scaledb::records_in_range(uint inx, key_range* min_key, key_range* ma
 	ha_rows rangeRows = 0;
 
 	// give low estimate for virtual view since we have to use its primary key
-	if (virtualTableFlag_)
+	if (virtualTableFlag_){
+#ifdef SDB_DEBUG_LIGHT
+		if (mysqlInterfaceDebugLevel_) {
+			SDBDebugStart(); // synchronize threads printout
+			SDBDebugPrintInt((int)rangeRows);
+			SDBDebugEnd();
+		}
+#endif
 		DBUG_RETURN(rangeRows);
+	}
 
 	if (!min_key && !max_key) {
 		// return all rows count.   info method sets value stats.records.
 		// And info method is usually called before records_in_range. 
+#ifdef SDB_DEBUG_LIGHT
+		if (mysqlInterfaceDebugLevel_) {
+			SDBDebugStart(); // synchronize threads printout
+			SDBDebugPrintInt((int)rangeRows);
+			SDBDebugEnd();
+		}
+#endif
 		DBUG_RETURN(stats.records);
 	}
 
@@ -5911,17 +5952,18 @@ ha_rows ha_scaledb::records_in_range(uint inx, key_range* min_key, key_range* ma
 		rangeRows = 1;
 
 #ifdef SDB_DEBUG_LIGHT
-	if (mysqlInterfaceDebugLevel_ > 3) {
+	if (mysqlInterfaceDebugLevel_) {
 		SDBDebugStart(); // synchronize threads printout
-		SDBDebugPrintHeader("total range count estimate from table: ");
+		SDBDebugPrintHeader(" - total range count estimate from table: ");
 		SDBDebugPrintString(table->s->table_name.str);
 		SDBDebugPrintString(": ");
-		SDBDebugPrint8ByteUnsignedLong((uint64)rangeRows);
+		SDBDebugPrintInt((int)rangeRows);
 		SDBDebugEnd(); // synchronize threads printout
 	}
 #endif
 
 //#endif
+
 	DBUG_RETURN(rangeRows);
 }
 

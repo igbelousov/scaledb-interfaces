@@ -100,12 +100,12 @@ public:
 	char* getDesignatorNameByQueryMrgId(unsigned short aQueryMgrId);
 	unsigned short getDesignatorIdByQueryMrgId(unsigned short aQueryMgrId);
 
-	void setLastStmtSavePointId(uint64 id) {
-		lastStmtSavePointId_ = id;
-	}
-	uint64 getLastStmtSavePointId() {
-		return lastStmtSavePointId_;
-	}
+	//void setLastStmtSavePointId(uint64 id) {
+	//	lastStmtSavePointId_ = id;
+	//}
+	//uint64 getLastStmtSavePointId() {
+	//	return lastStmtSavePointId_;
+	//}
 
 	// add a table name specified in LOCK TABLES statement
 	void addLockTableName(char* pLockTableName);

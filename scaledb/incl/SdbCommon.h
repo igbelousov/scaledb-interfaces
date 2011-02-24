@@ -229,5 +229,7 @@ typedef enum SdbKeySearchDirection {
 #define METAINFO_MISSING_FOREIGN_KEY_CONSTRAINT 1034
 #define METAINFO_DELETE_ROW_BY_ROW 1035
 
+#define SDB_ROLLBACK_COMPONENT_FAILURE	2000	// Storage engine rollbacked because of a component failure (such as SLM)
+
 #endif //_SDB_COMMON_H
 
