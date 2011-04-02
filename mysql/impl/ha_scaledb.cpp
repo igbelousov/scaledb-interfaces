@@ -4533,6 +4533,7 @@ int ha_scaledb::create_fks(THD* thd, TABLE *table_arg, char* tblName, SdbDynamic
 
 	unsigned int errorNum = 0;
 	int retValue = 0;
+	int foreignKeyNum;
 	int numOfKeys = (int) table_arg->s->keys;
 
 	if (thd->query_length() > 0) {
@@ -4557,7 +4558,18 @@ int ha_scaledb::create_fks(THD* thd, TABLE *table_arg, char* tblName, SdbDynamic
 			return convertToMysqlErrorCode(retValue); // we should exit early for this case.
 		}
 
-		int foreignKeyNum = 0;
+		if (bIsAlterTableStmt){
+
+			if (pSdbMysqlTxn_->getAlterTableName()){
+
+				SDBCopyForeignKey(sdbUserId_, sdbDbId_, sdbTableNumber_, pSdbMysqlTxn_->getAlterTableName());
+			}
+
+			foreignKeyNum = SDBGetNumberOfForeignTables(sdbUserId_, sdbDbId_,pSdbMysqlTxn_->getAlterTableName());
+		}else{
+			foreignKeyNum = 0;
+		}
+
 		while (pCurrForeignKeyClause != NULL) { // foreign key clause exists
 
 			pConstraintName = NULL;
@@ -4628,7 +4640,7 @@ int ha_scaledb::create_fks(THD* thd, TABLE *table_arg, char* tblName, SdbDynamic
 				// For ALTER TABLE statement, Need to return an error code if the constraint already exists.
 				if (bIsAlterTableStmt && pSdbMysqlTxn_->getAlterTableName()) {
 					if (SDBCheckConstraintIfExits(sdbUserId_, sdbDbId_,
-					        pSdbMysqlTxn_->getAlterTableName(), pKeyI->getForeignKeyName())) {
+					        tblName, pKeyI->getForeignKeyName())) {
 						retValue = METAINFO_DUPLICATE_FOREIGN_KEY_CONSTRAINT;
 						break;
 					}
