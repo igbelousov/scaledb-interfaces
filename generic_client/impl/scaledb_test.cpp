@@ -56,8 +56,10 @@ int main(int argc, char** argv){
 	printf("\nSDB new user. User id is %u", userId);
 	fflush(stdout);
 
+	SDBOpenMasterDbAndRecoverLog(userId);
+
 	// initialize a database (dbms name == test)
-	unsigned short dbId = SDBOpenDatabase(userId, (char*)"test");
+	unsigned short dbId = SDBOpenDatabaseByName(userId, (char*)"test",0,0,0);
 
 	printf("\nScaledb DBMS Test initialized successfully");
 	fflush(stdout);
@@ -93,7 +95,7 @@ int main(int argc, char** argv){
 
 
 	// open files of the new table to allow read + write
-	SDBOpenAllDBFiles(userId, dbId );
+	SDBOpenTableFiles(userId, dbId, tableId);
 
 	printf("\nTable Catalog is ready for read and write");
 	fflush(stdout);
@@ -121,6 +123,7 @@ int main(int argc, char** argv){
 
 	// prepare price
 	retVal = SDBPrepareNumberField(userId, dbId, tableId, 3, (void *)&price);
+
 
 	// Do the insert of 1 - TV - 100
 	retVal = SDBInsertRow(userId, dbId, tableId, NULL, 0, 0);
@@ -167,14 +170,14 @@ int main(int argc, char** argv){
 	retVal = SDBDefineQuery(queryMgrId, dbId, indexId, (char*)"product id", NULL);
 							  
 	// set the cursor by the query definitions
-	retVal = SDBPrepareQuery(userId, queryMgrId, 0, 0, true) ;
+	retVal = SDBPrepareQuery(userId, queryMgrId, 0, 0, true,retVal) ;
 
 	void *field;
 
 	printf("\nID    Product Name          Price");
 	printf("\n----  --------------------  ------------");
 
-	while (!SDBNext(userId, queryMgrId)){
+	while (SDBQueryCursorNext(userId, queryMgrId, SDB_COMMAND_SELECT)){
 		// retrieve the rows
 
 		// get the product id

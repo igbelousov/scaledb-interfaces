@@ -135,7 +135,6 @@ void SDBOpenDatabaseById(unsigned int userId, unsigned short databaseId);
 unsigned short SDBGetDatabaseNumberByName(unsigned short userId, char *databaseName, bool openTables=false);
 char* SDBGetDatabaseNameByNumber(unsigned short databaseId);
 bool SDBGetDatabaseStatusByNumber(unsigned short databaseId);
-unsigned short SDBOpenAllDBFiles(unsigned short userId, unsigned short dbId);
 // SDBLockMetaInfo is cluster-wide lock per database.
 unsigned short SDBLockMetaInfo(unsigned short userId, unsigned short dbId=SDB_MASTER_DBID);
 unsigned short SDBLockAndOpenDatabaseMetaInfo(unsigned short userId, char *databaseName);
