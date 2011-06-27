@@ -134,12 +134,9 @@ unsigned short MysqlForeignKey::setKeyNumber(KEY* keyInfo, unsigned short numOfK
 
 	for (i = 0; i < numOfKeys; ++i) {
 		pKey = keyInfo + i;
-		char* iKeyName = SDBUtilGetStrInLower(pKey->name);
-		if (SDBUtilCompareStrings(pForeignKeyName_, iKeyName, false)) {
-			RELEASE_MEMORY(iKeyName);
+		if (SDBUtilCompareStrings(pForeignKeyName_, pKey->name, true)) {
 			break;
 		}
-		RELEASE_MEMORY(iKeyName);
 	}
 
 	if (i < numOfKeys) {
