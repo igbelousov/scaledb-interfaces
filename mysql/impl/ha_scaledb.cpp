@@ -319,7 +319,7 @@ static int scaledb_init_func(void *p) {
 
 	// bug #88, truncate should call delete_all_rows
 	//scaledb_hton->flags = HTON_CAN_RECREATE;
-	scaledb_hton->flags = HTON_TEMPORARY_NOT_SUPPORTED | HTON_NO_PARTITION;
+	scaledb_hton->flags = HTON_TEMPORARY_NOT_SUPPORTED | HA_CAN_PARTITION;
 
 	if (SDBGlobalInit(scaledb_config_file)) {
 		sql_print_error("________________________________________________");
