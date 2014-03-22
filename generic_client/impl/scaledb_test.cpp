@@ -29,10 +29,14 @@
 #include <stdio.h>
 #include <string.h>
 
+char* createBlobData(int dataSize);
+
+
  
 int main(int argc, char** argv){
 
 	// SETUP
+	int dataSize = 1073741824;
 
 	// test that the ini file is passed
 	if (argc < 2){
@@ -41,19 +45,20 @@ int main(int argc, char** argv){
 	}
 
 	// initialize engine using the ini file params
+	printf("\nScaleDB: initializing the storage engine\n");
 	if (SDBGlobalInit(argv[1])) {
         printf("\nScaleDB: Failed to initialize the storage engine");
         printf("Check the configuration file and its location: %s", argv[1]);
         return -1;
 	}
 
-	printf("\nScaledb Engine initialized successfully");
+	printf("\nScaledb Engine initialized successfully\n");
 	fflush(stdout);
 
 	// Get a user ID. The user is registered in the engine and can send DDL and DML requests
 	unsigned int userId = SDBGetNewUserId();
 
-	printf("\nSDB new user. User id is %u", userId);
+	printf("\nSDB new user. User id is %u\n", userId);
 	fflush(stdout);
 
 	SDBOpenMasterDbAndRecoverLog(userId);
@@ -61,43 +66,44 @@ int main(int argc, char** argv){
 	// initialize a database (dbms name == test)
 	unsigned short dbId = SDBOpenDatabaseByName(userId, (char*)"test",0,0,0);
 
-	printf("\nScaledb DBMS Test initialized successfully");
+	printf("\nScaledb DBMS Test initialized successfully\n");
 	fflush(stdout);
 
 	// DDL
 
+	printf("\nCreating ScaleDB User Table Catalog\n");
 	// Create a table in database test.
-	unsigned short tableId = SDBCreateTable(userId, dbId, (char*)"Catalog",1);
+	SDBLockMetaInfo(userId, dbId);
+	unsigned short tableId = SDBCreateTable(userId, dbId, (char*)"Catalog",1, (char *)"Catalog", (char *)"Catalog", false, false, 0, 0);
 
 	unsigned short fieldId;
 	
-	// create field - product id (4 bytes unsigned number)
-	fieldId = SDBCreateField(userId, dbId, tableId, (char*)"product id", ENGINE_TYPE_U_NUMBER, 4, 0, NULL, false, 0);
+	// create field - Movie id (4 bytes unsigned number)
+	fieldId = SDBCreateField(userId, dbId, tableId, (char*)"Movie id", ENGINE_TYPE_U_NUMBER, 4, 0, NULL, false, 0);
 
-	// create field product name (note: ENGINE_TYPE_STRING is space extended)
 
-	fieldId = SDBCreateField(userId, dbId, tableId, (char*)"product name", ENGINE_TYPE_STRING, 20, 0, NULL, false, 0);
+	// create field Movie name (note: ENGINE_TYPE_STRING is space extended)
+	fieldId = SDBCreateField(userId, dbId, tableId, (char*)"Movie Name", ENGINE_TYPE_STRING, 20, 0, NULL, false, 0);
 
-	// create field price (8 bytes unsigned number)
-	fieldId = SDBCreateField(userId, dbId, tableId, (char*)"price", ENGINE_TYPE_S_NUMBER, 8, 0, NULL, false, 0);
+	// create field Movie
+	fieldId = SDBCreateField(userId, dbId, tableId, (char*)"Movie", ENGINE_TYPE_STRING, 0, dataSize, NULL, false, 0);
 	
 	// Create index over product id
 	char *keyFields[2];				// maintains an array of names of fields that make the key
-	keyFields[0] = (char*)"product id";	// first field in the key
+	keyFields[0] = (char*)"Movie id";	// first field in the key
 	keyFields[1] = 0;
 
 	// note: productIdIndex is a unique index
-	unsigned short indexId = SDBCreateIndex(userId, dbId, tableId, (char*)"productIdIndex", keyFields, NULL, 
+	unsigned short indexId = SDBCreateIndex(userId, dbId, tableId, (char*)"MovieIdIndex", keyFields, NULL,
 											true, false, NULL, 0, 0, false);
+	SDBOpenTable(userId, dbId, (char *)"Catalog", 0, false);
+	SDBCommit(userId);
 	
-	printf("\nTable Catalog created successfully");
+	printf("\nTable Catalog created successfully\n");
 	fflush(stdout);
 
 
-	// open files of the new table to allow read + write
-	SDBOpenTableFiles(userId, dbId, tableId);
-
-	printf("\nTable Catalog is ready for read and write");
+	printf("\nTable Catalog is ready for read and write\n");
 	fflush(stdout);
 
 	// DML
@@ -105,58 +111,50 @@ int main(int argc, char** argv){
 	// INSERT
 
 	unsigned int id;
-	char productName[21];
-	productName[20] =0;
-	unsigned long long price;
+	char MovieName[21];
+	MovieName[20] =0;
+	int numberOfInserts = 100000;
+	int commitCounter = 0;
 
+	char *movie;
 	unsigned short retVal;
 
 	id = 1;
-	memcpy(productName, "TV                  ", 20);
-	price = 100;
-
-	// prepare id
-	retVal = SDBPrepareNumberField(userId, dbId, tableId, 1, (void *)&id);
-
-	// prepare product name
-	retVal = SDBPrepareStrField(userId, dbId, tableId, 2, productName, 20);
-
-	// prepare price
-	retVal = SDBPrepareNumberField(userId, dbId, tableId, 3, (void *)&price);
+	movie = createBlobData(dataSize);
 
 
-	// Do the insert of 1 - TV - 100
-	retVal = SDBInsertRow(userId, dbId, tableId, NULL, 0, 0);
+	while( id <= numberOfInserts) {
 
-	printf("\nRet value for insert is %u", retVal);
+		// prepare id
+		retVal = SDBPrepareNumberField(userId, dbId, tableId, 1, (void *)&id);
+
+		// prepare movie Name
+		sprintf(MovieName, "Home Alone%d", id);
+		retVal = SDBPrepareStrField(userId, dbId, tableId, 2, MovieName, 20, 0);
+
+		// prepare Movie data
+		retVal = SDBPrepareVarField(userId, dbId, tableId, 3, movie, dataSize, 0, false);
+
+		// Do the insert of the Movie
+		retVal = SDBInsertRow(userId, dbId, tableId, 0, 0, 0, 0);
+
+		// increment the counter
+		id++;
+		if (commitCounter++ == 1000) {
+			SDBCommit(userId);
+			commitCounter = 0;
+		}
+
+	}
+
+	//commit the remaining data, this is just, in case if you change the
+	//numberOfInsert from 100K to some other value.
+	if (commitCounter != 0) {
+		SDBCommit(userId);
+	}
+
+	printf("\nInserterted  %d records\n", numberOfInserts);
 	fflush(stdout);
-
-	//-->  Do the insert of 1 - TV - 100 AGAIN. 
-	// note: retVal should be 1 (duplicate key)
-	retVal = SDBInsertRow(userId, dbId, tableId, NULL, 0, 0);
-
-	printf("\nRet value for insert is %u", retVal);
-	fflush(stdout);
-
-	id = 5;
-	memcpy(productName, "BOOK                ", 20);
-	price = 12;
-
-	// prepare id
-	retVal = SDBPrepareNumberField(userId, dbId, tableId, 1, (void *)&id);
-
-	// prepare product name
-	retVal = SDBPrepareStrField(userId, dbId, tableId, 2, productName, 20);
-
-	// prepare price
-	retVal = SDBPrepareNumberField(userId, dbId, tableId, 3, (void *)&price);
-
-	// Do the insert of 1 - TV - 100
-	retVal = SDBInsertRow(userId, dbId, tableId, NULL, 0, 0);
-
-	printf("\nRet value for insert is %u", retVal);
-	fflush(stdout);
-
 
 	// QUERY
 
@@ -167,17 +165,17 @@ int main(int argc, char** argv){
 	SDBResetQuery(queryMgrId);
 
 	// define a query to retrieve the data set 
-	retVal = SDBDefineQuery(queryMgrId, dbId, indexId, (char*)"product id", NULL);
+	retVal = SDBDefineQuery(queryMgrId, dbId, indexId, (char*)"Movie id", NULL);
 							  
 	// set the cursor by the query definitions
 	retVal = SDBPrepareQuery(userId, queryMgrId, 0, 0, true,retVal) ;
 
 	void *field;
 
-	printf("\nID    Product Name          Price");
+	printf("\nID    Movie Name            Movie");
 	printf("\n----  --------------------  ------------");
 
-	while (SDBQueryCursorNext(userId, queryMgrId, SDB_COMMAND_SELECT)){
+	while ((SDBQueryCursorNext(userId, queryMgrId, SDB_COMMAND_SELECT)== 0)){
 		// retrieve the rows
 
 		// get the product id
@@ -186,19 +184,40 @@ int main(int argc, char** argv){
 
 		// get the product name
 		field = SDBQueryCursorGetFieldByTableId(queryMgrId, tableId, 2);
-		memcpy(productName, field, 20);
-		printf("  %s", (char *)productName);
+		memcpy(MovieName, field, 20);
+		printf("  %s", (char *)MovieName);
 
-		// get the product id
-		field = SDBQueryCursorGetFieldByTableId(queryMgrId, tableId, 3);
-		printf("  %08u", *(unsigned int *)field);
+		// get the movie
+		unsigned int bytes;
+		field = SDBQueryCursorGetFieldByTableVarData(queryMgrId, tableId, 3, &bytes);
+		memcpy(movie, field, bytes);
+		for (int i =0; i < 10; i++) {
+			printf("  %c", movie[i]);
+		}
 	}
 
-	SDBCommit(userId);
+	//delete the table
+	printf("\n");
+	printf("\nDeleting the User Table Catalog....\n");
 
-	printf("\nTest program completed... starting shutdown of Scaledb Engine");
+	SDBDeleteTable(userId, dbId, (char *)"Catalog", NULL, 0, 0);
+
+
+	printf("\nTest program completed... starting shutdown of Scaledb Engine\n");
 
 	SDBGlobalEnd();
+	free(movie);
 
 	return 0;
+}
+
+char* createBlobData(int dataSize) {
+	char* movie = (char *)malloc(dataSize * sizeof(char));
+	memcpy(movie,"0123456789", 10);
+
+	for(int i = 11;i < 1048576 * 3; i++) {
+		movie[i] = i;
+	}
+	return movie;
+
 }

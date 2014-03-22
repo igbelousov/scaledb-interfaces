@@ -41,31 +41,6 @@
  */
 #include "../../scaledb/incl/SdbStorageAPI.h"
 
-#define ERRORNUM_INTERFACE_MYSQL_TXN 20000
-#define INITIAL_LOCK_TABLES_IN_VECTOR  10
-#define MAX_BLOB_COLUMNS 64
-
-// need this structure to handle two cases:
-// - multiple indexes referenced in same table without alias
-// - same table referenced multiple times with alias
-struct QueryManagerInfo {
-	unsigned short queryMgrId_;
-	unsigned short designatorId_;
-	char* pDesignatorName_;
-	void* pHandler_; // pointer to handler object which is currently being used
-	char* pKey_; // points to the key value used in index_next_same
-	unsigned int keyLength_;
-	bool scanSequential_;
-};
-
-// Compiler usually takes 16 bytes for this structure
-struct ScaledbSavepointInfo {
-	char* savepointName_;
-	uint64 logId_;
-};
-
-typedef struct ScaledbSavepointInfo ScaledbSavepointInfo_struct;
-
 class MysqlTxn {
 
 public:
@@ -89,37 +64,6 @@ public:
 	void setDdlFlag(unsigned short ddlFlag) {ddlFlag_ = ddlFlag;}
 	void setOrOpDdlFlag(unsigned short value) {ddlFlag_ = ddlFlag_ | value;} //apply logical OR operation
 
-	// save the query manager id for a given designator in a given table handler
-	void addQueryManagerId(bool isRealIndex, char* pDesignatorName, void* pHandler, char* pKey,
-			unsigned int aKenLength, unsigned short aQueryMgrId, unsigned char mysqlInterfaceDebugLevel=0);
-	// Find the query manager id based on the designator name for a given table handler
-	unsigned short findQueryManagerId(char* aDesignatorName, void* pHandler, char* aKey,
-			unsigned int aKenLength, bool virtualTableFlag = false);
-
-	void freeAllQueryManagerIds(unsigned char mysqlInterfaceDebugLevel=0);
-	char* getDesignatorNameByQueryMrgId(unsigned short aQueryMgrId);
-	unsigned short getDesignatorIdByQueryMrgId(unsigned short aQueryMgrId);
-
-	//void setLastStmtSavePointId(uint64 id) {
-	//	lastStmtSavePointId_ = id;
-	//}
-	//uint64 getLastStmtSavePointId() {
-	//	return lastStmtSavePointId_;
-	//}
-
-	// add a table name specified in LOCK TABLES statement
-	void addLockTableName(char* pLockTableName);
-	// unlock a table which was specified in an earlier LOCK TABLES statement.
-	// Return non-zero if the table name is added by an earlier LOCK TABLES statement.
-	int removeLockTableName(char* pLockTableName);
-	// unlock all tables which were specified in earlier LOCK TABLES statements
-	void releaseAllLockTables();
-	// get the net number of lock tables
-	unsigned int getNumberOfLockTables() {return SDBArrayGetNumberOfNetElements(pLockTablesArray_);}
-
-	void setScanType(unsigned short queryMgrId, bool sequentialScan=false);
-	bool isSequentialScan(unsigned short queryMgrId);
-
 	void addAlterTableName(char* pAlterTableName);
 	void removeAlterTableName();
 	char* getAlterTableName() {return pAlterTableName_;}
@@ -137,7 +81,7 @@ private:
 
 	unsigned int activeTxn_; // whether or not it is within a transaction at the moment
 	// need to use integer rather than bool due to a compiler bug??
-	SdbDynamicArray* pLockTablesArray_; // pointer to vector holding all lock table names
+	//SdbDynamicArray* pLockTablesArray_; // pointer to vector holding all lock table names
 	uint64 lastStmtSavePointId_; // last stmt save point id
 
 	// flag to indicate if it is a non-primary node in cluster.
@@ -146,8 +90,6 @@ private:
 	unsigned short ddlFlag_; // This flag has multiple bit values.  Need to deal bits individually.
 
 	char* pAlterTableName_; // table name used in ALTER TABLE, CREATE/DROP INDEX statement
-
-	SdbDynamicArray* pQueryManagerInfoArray_;
 };
 
 #endif   // _MYSQL_TXN_H

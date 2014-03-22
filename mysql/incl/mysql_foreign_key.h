@@ -25,7 +25,21 @@ This is because we have STL header files which must be declared before C header 
 
 #include "string.h"
 
+
+#ifdef _MARIA_DB
+#include <mysql_version.h>
+#if MYSQL_VERSION_ID>=50515
+#include "sql_class.h"
+#include "sql_array.h"
+#elif MYSQL_VERSION_ID>50100
+#include "mysql_priv.h"
+#include <mysql/plugin.h>
+#else
+#include "../mysql_priv.h"
+#endif
+#else // _MARIA_DB
 #include "mysql_priv.h"           // this must come second
+#endif // _MARIA_DB
 #include <mysql/plugin.h>         // this must come third
 #include "../../scaledb/incl/SdbStorageAPI.h"
 

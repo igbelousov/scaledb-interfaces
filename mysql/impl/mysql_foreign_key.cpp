@@ -29,12 +29,14 @@
 //
 //////////////////////////////////////////////////////////////////////
 #ifdef SDB_MYSQL
-
+#include "key.h"                                // key_copy
 #include "../incl/mysql_foreign_key.h"
 #ifdef __DEBUG_CLASS_CALLS
 #include "../../../cengine/engine_util/incl/debug_class.h"
 #endif
-
+#if defined(MARIADB_BASE_VERSION) && MYSQL_VERSION_ID >= 100000
+#define _MARIA_SDB_10
+#endif
 bool isSeparator(char c) {
 	char separatorArray[] = METAINFO_TOKEN_SEPARATORS;
 	bool boolValue = false;
@@ -68,15 +70,15 @@ MysqlForeignKey::~MysqlForeignKey() {
 	DebugClass::countClassDestructor("MysqlForeignKey");
 #endif
 	if (pForeignKeyName_)
-		RELEASE_MEMORY(pForeignKeyName_);
+		FREE_MEMORY(pForeignKeyName_);
 	if (pParentTableName_)
-		RELEASE_MEMORY(pParentTableName_);
+		FREE_MEMORY(pParentTableName_);
 
 	for (unsigned short i = 0; i < METAINFO_MAX_KEY_FIELDS; ++i) {
 		if (indexColumnNames[i])
-			RELEASE_MEMORY(indexColumnNames[i]);
+			FREE_MEMORY(indexColumnNames[i]);
 		if (parentColumnNames_[i])
-			RELEASE_MEMORY(parentColumnNames_[i]);
+			FREE_MEMORY(parentColumnNames_[i]);
 	}
 }
 
@@ -117,7 +119,7 @@ unsigned short MysqlForeignKey::setForeignKeyName(char* pForeignKeyName,
 	getNextToken(keyName, pForeignKeyName);
 	keyNameLen = (unsigned short) strlen(keyName);
 	if (keyNameLen == 0) { // index name is NOT specified
-		pForeignKeyName_ = SDBUtilFindDesignatorName(pUserTableName, "sdbfk", fkNum);
+		pForeignKeyName_ = SDBUtilFindDesignatorName(pUserTableName, "sdbfk", fkNum, true, NULL, 0);
 	} else
 		// index name is specified
 		pForeignKeyName_ = SDBUtilDuplicateString(keyName);
@@ -141,8 +143,11 @@ unsigned short MysqlForeignKey::setKeyNumber(KEY* keyInfo, unsigned short numOfK
 
 	if (i < numOfKeys) {
 		keyNumber = i;
+#ifdef _MARIA_SDB_10
+		numOfKeyFields = (unsigned short) pKey->user_defined_key_parts;
+#else
 		numOfKeyFields = (unsigned short) pKey->key_parts;
-
+#endif
 		KEY_PART_INFO* pKeyPart;
 		for (unsigned short j = 0; j < numOfKeyFields; ++j) {
 			pKeyPart = pKey->key_part + j;
@@ -178,7 +183,11 @@ unsigned short MysqlForeignKey::setKeyNumber(KEY* keyInfo, unsigned short numOfK
 		// by searching all keys in mysql table struct for a match against this FK as defined by parsing SQL text
 		for (i = 0; i < numOfKeys; ++i) {
 			pKey = keyInfo + i;
+#ifdef _MARIA_SDB_10
+			if (pKey->user_defined_key_parts >= numOfKeyFields) {
+#else
 			if (pKey->key_parts >= numOfKeyFields) {
+#endif
 				KEY_PART_INFO* pKeyPart;
 				unsigned short k;
 
