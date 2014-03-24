@@ -4174,7 +4174,7 @@ bool parse_cond_for_sdb_index(COND *cond, SimpleCondition & context )
 //--------------------------------------------------------------------------------------------------
 //		Recursively postorder traverse condition tree, writing condition to string
 //--------------------------------------------------------------------------------------------------
-bool ha_scaledb::conditionTreeToString( const COND* cond, unsigned char** buffer, unsigned short* nodeOffset )
+bool ha_scaledb::conditionTreeToString( const COND* cond, unsigned char** buffer, unsigned short* nodeOffset, unsigned short* DBID, unsigned short* TABID )
 {
 	int				tableNum				= 0;
 	unsigned short	allocatedLength			= condStringAllocatedLength_;
@@ -4195,7 +4195,7 @@ bool ha_scaledb::conditionTreeToString( const COND* cond, unsigned char** buffer
 					return false;		// up to 255 children
 				}
 
-				if ( !( conditionTreeToString( item, buffer, nodeOffset ) ) )
+				if ( !( conditionTreeToString( item, buffer, nodeOffset, DBID, TABID ) ) )
 				{
 					return false;		// stop process
 				}
@@ -4361,6 +4361,7 @@ bool ha_scaledb::conditionTreeToString( const COND* cond, unsigned char** buffer
 
 					char* databaseName = SDBUtilDuplicateString((char *)((Item_ident *)subItem)->db_name);
 					unsigned short dbId = SDBGetDatabaseNumberByName(sdbUserId_, databaseName );
+					*DBID=dbId;
 					FREE_MEMORY(databaseName);
 					unsigned short tableNumber = SDBGetTableNumberByName(sdbUserId_, dbId, (((Item_ident *)subItem)->table_name) );
 					if (!tableNumber) {
@@ -4370,7 +4371,7 @@ bool ha_scaledb::conditionTreeToString( const COND* cond, unsigned char** buffer
 						return false;			//This means we are attempting to compare data from two different tables--this can cause problems (e.g. if the tables are stored on different CAS's)
 					}
 					tableNum = tableNumber;
-
+					*TABID=tableNumber;
 					unsigned short columnNumber = SDBGetColumnNumberByName(dbId, tableNumber, (((Item_ident *)subItem)->field_name) );
 					//unsigned char CCCC = SDBGetColumnTypeByNumber(dbId, tableNumber, columnNumber); 
 
@@ -5034,7 +5035,7 @@ bool ha_scaledb::conditionTreeToString( const COND* cond, unsigned char** buffer
   };
 
 			 */
-enum function_type {FT_UNSUPPORTED=-1, FT_NONE=0, FT_SUM=1, FT_MAX=2, FT_DATE=3, FT_HOUR=4, FT_CONCAT=5, FT_CHAR=6 };
+enum function_type {FT_UNSUPPORTED=-1, FT_NONE=0, FT_SUM=1, FT_MAX=2, FT_DATE=3, FT_HOUR=4, FT_MAX_CONCAT=5, FT_CHAR=6 };
 
 
 
@@ -5197,12 +5198,12 @@ char ha_scaledb::getCASType(enum_field_types mysql_type, int flags)
 }
 
 
-int ha_scaledb::generateGroupConditionString(char* buf, int max_buf)
+int ha_scaledb::generateGroupConditionString(char* buf, int max_buf, unsigned short dbid, unsigned short tabid)
 {
 	Item *item;
 
 	int pos=0;
-	
+
 	GroupByAnalyticsHeader* gbh= (GroupByAnalyticsHeader*)buf;
 	gbh->cardinality=1000;
 	
@@ -5220,6 +5221,7 @@ int ha_scaledb::generateGroupConditionString(char* buf, int max_buf)
 		n++;
 		int position;
 		int length=0; //need to get correct value.
+		int function_length=0;
 		enum_field_types type;
 		item=*cur_group->item;
 		function_type function=FT_NONE;
@@ -5234,7 +5236,7 @@ int ha_scaledb::generateGroupConditionString(char* buf, int max_buf)
 				position=field->field_index;	
 				type= field->type();
 				length=getSDBSize(type,field);
-
+				function_length=length;
 				break;
 			}
 			case Item::FUNC_ITEM:
@@ -5250,6 +5252,7 @@ int ha_scaledb::generateGroupConditionString(char* buf, int max_buf)
 						 position=field->field_index;
 						 type= field->type();
 						 length=getSDBSize(type,field);
+						 function_length=5;
 
 					 }else if(typeid(*func)==typeid(Item_date_typecast))
 					 {
@@ -5258,6 +5261,7 @@ int ha_scaledb::generateGroupConditionString(char* buf, int max_buf)
 						 position=field->field_index;
 						 type= field->type();
 						 length=getSDBSize(type,field);
+						 function_length=8;
 						 
 					 }else if(typeid(*func)==typeid(Item_func_hour))
 					 {
@@ -5266,6 +5270,7 @@ int ha_scaledb::generateGroupConditionString(char* buf, int max_buf)
 						  position=field->field_index;
 						  type= field->type();
 						  length=getSDBSize(type,field);
+						  function_length=8;
 					 }
 					 else
 					 {
@@ -5294,17 +5299,14 @@ int ha_scaledb::generateGroupConditionString(char* buf, int max_buf)
 		}
 	
 		char castype=	getCASType(type,0) ;
-		short function_length=length; //for now jsut return the original lenfth
-
-
+	
 		GroupByAnalyticsBody* gab= (GroupByAnalyticsBody*)(buf+pos);
 
-		gab->position=position;
+		gab->field_offset=SDBGetColumnOffsetByNumber(dbid, tabid, position+1);
 		gab->length=length;
 		gab->type=castype;
 		gab->function=function;
 		gab->function_length=function_length;
-
 		pos=pos+sizeof(GroupByAnalyticsBody);
     }
    gbh->numberColumns=n;
@@ -5312,21 +5314,33 @@ int ha_scaledb::generateGroupConditionString(char* buf, int max_buf)
 		return pos;
 }
 
+void ha_scaledb::addSelectField(char* buf, int& pos, unsigned short dbid, unsigned short tabid, enum_field_types type, int length, short function, short position )
+{
+	char castype=	getCASType(type,0) ;
+	
+	SelectAnalyticsBody2* sab2= (SelectAnalyticsBody2*)(buf+pos);
 
+	sab2->field_offset=SDBGetColumnOffsetByNumber(dbid, tabid, position+1);;	//number of fields in operation
+	sab2->length=length;		//the length of data
+	sab2->type = castype;		//the column type
+	sab2->function=function;		//this is operation to perform on the field
 
-int ha_scaledb::generateSelectConditionString(char* buf, int max_buf)
+	pos=pos+sizeof(SelectAnalyticsBody2);
+}
+
+int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned short dbid, unsigned short tabid)
 {
 	Item *item;
 
 	int pos=0;
-	
+
 
 	SelectAnalyticsHeader* sah= (SelectAnalyticsHeader*)buf;
 	pos += sizeof(SelectAnalyticsHeader);
 	
-
-
 	
+
+	int no_fields=0;	
 
 
     List_iterator_fast<Item> fi((((THD*) ha_thd())->lex)->select_lex.item_list);
@@ -5340,7 +5354,8 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf)
 			return 0;
 		} //only check for buffer overwrite once per loop, the + 100 is being conservative
 		n++;
-		int no_fields=1;  //assume only 1 for now
+		SelectAnalyticsBody1* sab1= (SelectAnalyticsBody1*)(buf+pos);
+		pos=pos+sizeof(SelectAnalyticsBody1);
 		int position;
 		int length=0; //need to get correct value.
 		enum_field_types type;
@@ -5376,14 +5391,116 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf)
 						Item_sum_max *max = ((Item_sum_max *)item);
 						Item_result_field *rf= (Item_result_field *)sum;
 						Item::Type ft=item->next->type();
+						char* name= item->name;
 
+						int comma_count=0;
+						for(int i=0; i<=strlen(name);i++)
+						{
+							if(name[i]==',')
+							{
+							comma_count=comma_count+1;
+							}
+						}
+
+						int no_arguments=comma_count+1;
+
+						int arg=0;
 						if(ft==Item::FUNC_ITEM)
 						{
-							//concat operator?
-							function=FT_UNSUPPORTED;
-							position=0;
-							type= MYSQL_TYPE_NULL;
+							
+							 Item_func *func = ((Item_func *)item->next);
+							 if(typeid(*func)==typeid(Item_func_concat))
+							 {
+								 sab1->function=FT_MAX_CONCAT;
+								//concat operator
+								 char* buf_start=buf+pos;
+								 while(arg<no_arguments)
+								 {
 
+								
+									item= item->next;
+									Item::Type ft1=item->type();
+									if(ft1==Item::FIELD_ITEM)
+									{
+										//save each field
+										Field *field1 = ((Item_field *)item)->field;
+										position=field1->field_index;	
+										type= field1->type();
+										length=getSDBSize(type,field1);
+										function=FT_NONE;
+
+										no_fields++;
+										addSelectField(buf,  pos, dbid, tabid, type, length, function,  position );
+									}
+									else if(ft1==Item::FUNC_ITEM)
+									{
+										item= item->next;
+										function=FT_NONE;
+										if(typeid(*item)==typeid(Item_func_char)) {function=FT_CHAR;}
+							
+										Item::Type ft2=item->type();
+										if(ft2==Item::FIELD_ITEM)
+										{								
+											Field *field2 = ((Item_field *)item)->field;
+											position=field2->field_index;
+											type= field2->type();
+											length=getSDBSize(type,field2);
+
+											no_fields++;
+											addSelectField(buf,  pos, dbid, tabid, type, length, function,  position );
+										}
+										else if(ft2==Item::FUNC_ITEM)
+										{
+											item= item->next;
+											Item::Type ft2=item->type();
+											if(ft2==Item::FIELD_ITEM)
+											{								
+												Field *field2 = ((Item_field *)item)->field;
+												position=field2->field_index;
+												type= field2->type();
+												length=getSDBSize(type,field2);
+
+												no_fields++;
+												addSelectField(buf,  pos, dbid, tabid, type, length, function,  position );
+											}
+										}
+										else
+										{
+											return 0;
+										}
+									}								
+									else if(ft1==Item::STRING_ITEM)
+									{
+										//skipping just a constant so can ignore.
+										
+									}
+									else
+									{
+										return 0;
+									}
+
+									arg++;
+								 }
+
+								 //reverse order
+								 SelectAnalyticsBody2 tmp[10];
+								 int c,d;
+								 for( c=no_fields-1,  d=0; c>=0; c--, d++)
+								 {
+									 tmp[d]=*((SelectAnalyticsBody2*)(buf_start+ c*sizeof(SelectAnalyticsBody2)));
+								 }
+								 //write back in correct order
+								 for( c=0; c<no_fields; c++)
+								 {
+									*((SelectAnalyticsBody2*)(buf_start+ c*sizeof(SelectAnalyticsBody2)))=tmp[c];
+								 }
+
+
+							  }
+							  else
+							  {
+								  return 0;
+							  }
 						}
 						else
 						{
@@ -5451,23 +5568,20 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf)
 			return 0;
 		}
 	
-		char castype=	getCASType(type,0) ;
 
-			SelectAnalyticsBody1* sab1= (SelectAnalyticsBody1*)(buf+pos);
+
+		if(no_fields>0)
+		{
 			sab1->numberFields=no_fields;
-
-			pos=pos+sizeof(SelectAnalyticsBody1);
-
-			SelectAnalyticsBody2* sab2= (SelectAnalyticsBody2*)(buf+pos);
-
-			sab2->position=position;	//number of fields in operation
-			sab2->length=length;		//the length of data
-			sab2->type = castype;		//the column type
-			sab2->function=function;		//this is operation to perform
-
-			pos=pos+sizeof(SelectAnalyticsBody2);
-
-
+		
+		}
+		else
+		{
+			sab1->numberFields=1;
+			sab1->function=function;
+			addSelectField(buf,  pos, dbid, tabid, type, length, FT_NONE, position );
+		}
+		
     }
 
 		sah->numberColumns=n;//this is the total number of columns
@@ -5481,10 +5595,12 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf)
 //--------------------------------------------------------------------------------------------------
 void ha_scaledb::saveConditionToString(const COND *cond)
 {
+	unsigned short DBID=0;
+	unsigned short TABID=0;
 	analyticsStringLength_		=
 	conditionStringLength_		= 0;
 
-	if ( !( conditionTreeToString( cond, &conditionString_, &conditionStringLength_ ) ) )
+	if ( !( conditionTreeToString( cond, &conditionString_, &conditionStringLength_, &DBID, &TABID ) ) )
 	{
 		conditionStringLength_	= 0;
 	}
@@ -5500,10 +5616,10 @@ void ha_scaledb::saveConditionToString(const COND *cond)
 #ifdef	_ENABLE_SELECT_CONDITION_STRING
 	char	group_buf[ 2000 ];
 	char	select_buf[ 2000 ];
-	int		len1		= generateGroupConditionString( group_buf, sizeof( group_buf ) );
+	int		len1		= generateGroupConditionString( group_buf, sizeof( group_buf ), DBID, TABID );
 
 	
-	int		len2		= generateSelectConditionString( select_buf, sizeof( select_buf ) );
+	int		len2		= generateSelectConditionString( select_buf, sizeof( select_buf ),DBID, TABID  );
 
 	if ( len1		> 0 && len2		> 0 )
 	{
