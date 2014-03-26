@@ -335,7 +335,7 @@ public:
 	int getSDBSize(enum_field_types fieldType, Field* field) ;
 	int generateGroupConditionString(char* buf, int max_buf, unsigned short dbid, unsigned short tabid);
 	int generateSelectConditionString(char* buf, int max_buf, unsigned short dbid, unsigned short tabid);
-	void addSelectField(char* buf, int& pos, unsigned short dbid, unsigned short tabid, enum_field_types type, int length, short function,  short position );
+	void addSelectField(char* buf, int& pos, unsigned short dbid, unsigned short tabid, enum_field_types type, int length, short function,  const char* col_name );
 #ifdef _HIDDEN_DIMENSION_TABLE // UTIL FUNC DECLERATION  
 	char * getDimensionTableName(char* table_name, char* col_name, char* dimension_table_name);
 	char * getDimensionTablePKName(char* table_name, char* col_name, char* dimension_pk_name);
