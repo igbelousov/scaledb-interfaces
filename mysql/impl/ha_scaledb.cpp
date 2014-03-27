@@ -51,7 +51,7 @@
 #ifdef  __DEBUG_CLASS_CALLS
 #include "../../../cengine/engine_util/incl/debug_class.h"
 #endif
-#include "../../../cengine/cas_data_server/incl/pushdown_constants.h"
+
 #ifdef SDB_WINDOWS
 #else
 	#define stricmp	strcasecmp
@@ -65,6 +65,44 @@
 #define SDB_DEBUG_LITE
 #define _MICHAELS_NEW_DDL_DISCOVERY
 //#define _MICHAELS_NEW_DDL_DISCOVERY2
+
+//added because we can't include pushdown_condition.h
+#pragma pack(1)  //prevent padding of struct
+struct GroupByAnalyticsHeader
+{
+	long cardinality;
+	short numberColumns;
+};
+struct GroupByAnalyticsBody
+{
+		short field_offset;			//the position in table row
+		short length;			//the length of data 
+		char type;				//the column type
+		short function;			//this is operation to perform
+		short function_length;  //the column type	
+};
+
+
+struct SelectAnalyticsHeader
+{
+	short numberColumns;
+};
+
+struct SelectAnalyticsBody1
+{
+		short numberFields;		//the number of fields in column	
+		short function;	
+};
+
+	
+struct SelectAnalyticsBody2
+{
+		short field_offset;			//the position in table row
+		short length;			//the length of data 
+		char type;				//the column type
+		short function;			//this is operation to perform
+};
+#pragma pack()
 
 unsigned char ha_scaledb::mysqlInterfaceDebugLevel_ = 0; // defines the debug level for Interface component
 SDBFieldType  ha_scaledb::mysqlToSdbType_[MYSQL_TYPE_GEOMETRY+1] = {NO_TYPE, };
