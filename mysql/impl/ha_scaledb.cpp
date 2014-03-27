@@ -1746,7 +1746,9 @@ int ha_scaledb::external_lock(THD* thd, /* handle to the user thread */
 	//	mysqlInterfaceDebugLevel_  = 1;
 	//}
 #endif
-
+	
+	bool is_streaming_table=SDBIsStreamingTable(sdbDbId_, sdbTableNumber_);
+	
 
 	int retValue = 0;
 
@@ -1799,6 +1801,14 @@ int ha_scaledb::external_lock(THD* thd, /* handle to the user thread */
 		break;
 	}
 
+	if(is_streaming_table == true &&
+		( sdbCommandType_ == SDB_COMMAND_UPDATE
+		|| sdbCommandType_ == SDB_COMMAND_LOAD
+		|| sdbCommandType_ == SDB_COMMAND_ALTER_TABLE
+		|| sdbCommandType_ == SDB_COMMAND_MULTI_DELETE))
+	{
+		DBUG_RETURN(HA_ERR_WRONG_COMMAND);
+	}
 
 	// fetch sdbTableNumber_ if it is 0 (which means a new table handler).
 	if ((sdbTableNumber_ == 0) && (!virtualTableFlag_))
