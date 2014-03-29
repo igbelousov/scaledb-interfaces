@@ -5083,7 +5083,7 @@ bool ha_scaledb::conditionTreeToString( const COND* cond, unsigned char** buffer
   };
 
 			 */
-enum function_type {FT_UNSUPPORTED=-1, FT_NONE=0, FT_SUM=1, FT_MAX=2, FT_DATE=3, FT_HOUR=4, FT_MAX_CONCAT=5, FT_CHAR=6 };
+enum function_type {FT_UNSUPPORTED=-1, FT_NONE=0, FT_SUM=1, FT_MAX=2, FT_DATE=3, FT_HOUR=4, FT_MAX_CONCAT=5, FT_CHAR=6, FT_COUNT=7 };
 
 
 
@@ -5371,10 +5371,16 @@ void ha_scaledb::addSelectField(char* buf, int& pos, unsigned short dbid, unsign
 	sab2->type = castype;				//the column type
 	sab2->function=function;		//this is operation to perform on the field
 
-	contains_analytics=true;
+	if(function!=FT_NONE) {contains_analytics=true;}
 	pos=pos+sizeof(SelectAnalyticsBody2);
 }
 
+bool ha_scaledb::checkFunc(char* name, char* my_function)
+{
+	 char* func_name= strtok(name, "(");
+	 if(strcasecmp(my_function,func_name)==0) {return true;}
+         else {return false;}
+}
 int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned short dbid, unsigned short tabid)
 {
 	bool contains_analytics_function=false;
@@ -5559,6 +5565,20 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 						}
   					  
 				}
+				else if(sum->sum_func() == Item_sum::UDF_SUM_FUNC)
+				{
+					if(checkFunc(sum->name, "stream_count"))
+					{
+						Field *field =((Item_field *)item->next)->field;
+						col_name=field->field_name;
+					        type= field->type();
+						function=FT_COUNT;
+					}
+					else
+					{
+						return 0;
+					}
+				}
 				else
 				{
 					return 0;  //no condition string will get generated
@@ -5620,6 +5640,7 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 		{
 			sab1->numberFields=1;
 			sab1->function=function;
+			if(function!=FT_NONE) {contains_analytics_function=true;}
 			addSelectField(buf,  pos, dbid, tabid, type, FT_NONE, col_name ,contains_analytics_function);
 		}
 		
