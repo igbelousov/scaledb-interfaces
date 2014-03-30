@@ -5680,7 +5680,7 @@ void ha_scaledb::saveConditionToString(const COND *cond)
 #endif	//CONDITION_PUSH_DEBUG
 
 
-#define _ENABLE_SELECT_CONDITION_STRING
+//#define _ENABLE_SELECT_CONDITION_STRING
 #ifdef	_ENABLE_SELECT_CONDITION_STRING
 	char	group_buf[ 2000 ];
 	char	select_buf[ 2000 ];
