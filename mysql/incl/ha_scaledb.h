@@ -332,9 +332,10 @@ public:
 
 	char getCASType(enum_field_types mysql_type, int flags);
 	int getSDBSize(enum_field_types fieldType, Field* field) ;
-	int generateGroupConditionString(char* buf, int max_buf, unsigned short dbid, unsigned short tabid);
+	int generateGroupConditionString(int cardinality, char* buf, int max_buf, unsigned short dbid, unsigned short tabid);
 	int generateSelectConditionString(char* buf, int max_buf, unsigned short dbid, unsigned short tabid);
 	bool checkFunc(char* name, char* my_function);
+	bool checkNestedFunc(char* name, char* my_func1, char* my_func2);
 	void addSelectField(char* buf, int& pos, unsigned short dbid, unsigned short tabid, enum_field_types type, short function,  const char* col_name, bool& contains_analytics );
 #ifdef _HIDDEN_DIMENSION_TABLE // UTIL FUNC DECLERATION  
 	char * getDimensionTableName(char* table_name, char* col_name, char* dimension_table_name);

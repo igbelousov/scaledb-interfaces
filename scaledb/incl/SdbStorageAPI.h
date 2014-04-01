@@ -679,9 +679,13 @@ char *SDBUtilDoubleSpecialCharInString(char* pName, char specialChar);
 char *SDBUtilGetStrInLower(char *ptr);
 bool SDBUtilCompareStrings(const char *str1, const char *str2, bool inLower, unsigned short length = 0);
 char* SDBUtilStrstrCaseInsensitive(char* s1, char* s2);
+char* SDBUtilStrstrCaseInsensitive(char* s1, char* s2);
+char* SDBUtilFindComment(char* s1, char* s2);
+int SDBUtilFindCommentIntValue(char* s1, char* s2); 
 // Search a substring (str) in SQL stmt - comments are ignored
 char* SDBUtilSqlSubStrIgnoreComments(char* sqlStmt, char* subStr, bool ignoreComments);
 int SDBUtilStringToInt(char *str);
+int SDBUtilStringToInt(char *str, int len);
 char *SDBUtilDecodeCharsInStrings(char *before);
 char* SDBUtilFindDesignatorName(char* pTblFsName, char* pKeyName, int externalKeyNum, bool useExternalKeyNum, char *nameBuff, int nameBuffLength);
 void SDBUtilIntToMemoryLocation(unsigned long long number, unsigned char* destination, unsigned short bytesToCopy);

@@ -56,7 +56,7 @@
 #else
 	#define stricmp	strcasecmp
 #endif
-#include <typeinfo>
+
 #include <sys/stat.h>
 #include <ctype.h>
 #include "create_options.h"
@@ -5083,7 +5083,7 @@ bool ha_scaledb::conditionTreeToString( const COND* cond, unsigned char** buffer
   };
 
 			 */
-enum function_type {FT_UNSUPPORTED=-1, FT_NONE=0, FT_SUM=1, FT_MAX=2, FT_DATE=3, FT_HOUR=4, FT_MAX_CONCAT=5, FT_CHAR=6, FT_COUNT=7 };
+enum function_type {FT_UNSUPPORTED=-1, FT_NONE=0, FT_SUM=1, FT_MAX=2, FT_MIN=3, FT_AVG=4, FT_COUNT=5, FT_STREAM_COUNT=6, FT_DATE=7, FT_HOUR=8, FT_MAX_CONCAT=9, FT_CHAR=10 };
 
 
 
@@ -5246,14 +5246,14 @@ char ha_scaledb::getCASType(enum_field_types mysql_type, int flags)
 }
 
 
-int ha_scaledb::generateGroupConditionString(char* buf, int max_buf, unsigned short dbid, unsigned short tabid)
+int ha_scaledb::generateGroupConditionString(int cardinality, char* buf, int max_buf, unsigned short dbid, unsigned short tabid)
 {
 	Item *item;
 
 	int pos=0;
 
 	GroupByAnalyticsHeader* gbh= (GroupByAnalyticsHeader*)buf;
-	gbh->cardinality=1000;
+	gbh->cardinality=cardinality;
 	
 	pos=pos+sizeof(GroupByAnalyticsHeader);
 
@@ -5288,10 +5288,11 @@ int ha_scaledb::generateGroupConditionString(char* buf, int max_buf, unsigned sh
 			case Item::FUNC_ITEM:
 				{
 
-#ifdef SDB_WINDOWS
+
 					  //these are  functions, so just ignore.
 					 Item_func *func = ((Item_func *)item);
-					 if(typeid(*func)==typeid(Item_func_char))
+
+ 		 		 	 if(checkFunc(func->name, "char"))
 					 {
 						 function=FT_CHAR;
 						 Field *field =((Item_field *)item->next)->field;
@@ -5299,7 +5300,7 @@ int ha_scaledb::generateGroupConditionString(char* buf, int max_buf, unsigned sh
 						 type= field->type();	 
 
 
-					 }else if(typeid(*func)==typeid(Item_date_typecast))
+					 }else  if(checkFunc(func->name, "date"))      
 					 {
 						 function=FT_DATE;
 						 Field *field =((Item_field *)item->next)->field;
@@ -5307,7 +5308,7 @@ int ha_scaledb::generateGroupConditionString(char* buf, int max_buf, unsigned sh
 						  type= field->type();
 	
 						 
-					 }else if(typeid(*func)==typeid(Item_func_hour))
+					 }else  if(checkFunc(func->name, "hour"))   
 					 {
 						  function=FT_HOUR;
 						  Field *field =((Item_field *)item->next)->field;
@@ -5321,12 +5322,7 @@ int ha_scaledb::generateGroupConditionString(char* buf, int max_buf, unsigned sh
 						col_name=NULL;
 						type= MYSQL_TYPE_NULL;
 					 }
-#else
-					function=FT_UNSUPPORTED;
-					col_name=NULL;
-					type= MYSQL_TYPE_NULL;
 
-#endif
 					break;
 				}
 			default:
@@ -5364,11 +5360,20 @@ void ha_scaledb::addSelectField(char* buf, int& pos, unsigned short dbid, unsign
 	char castype=	getCASType(type,0) ;
 	
 	SelectAnalyticsBody2* sab2= (SelectAnalyticsBody2*)(buf+pos);
-
-	unsigned short columnNumber = SDBGetColumnNumberByName(dbid, tabid, col_name );
-	sab2->field_offset=SDBGetColumnOffsetByNumber(dbid, tabid, columnNumber);;	//number of fields in operation
-	sab2->length=SDBGetColumnSizeByNumber(dbid, tabid, columnNumber);		//the length of data
-	sab2->type = castype;				//the column type
+	if(strcmp("?",col_name)==0)
+	{
+		//for count(*) don't have column info
+		sab2->field_offset=0;	//number of fields in operation
+		sab2->length=0;		//the length of data
+		sab2->type = 0;
+	}
+	else
+	{
+		unsigned short columnNumber = SDBGetColumnNumberByName(dbid, tabid, col_name );
+		sab2->field_offset=SDBGetColumnOffsetByNumber(dbid, tabid, columnNumber);;	//number of fields in operation
+		sab2->length=SDBGetColumnSizeByNumber(dbid, tabid, columnNumber);		//the length of data
+		sab2->type = castype;				//the column type
+	}
 	sab2->function=function;		//this is operation to perform on the field
 
 	if(function!=FT_NONE) {contains_analytics=true;}
@@ -5379,7 +5384,24 @@ bool ha_scaledb::checkFunc(char* name, char* my_function)
 {
 	 char* func_name= strtok(name, "(");
 	 if(strcasecmp(my_function,func_name)==0) {return true;}
-         else {return false;}
+     else
+	 {
+		 return false;
+	 }
+}
+bool ha_scaledb::checkNestedFunc(char* name, char* my_func1, char* my_func2)
+{
+	 char* func_name= strtok(name, "(");
+	 if(strcasecmp(my_func1,func_name)==0)
+	 {
+		 char* func_name= strtok(NULL, "(");
+		 if(strcasecmp(my_func2,func_name)==0) {return true;}
+		 else {return false;}
+	 }
+     else
+	 {		
+		 return false;
+	 }
 }
 int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned short dbid, unsigned short tabid)
 {
@@ -5413,7 +5435,8 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 		const char* col_name;
 		enum_field_types type;
 		function_type function;
-		
+		no_fields=0;	//reset the number of fields
+
 		switch (item->type())
 		{
 
@@ -5435,7 +5458,23 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 
 					Field *field =((Item_field *)item->next)->field;
 					col_name=field->field_name;
-                                    type= field->type();
+                    type= field->type();
+				}
+				else if (sum->sum_func() == Item_sum::COUNT_FUNC)
+				{
+					function=FT_COUNT;
+					Field *field =((Item_field *)item->next)->field;
+
+					col_name=field->field_name;
+					if(strcmp("?",col_name)==0)
+					{
+	                                        type=MYSQL_TYPE_NULL;
+					}
+					else
+					{
+						type=field->type();
+					}
+
 				}
 				else if (sum->sum_func() == Item_sum::MAX_FUNC)
 				{
@@ -5461,8 +5500,9 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 							
 							 Item_func *func = ((Item_func *)item->next);
 
-#ifdef SDB_WINDOWS
-							 if(typeid(*func)==typeid(Item_func_concat))
+
+
+							 if(checkNestedFunc(sum->name, "max","concat"))
 							 {
 								 sab1->function=FT_MAX_CONCAT;
 								//concat operator
@@ -5488,8 +5528,7 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 									{
 										item= item->next;
 										function=FT_NONE;
-										if(typeid(*item)==typeid(Item_func_char)) {function=FT_CHAR;}
-							
+										if(checkFunc(item->name, "char")) {function=FT_CHAR;}
 										Item::Type ft2=item->type();
 										if(ft2==Item::FIELD_ITEM)
 										{								
@@ -5551,9 +5590,7 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 							  {
 								  return 0;
 							  }
-#else
-						return 0;
-#endif
+
 						}
 						else
 						{
@@ -5572,7 +5609,7 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 						Field *field =((Item_field *)item->next)->field;
 						col_name=field->field_name;
 					        type= field->type();
-						function=FT_COUNT;
+						function=FT_STREAM_COUNT;
 					}
 					else
 					{
@@ -5588,18 +5625,17 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 			}
 			case Item::FUNC_ITEM:
 				{
-#ifdef SDB_WINDOWS
+
 					  //these are non-aggregate functions.
 					 Item_func *func = ((Item_func *)item);
-
-					 if(typeid(*func)==typeid(Item_date_typecast))
+					 if(checkFunc(func->name, "date"))
 					 {
 						 function=FT_DATE;
 						 Field *field =((Item_field *)item->next)->field;
 						 col_name=field->field_name;
 						 type= field->type();			
 						 
-					 }else if(typeid(*func)==typeid(Item_func_hour))
+					 }else if(checkFunc(func->name, "hour"))   
 					 {
 						  function=FT_HOUR;
 						  Field *field =((Item_field *)item->next)->field;
@@ -5612,12 +5648,7 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 						col_name=NULL;
 						type= MYSQL_TYPE_NULL;					
 					 }
-#else
 
-					function=FT_UNSUPPORTED;
-					col_name=NULL;
-					type= MYSQL_TYPE_NULL;
-#endif
 					
 					break;
 				}
@@ -5663,40 +5694,62 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 //--------------------------------------------------------------------------------------------------
 void ha_scaledb::saveConditionToString(const COND *cond)
 {
+	THD* thd = ha_thd();
+
 	unsigned short DBID=0;
 	unsigned short TABID=0;
 	analyticsStringLength_		=
 	conditionStringLength_		= 0;
 
-	if ( !( conditionTreeToString( cond, &conditionString_, &conditionStringLength_, &DBID, &TABID ) ) )
+	char* s_disable_pushdown=SDBUtilFindComment(thd->query(), "disable_condition_pushdown") ; //if disable_condition_pushdown is in comment then don't do pushdown
+
+	if (s_disable_pushdown==NULL)
 	{
-		conditionStringLength_	= 0;
-	}
+
+		if ( !( conditionTreeToString( cond, &conditionString_, &conditionStringLength_, &DBID, &TABID ) ) )
+		{
+			conditionStringLength_	= 0;
+		}
 #ifdef CONDITION_PUSH_DEBUG
-	else
-	{
-		printMYSQLConditionBuffer(conditionString_, conditionStringLength_);
-	}
+		else
+		{
+			printMYSQLConditionBuffer(conditionString_, conditionStringLength_);
+		}
 #endif	//CONDITION_PUSH_DEBUG
 
 
-//#define _ENABLE_SELECT_CONDITION_STRING
-#ifdef	_ENABLE_SELECT_CONDITION_STRING
-	char	group_buf[ 2000 ];
-	char	select_buf[ 2000 ];
-	int		len1		= generateGroupConditionString( group_buf, sizeof( group_buf ), DBID, TABID );
 
-	
-	int		len2		= generateSelectConditionString( select_buf, sizeof( select_buf ),DBID, TABID  );
 
-	if ( len1		> 0 && len2		> 0 )
-	{
-		//need to check condition string is big enough?
-		memcpy(	analyticsString_, group_buf, len1 );
-		memcpy(	analyticsString_+len1, select_buf, len2 );
-		analyticsStringLength_	= len1+len2;
+		int  cardinality=SDBUtilFindCommentIntValue(thd->query(), "cardinality") ;
+
+
+		if(cardinality==0) {cardinality=1000;}
+
+		char	group_buf[ 2000 ];
+		char	select_buf[ 2000 ];
+		int		len1		= generateGroupConditionString(cardinality, group_buf, sizeof( group_buf ), DBID, TABID );
+
+
+		int		len2		= generateSelectConditionString( select_buf, sizeof( select_buf ),DBID, TABID  );
+
+
+		//check if analytics is enabled
+
+
+
+		char* s_analytics=SDBUtilFindComment(thd->query(), "sdb_analytics") ;
+
+
+
+		if  (s_analytics!= NULL &&  len1		> 0 && len2		> 0 )
+		{
+			//need to check condition string is big enough?
+			memcpy(	analyticsString_, group_buf, len1 );
+			memcpy(	analyticsString_+len1, select_buf, len2 );
+			analyticsStringLength_	= len1+len2;
+		}
 	}
-#endif	//_ENABLE_SELECT_CONDITION_STRING
+
 }
 
 
