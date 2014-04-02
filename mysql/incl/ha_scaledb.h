@@ -84,7 +84,12 @@ Version for file format.
 #define SCALEDB_VERSION 1
 #if defined(MARIADB_BASE_VERSION) && MYSQL_VERSION_ID >= 100000
 #define _MARIA_SDB_10
-//#define _USE_NEW_MARIADB_DISCOVERY
+#define _USE_NEW_MARIADB_DISCOVERY
+int store_create_info(THD *thd, TABLE_LIST *table_list, String *packet,
+                      HA_CREATE_INFO *create_info_arg, bool show_database,
+                      bool create_or_replace);
+bool parse_sql(THD *thd, Parser_state *parser_state,
+               Object_creation_ctx *creation_ctx, bool do_pfs_digest=false);
 #endif
 
 #ifdef USE_PRAGMA_INTERFACE
@@ -346,6 +351,7 @@ public:
 	int getSDBType(Field* pField, enum_field_types fieldType,  unsigned char& sdbFieldType, unsigned short& sdbMaxDataLength,  unsigned short& sdbFieldSize, unsigned short&  dataLength) ;
 
 #endif // _HIDDEN_DIMENSION_TABLE 
+	int init_from_sql_statement_string(TABLE *table_arg, THD *thd, bool write, const char *sql, size_t sql_length);
 	int create(const char* name, TABLE *form, HA_CREATE_INFO *create_info); ///< required
 	int add_columns_to_table(THD* thd, TABLE *table_arg, unsigned short ddlFlag,unsigned short tableCharSet, char* rangekey, int& number_streaming_keys, int& number_streaming_attributes,bool dimensionTable,SdbDynamicArray * fkInfoArray);
 	int add_indexes_to_table(THD* thd, TABLE *table_arg, char* tblName, unsigned short ddlFlag,
@@ -601,6 +607,99 @@ private:
 			tableCharSet = SDB_UTF8;
 		}
 		return tableCharSet;
+	}
+
+	inline static void convertTimeStringToTimeConstant( THD* pMysqlThd, Item* pItem, const char* pString, unsigned short stringSize,
+														int temporalDataType, unsigned char* pDataType, unsigned char* pDataValue )
+	{
+		MYSQL_TIME		myTime;
+		long long		timestamp;
+		ulonglong		datetime;
+		unsigned int	uiError;
+
+		// Convert the time string to a time value and then to a timestamp
+		if ( convertStringToTime( pMysqlThd, pString, stringSize, temporalDataType, &myTime ) )
+		{
+			switch ( temporalDataType )
+			{
+				case MYSQL_TYPE_TIMESTAMP:
+				{
+					// Convert the time value  to a timestamp
+					timestamp		= TIME_to_timestamp( pMysqlThd, &myTime, &uiError );
+
+					if ( uiError )
+					{
+						// Timestamp conversion error
+						timestamp	= 0;
+					}
+
+					*pDataType		= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_TIMESTAMP );
+					*( ( long long* ) pDataValue ) = timestamp;
+					break;
+				}
+
+				case MYSQL_TYPE_TIME:
+				{
+					// Convert the time value to its stored format
+					timestamp		= convertTimeStructToTimeType( &myTime );
+
+					*pDataType		= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_TIME );
+					*( ( long long* ) pDataValue ) = timestamp;
+					break;
+				}
+
+				case MYSQL_TYPE_DATETIME:
+				{
+					datetime		= TIME_to_ulonglong_datetime( &myTime );
+
+					*pDataType		= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_DATETIME );
+					*( ( ulonglong* ) pDataValue ) = datetime;
+					break;
+				}
+
+				case MYSQL_TYPE_DATE:
+				case MYSQL_TYPE_NEWDATE:
+				{
+					datetime		= convertTimeStructToNewdateType( &myTime );
+
+					*pDataType		= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_DATE );
+					*( ( ulonglong* ) pDataValue ) = datetime;
+					break;
+				}
+
+				case MYSQL_TYPE_YEAR:
+				{
+					datetime		= convertYearToStoredFormat( ( ( Item_int* ) pItem )->val_int() );
+
+					*pDataType		= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_YEAR );
+					*( ( ulonglong* ) pDataValue ) = datetime;
+					break;
+				}
+			}
+		}
+		else
+		{
+			// Time conversion error
+			switch ( temporalDataType )
+			{
+				case MYSQL_TYPE_TIMESTAMP:
+					*pDataType		= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_TIMESTAMP );
+					*( ( long long* ) pDataValue ) = 0;
+					break;
+				case MYSQL_TYPE_TIME:
+					*pDataType		= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_TIME );
+					*( ( long long* ) pDataValue ) = 0;
+					break;
+				case MYSQL_TYPE_DATETIME:
+					*pDataType		= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_DATETIME );
+					*( ( ulonglong* ) pDataValue ) = 0;
+					break;
+				default:
+					*pDataType		= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_UNSIGNED_INTEGER );
+					*( ( ulonglong* ) pDataValue ) = 0;
+					break;
+			}
+		}
 	}
 
 	inline static bool convertStringToTime( THD* pMysqlThd, const char* pString, unsigned short stringSize, int temporalDataType, MYSQL_TIME* pMyTime )

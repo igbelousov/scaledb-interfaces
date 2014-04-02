@@ -104,6 +104,8 @@ struct SelectAnalyticsBody2
 };
 #pragma pack()
 
+
+
 unsigned char ha_scaledb::mysqlInterfaceDebugLevel_ = 0; // defines the debug level for Interface component
 SDBFieldType  ha_scaledb::mysqlToSdbType_[MYSQL_TYPE_GEOMETRY+1] = {NO_TYPE, };
 
@@ -4521,72 +4523,22 @@ bool ha_scaledb::conditionTreeToString( const COND* cond, unsigned char** buffer
 								}
 								else
 								{
-									const char*		pString			= ( ( ( Item_int* ) pComperandItem )->str_value ).ptr();
-									unsigned short	stringSize		= ( ( ( Item_int* ) pComperandItem )->str_value ).length();
-									short			diffSize		= ( ( short ) stringSize ) - 8;
 									THD*			pMysqlThd		= ha_thd();
-									MYSQL_TIME		myTime;
-									long long		timestamp;
-									ulonglong		datetime;
-									unsigned int	uiError;
+									const char*		pString;
+									unsigned short	stringSize;
+									short			diffSize;
 
-									// Convert the time string to a time value and then to a timestamp
-									if ( convertStringToTime( pMysqlThd, pString, stringSize, ( ( ( Item_field* ) subItem )->field )->type(), &myTime ) )
+									if ( pComperandItem->type()	   == Item::CACHE_ITEM )
 									{
-										switch ( fieldType )
-										{
-											case MYSQL_TYPE_TIMESTAMP:
-											{
-												// Convert the time value to a timestamp
-												timestamp			= TIME_to_timestamp( pMysqlThd, &myTime, &uiError );
-
-												if ( uiError )
-												{
-													// Timestamp conversion error
-													timestamp		= 0;
-												}
-												break;
-											}
-
-											case MYSQL_TYPE_TIME:
-											{
-												// Convert the time value to its stored format
-												timestamp			= convertTimeStructToTimeType( &myTime );
-												break;
-											}
-
-											case MYSQL_TYPE_DATETIME:
-											{
-												datetime			= TIME_to_ulonglong_datetime( &myTime );
-												break;
-											}
-
-											case MYSQL_TYPE_DATE:
-											case MYSQL_TYPE_NEWDATE:
-											{
-												datetime			= convertTimeStructToNewdateType( &myTime );
-												break;
-											}
-
-											case MYSQL_TYPE_YEAR:
-											{
-												datetime			= convertYearToStoredFormat( ( ( Item_int* ) pComperandItem )->value );
-												break;
-											}
-										}
+										pString						= ( ( ( Item_cache_str* ) pComperandItem )->val_str( NULL ) )->ptr();
+										stringSize					= ( ( ( Item_cache_str* ) pComperandItem )->val_str( NULL ) )->length();
+										diffSize					= 0;
 									}
 									else
 									{
-										// Time conversion error
-										switch ( fieldType )
-										{
-											case MYSQL_TYPE_TIMESTAMP:
-											case MYSQL_TYPE_TIME:
-												timestamp			= 0;
-												break;
-											default:
-												datetime			= 0;
-										}
+										pString						= ( ( ( Item_int* ) pComperandItem )->str_value ).ptr();
+										stringSize					= ( ( ( Item_int* ) pComperandItem )->str_value ).length();
+										diffSize					= ( ( short ) stringSize ) - 8;
 									}
 
 									if ( diffSize )
@@ -4596,28 +4548,11 @@ bool ha_scaledb::conditionTreeToString( const COND* cond, unsigned char** buffer
 										( *nodeOffset )			   -= diffSize;
 									}
 
-									switch ( fieldType )
-									{
-										case MYSQL_TYPE_TIMESTAMP:
-											*( pComperandData + USER_DATA_OFFSET_DATA_TYPE ) = ( unsigned char )
-																							   ( SDB_PUSHDOWN_LITERAL_DATA_TYPE_TIMESTAMP );
-											*( ( long long* )( pComperandData + USER_DATA_OFFSET_USER_DATA ) ) = timestamp;
-											break;
-										case MYSQL_TYPE_TIME:
-											*( pComperandData + USER_DATA_OFFSET_DATA_TYPE ) = ( unsigned char )
-																							   ( SDB_PUSHDOWN_LITERAL_DATA_TYPE_TIME );
-											*( ( long long* )( pComperandData + USER_DATA_OFFSET_USER_DATA ) ) = timestamp;
-											break;
-										case MYSQL_TYPE_DATETIME:
-											*( pComperandData + USER_DATA_OFFSET_DATA_TYPE ) = ( unsigned char )
-																							   ( SDB_PUSHDOWN_LITERAL_DATA_TYPE_DATETIME );
-											*( ( ulonglong* )( pComperandData + USER_DATA_OFFSET_USER_DATA ) ) = datetime;
-											break;
-										default:
-											*( pComperandData + USER_DATA_OFFSET_DATA_TYPE ) = ( unsigned char )
-																							   ( SDB_PUSHDOWN_LITERAL_DATA_TYPE_UNSIGNED_INTEGER );
-											*( ( ulonglong* )( pComperandData + USER_DATA_OFFSET_USER_DATA ) ) = datetime;
-									}
+									// Convert the time string to a time value, and deposit into the condition string
+									convertTimeStringToTimeConstant( pMysqlThd, pComperandItem, pString,stringSize,
+																	 ( ( ( Item_field* ) subItem )->field )->type(),
+																	 pComperandData + USER_DATA_OFFSET_DATA_TYPE,
+																	 pComperandData + USER_DATA_OFFSET_USER_DATA );
 
 									*( pComperandData + USER_DATA_OFFSET_DATA_SIZE ) = ( unsigned char )( 8 );
 								}
@@ -4959,7 +4894,7 @@ bool ha_scaledb::conditionTreeToString( const COND* cond, unsigned char** buffer
 									}
 								}
 
-								( *nodeOffset )					   += USER_DATA_OFFSET_USER_DATA + 8;
+								( *nodeOffset )				   += USER_DATA_OFFSET_USER_DATA + 8;
 								break;
 								
 							case MYSQL_TYPE_DOUBLE:
@@ -4969,6 +4904,27 @@ bool ha_scaledb::conditionTreeToString( const COND* cond, unsigned char** buffer
 								*( ( double* )( *buffer + *nodeOffset + USER_DATA_OFFSET_USER_DATA ) )	= ( double )( ( Item_cache_decimal* ) subItem )->val_real();
 								( *nodeOffset ) += USER_DATA_OFFSET_USER_DATA + 8;
 								break;
+
+							case MYSQL_TYPE_TIMESTAMP:
+							case MYSQL_TYPE_TIME:
+							case MYSQL_TYPE_DATETIME:
+							case MYSQL_TYPE_DATE:
+							case MYSQL_TYPE_NEWDATE:
+							case MYSQL_TYPE_YEAR:
+								if ( pComperandItem )
+								{
+									int				dataType	= ( ( ( Item_field* ) pComperandItem )->field )->type();
+									const char*		pString		= ( ( ( Item_cache_str* ) subItem )->val_str( NULL ) )->ptr();
+									unsigned short	stringSize	= ( ( ( Item_cache_str* ) subItem )->val_str( NULL ) )->length();
+
+									convertTimeStringToTimeConstant( ha_thd(), subItem, pString, stringSize, dataType,
+																	 *buffer + *nodeOffset + USER_DATA_OFFSET_DATA_TYPE,
+																	 *buffer + *nodeOffset + USER_DATA_OFFSET_USER_DATA );
+
+									*( *buffer + *nodeOffset + USER_DATA_OFFSET_DATA_SIZE ) = ( unsigned char )( 8 );
+									( *nodeOffset )			   += USER_DATA_OFFSET_USER_DATA + 8;
+									break;
+								}
 
 							default:				// treat as a negative int
 								*( *buffer + *nodeOffset + USER_DATA_OFFSET_DATA_TYPE )	= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_SIGNED_INTEGER );
@@ -5083,7 +5039,7 @@ bool ha_scaledb::conditionTreeToString( const COND* cond, unsigned char** buffer
   };
 
 			 */
-enum function_type {FT_UNSUPPORTED=-1, FT_NONE=0, FT_SUM=1, FT_MAX=2, FT_MIN=3, FT_AVG=4, FT_COUNT=5, FT_STREAM_COUNT=6, FT_DATE=7, FT_HOUR=8, FT_MAX_CONCAT=9, FT_CHAR=10 };
+enum function_type {FT_UNSUPPORTED=-1, FT_NONE=0, FT_MIN=1, FT_MAX=2, FT_SUM=3, FT_COUNT=4, FT_AVG=5, FT_STREAM_COUNT=6, FT_DATE=7, FT_HOUR=8, FT_MAX_CONCAT=9, FT_CHAR=10 };
 
 
 
@@ -7417,8 +7373,8 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 	// We need to make sure it is a regular CREATE TABLE command because this method is called
 	// when a user has ALTER TABLE or CREATE/DROP INDEX commands.
 	// We also need to make sure that the scaledb hint is not found in the user query.
-
-	if ((sqlCommand == SQLCOM_CREATE_TABLE)) 
+	
+	if ((sqlCommand == SQLCOM_CREATE_TABLE) )                                     
 	{
 
 #ifdef _USE_NEW_MARIADB_DISCOVERY
@@ -7427,7 +7383,8 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 		//this is necessary because the current SQL might not be a valid create table, could be a 
 		//create from select or a create if dont exist which will fail the init_from_sql_statement_string
 
-		int errorNum=table_arg->s->init_from_sql_statement_string(thd, true,thd->query(), thd->query_length());
+////		int errorNum=table_arg->s->init_from_sql_statement_string(thd, true,thd->query(), thd->query_length());
+		int errorNum=init_from_sql_statement_string(table_arg,thd, true,thd->query(), thd->query_length());
 		if(errorNum!=SUCCESS)
 		{
 			//there is a problem with the create table, probably a create select into, try generating the SQL from the
@@ -7438,6 +7395,10 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 			table_list.init_one_table(STRING_WITH_LEN(pDbName), tblFsName, strlen(tblFsName), NULL, TL_WRITE);
 			table_list.table=table_arg;
 			String _buffer; 
+		
+			int rc=store_create_info(thd, &table_list, &_buffer,
+                      NULL, false,
+                       true);
 			errorNum=table_arg->s->init_from_sql_statement_string(thd, true,_buffer.c_ptr(), _buffer.length());
 		}
 
@@ -7446,7 +7407,7 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 			SDBRemoveLocalTableInfo(sdbUserId_, sdbDbId_, sdbTableNumber_);
 			FREE_MEMORY(pCreateTableStmt);
 			DBUG_RETURN(convertToMysqlErrorCode(CREATE_TABLE_FAILED_IN_CLUSTER));
-		}
+		}		
 #endif //_MARIA_SDB_10
 		// commit the changes such that a different node would be able to read the updates.
 		SDBCommit(sdbUserId_, false);
@@ -7466,7 +7427,7 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 		}
 
 		// Now we store  the CREATE TABLE frm 
-		saveFrmData( tblFsName, sdbUserId_, sdbDbId_, sdbTableNumber_ );
+			saveFrmData( tblFsName, sdbUserId_, sdbDbId_, sdbTableNumber_ );
 	}
 
 
@@ -7495,6 +7456,102 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 	DBUG_RETURN(errorNum);
 
 }
+
+//the following code has been copied directly from mariadb table.cpp, with only 1 change the
+//sql_unusable_for_discovery check has been removed because it will cause
+// failures in the following SQL
+// create from where does not exist
+// partition tables
+
+#ifdef _USE_NEW_MARIADB_DISCOVERY
+
+int  ha_scaledb::init_from_sql_statement_string(TABLE *table_arg, THD *thd, bool write,
+                                        const char *sql, size_t sql_length)
+{
+  ulonglong saved_mode= thd->variables.sql_mode;
+  CHARSET_INFO *old_cs= thd->variables.character_set_client;
+  Parser_state parser_state;
+  bool error;
+  char *sql_copy;
+  handler *file;
+  LEX *old_lex;
+  Query_arena *arena, backup;
+  LEX tmp_lex;
+  KEY *unused1;
+  uint unused2;
+  handlerton *hton= plugin_hton(table_arg->s->db_plugin);
+  LEX_CUSTRING frm= {0,0};
+
+  DBUG_ENTER("TABLE_SHARE::init_from_sql_statement_string");
+
+  /*
+    Ouch. Parser may *change* the string it's working on.
+    Currently (2013-02-26) it is used to permanently disable
+    conditional comments.
+    Anyway, let's copy the caller's string...
+  */
+  if (!(sql_copy= thd->strmake(sql, sql_length)))
+    DBUG_RETURN(HA_ERR_OUT_OF_MEM);
+
+  if (parser_state.init(thd, sql_copy, sql_length))
+    DBUG_RETURN(HA_ERR_OUT_OF_MEM);
+
+  thd->variables.sql_mode= MODE_NO_ENGINE_SUBSTITUTION | MODE_NO_DIR_IN_CREATE;
+  thd->variables.character_set_client= system_charset_info;
+  tmp_disable_binlog(thd);
+  old_lex= thd->lex;
+  thd->lex= &tmp_lex;
+
+  arena= thd->stmt_arena;
+  if (arena->is_conventional())
+    arena= 0;
+  else
+    thd->set_n_backup_active_arena(arena, &backup);
+
+  lex_start(thd);
+
+  if ((error= parse_sql(thd, & parser_state, NULL) ))   //i have removed teh "suitable for discovery check" from the code to permit partitions, create from if don't exist etc
+    goto ret;
+
+  thd->lex->create_info.db_type= hton;
+
+  if (table_arg->s->tabledef_version.str)
+    thd->lex->create_info.tabledef_version= table_arg->s->tabledef_version;
+
+  promote_first_timestamp_column(&thd->lex->alter_info.create_list);
+  file= mysql_create_frm_image(thd, table_arg->s->db.str, table_arg->s->table_name.str,
+                               &thd->lex->create_info, &thd->lex->alter_info,
+                               C_ORDINARY_CREATE, &unused1, &unused2, &frm);
+  error|= file == 0;
+  delete file;
+
+  if (frm.str)
+  {
+    table_arg->s->option_list= 0;             // cleanup existing options ...
+    table_arg->s->option_struct= 0;           // ... if it's an assisted discovery
+    error= table_arg->s->init_from_binary_frm_image(thd, write, frm.str, frm.length);
+  }
+
+ret:
+  my_free(const_cast<uchar*>(frm.str));
+  lex_end(thd->lex);
+  thd->lex= old_lex;
+  if (arena)
+    thd->restore_active_arena(arena, &backup);
+  reenable_binlog(thd);
+  thd->variables.sql_mode= saved_mode;
+  thd->variables.character_set_client= old_cs;
+  if (thd->is_error() || error)
+  {
+    thd->clear_error();
+    my_error(ER_SQL_DISCOVER_ERROR, MYF(0),
+             plugin_name(table_arg->s->db_plugin)->str, table_arg->s->db.str, table_arg->s->table_name.str,
+             sql_copy);
+    DBUG_RETURN(HA_ERR_GENERIC);
+  }
+  DBUG_RETURN(0);
+}
+#endif // _USE_NEW_MARIADB_DISCOVERY
 
 //create table will call this function to save frm file
 int saveFrmData(const char* name, unsigned short userId, unsigned short dbId, unsigned short tableId) {
