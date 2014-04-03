@@ -119,6 +119,51 @@ typedef struct SimpleCondContext{
 
 #define _HIDDEN_DIMENSION_TABLE
 
+
+//added because we can't include pushdown_condition.h
+#pragma pack(1)  //prevent padding of struct
+struct GroupByAnalyticsHeader
+{
+	long cardinality;
+	short numberColumns;
+};
+struct GroupByAnalyticsBody
+{
+		short field_offset;			//the position in table row
+		short length;			//the length of data 
+		char type;				//the column type
+		short function;			//this is operation to perform
+		short function_length;  //the column type	
+};
+
+
+struct SelectAnalyticsHeader
+{
+	short numberColumns;
+};
+
+struct SelectAnalyticsBody1
+{
+		short numberFields;		//the number of fields in column	
+		short function;	
+};
+
+	
+struct SelectAnalyticsBody2
+{
+		short field_offset;			//the position in table row
+		short length;			//the length of data 
+		char type;				//the column type
+		short function;			//this is operation to perform
+};
+#pragma pack()
+
+
+enum function_type { FT_NONE=0, FT_MIN=1, FT_MAX=2, FT_SUM=3, FT_COUNT=4, FT_AVG=5, FT_STREAM_COUNT=6, FT_DATE=7, FT_HOUR=8, FT_MAX_CONCAT=9, FT_CHAR=10, FT_UNSUPPORTED=11 };
+
+
+
+
 class ha_scaledb: public handler
 {
 public:
@@ -341,6 +386,7 @@ public:
 	int generateSelectConditionString(char* buf, int max_buf, unsigned short dbid, unsigned short tabid);
 	bool checkFunc(char* name, char* my_function);
 	bool checkNestedFunc(char* name, char* my_func1, char* my_func2);
+	Item* NestedFunc(enum_field_types& type, function_type& function, int& no_fields, char* name, Item::Type ft, Item *item, Item_sum* sum, char* buf, int& pos, SelectAnalyticsBody1* sab1,unsigned short dbid, unsigned short tabid, bool& contains_analytics_function );
 	void addSelectField(char* buf, int& pos, unsigned short dbid, unsigned short tabid, enum_field_types type, short function,  const char* col_name, bool& contains_analytics );
 #ifdef _HIDDEN_DIMENSION_TABLE // UTIL FUNC DECLERATION  
 	char * getDimensionTableName(char* table_name, char* col_name, char* dimension_table_name);
@@ -904,6 +950,75 @@ private:
 #endif
 
 		return true;
+	}
+	
+#ifdef	_MARIA_SDB_10
+	inline static bool getTimeCachedResult( THD* pMysqlThd, Item* pItem, int temporalDataType, MYSQL_TIME* pMyTime )
+	{
+		return ( ( Item_cache_temporal* ) pItem )->get_date_result( pMyTime, sql_mode_for_dates( pMysqlThd ) );
+	}
+#endif	// MARIADB 10
+
+	inline static void convertTimeToType( THD* pMysqlThd, Item* pItem, int temporalDataType, MYSQL_TIME* pMyTime, unsigned char* pDataType, unsigned char* pDataValue )
+	{
+		long long			timestamp;
+		ulonglong			datetime;
+		unsigned int		uiError;
+
+		switch ( temporalDataType )
+		{
+			case MYSQL_TYPE_TIMESTAMP:
+			{
+				// Convert the time value  to a timestamp
+				timestamp						= TIME_to_timestamp( pMysqlThd, pMyTime, &uiError );
+				if ( uiError )
+				{
+					// Timestamp conversion error
+					timestamp					= 0;
+				}
+
+				*pDataType						= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_TIMESTAMP );
+				*( ( long long* ) pDataValue )	= timestamp;
+				break;
+			}
+			case MYSQL_TYPE_TIME:
+			{
+				// Convert the time value to its stored format
+				timestamp						= convertTimeStructToTimeType( pMyTime );
+
+				*pDataType						= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_TIME );
+				*( ( long long* ) pDataValue )	= timestamp;
+				break;
+			}
+
+			case MYSQL_TYPE_DATETIME:
+			{
+				datetime						= TIME_to_ulonglong_datetime( pMyTime );
+
+				*pDataType						= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_DATETIME );
+				*( ( ulonglong* ) pDataValue )	= datetime;
+				break;
+			}
+
+			case MYSQL_TYPE_DATE:
+			case MYSQL_TYPE_NEWDATE:
+			{
+				datetime						= convertTimeStructToNewdateType( pMyTime );
+
+				*pDataType						= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_DATE );
+				*( ( ulonglong* ) pDataValue )	= datetime;
+				break;
+			}
+
+			case MYSQL_TYPE_YEAR:
+			{
+				datetime						= convertYearToStoredFormat( ( ( Item_int* ) pItem )->val_int() );
+
+				*pDataType						= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_YEAR );
+				*( ( ulonglong* ) pDataValue )	= datetime;
+				break;
+			}
+		}
 	}
 
 	inline static unsigned int convertTimeStructToDateType( MYSQL_TIME* pMyTime )

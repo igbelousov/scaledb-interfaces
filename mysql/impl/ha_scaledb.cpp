@@ -66,46 +66,6 @@
 #define _MICHAELS_NEW_DDL_DISCOVERY
 //#define _MICHAELS_NEW_DDL_DISCOVERY2
 
-//added because we can't include pushdown_condition.h
-#pragma pack(1)  //prevent padding of struct
-struct GroupByAnalyticsHeader
-{
-	long cardinality;
-	short numberColumns;
-};
-struct GroupByAnalyticsBody
-{
-		short field_offset;			//the position in table row
-		short length;			//the length of data 
-		char type;				//the column type
-		short function;			//this is operation to perform
-		short function_length;  //the column type	
-};
-
-
-struct SelectAnalyticsHeader
-{
-	short numberColumns;
-};
-
-struct SelectAnalyticsBody1
-{
-		short numberFields;		//the number of fields in column	
-		short function;	
-};
-
-	
-struct SelectAnalyticsBody2
-{
-		short field_offset;			//the position in table row
-		short length;			//the length of data 
-		char type;				//the column type
-		short function;			//this is operation to perform
-};
-#pragma pack()
-
-
-
 unsigned char ha_scaledb::mysqlInterfaceDebugLevel_ = 0; // defines the debug level for Interface component
 SDBFieldType  ha_scaledb::mysqlToSdbType_[MYSQL_TYPE_GEOMETRY+1] = {NO_TYPE, };
 
@@ -4524,20 +4484,38 @@ bool ha_scaledb::conditionTreeToString( const COND* cond, unsigned char** buffer
 								else
 								{
 									THD*			pMysqlThd		= ha_thd();
+									int				dataType		= ( ( ( Item_field* ) subItem )->field )->type();
 									const char*		pString;
 									unsigned short	stringSize;
 									short			diffSize;
+									bool			isFromString;
 
 									if ( pComperandItem->type()	   == Item::CACHE_ITEM )
 									{
+#ifdef	_MARIA_SDB_10
+										MYSQL_TIME	myTime;
+
+										// Get the cached value as a time value
+										getTimeCachedResult( pMysqlThd, subItem, dataType, &myTime );
+
+										// Convert the time value to the field's data type
+										convertTimeToType  ( pMysqlThd, subItem, dataType, &myTime,
+															 pComperandData + USER_DATA_OFFSET_DATA_TYPE,
+															 pComperandData + USER_DATA_OFFSET_USER_DATA );
+
+										isFromString				= false;
+#else	// MARIADB 5
 										pString						= ( ( ( Item_cache_str* ) pComperandItem )->val_str( NULL ) )->ptr();
 										stringSize					= ( ( ( Item_cache_str* ) pComperandItem )->val_str( NULL ) )->length();
+										isFromString				= true;
+#endif	// MARIADB 5
 										diffSize					= 0;
 									}
 									else
 									{
 										pString						= ( ( ( Item_int* ) pComperandItem )->str_value ).ptr();
 										stringSize					= ( ( ( Item_int* ) pComperandItem )->str_value ).length();
+										isFromString				= true;
 										diffSize					= ( ( short ) stringSize ) - 8;
 									}
 
@@ -4548,11 +4526,13 @@ bool ha_scaledb::conditionTreeToString( const COND* cond, unsigned char** buffer
 										( *nodeOffset )			   -= diffSize;
 									}
 
-									// Convert the time string to a time value, and deposit into the condition string
-									convertTimeStringToTimeConstant( pMysqlThd, pComperandItem, pString,stringSize,
-																	 ( ( ( Item_field* ) subItem )->field )->type(),
-																	 pComperandData + USER_DATA_OFFSET_DATA_TYPE,
-																	 pComperandData + USER_DATA_OFFSET_USER_DATA );
+									if ( isFromString )
+									{
+										// Convert the time string to a time value, and deposit into the condition string
+										convertTimeStringToTimeConstant( pMysqlThd, pComperandItem, pString, stringSize, dataType,
+																		 pComperandData + USER_DATA_OFFSET_DATA_TYPE,
+																		 pComperandData + USER_DATA_OFFSET_USER_DATA );
+									}
 
 									*( pComperandData + USER_DATA_OFFSET_DATA_SIZE ) = ( unsigned char )( 8 );
 								}
@@ -4725,69 +4705,14 @@ bool ha_scaledb::conditionTreeToString( const COND* cond, unsigned char** buffer
 								unsigned short	stringSize	= ( ( ( Item_int* ) subItem )->str_value ).length();
 								THD*			pMysqlThd	= ha_thd();
 								MYSQL_TIME		myTime;
-								long long		timestamp;
-								ulonglong		datetime;
-								unsigned int	uiError;
 
-								// Convert the time string to a time value and then to a timestamp
+								// Convert the time string to a time value
 								if ( convertStringToTime( pMysqlThd, pString, stringSize, temporalDataType, &myTime ) )
 								{
-									switch ( temporalDataType )
-									{
-										case MYSQL_TYPE_TIMESTAMP:
-										{
-											// Convert the time value  to a timestamp
-											timestamp		= TIME_to_timestamp( pMysqlThd, &myTime, &uiError );
-
-											if ( uiError )
-											{
-												// Timestamp conversion error
-												timestamp	= 0;
-											}
-
-											*( *buffer + *nodeOffset + USER_DATA_OFFSET_DATA_TYPE ) = ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_TIMESTAMP );
-											*( ( long long* )( *buffer + *nodeOffset + USER_DATA_OFFSET_USER_DATA ) ) = timestamp;
-											break;
-										}
-
-										case MYSQL_TYPE_TIME:
-										{
-											// Convert the time value to its stored format
-											timestamp		= convertTimeStructToTimeType( &myTime );
-
-											*( *buffer + *nodeOffset + USER_DATA_OFFSET_DATA_TYPE ) = ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_TIME );
-											*( ( long long* )( *buffer + *nodeOffset + USER_DATA_OFFSET_USER_DATA ) ) = timestamp;
-											break;
-										}
-
-										case MYSQL_TYPE_DATETIME:
-										{
-											datetime		= TIME_to_ulonglong_datetime( &myTime );
-
-											*( *buffer + *nodeOffset + USER_DATA_OFFSET_DATA_TYPE ) = ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_DATETIME );
-											*( ( ulonglong* )( *buffer + *nodeOffset + USER_DATA_OFFSET_USER_DATA ) ) = datetime;
-											break;
-										}
-
-										case MYSQL_TYPE_DATE:
-										case MYSQL_TYPE_NEWDATE:
-										{
-											datetime		= convertTimeStructToNewdateType( &myTime );
-
-											*( *buffer + *nodeOffset + USER_DATA_OFFSET_DATA_TYPE ) = ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_DATE );
-											*( ( ulonglong* )( *buffer + *nodeOffset + USER_DATA_OFFSET_USER_DATA ) ) = datetime;
-											break;
-										}
-
-										case MYSQL_TYPE_YEAR:
-										{
-											datetime		= convertYearToStoredFormat( ( ( Item_int* ) subItem )->val_int() );
-
-											*( *buffer + *nodeOffset + USER_DATA_OFFSET_DATA_TYPE ) = ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_YEAR );
-											*( ( ulonglong* )( *buffer + *nodeOffset + USER_DATA_OFFSET_USER_DATA ) ) = datetime;
-											break;
-										}
-									}
+									// Convert the time value to the field's data type
+									convertTimeToType  ( pMysqlThd, subItem, temporalDataType, &myTime,
+														 *buffer + *nodeOffset + USER_DATA_OFFSET_DATA_TYPE,
+														 *buffer + *nodeOffset + USER_DATA_OFFSET_USER_DATA );
 								}
 								else
 								{
@@ -4914,17 +4839,32 @@ bool ha_scaledb::conditionTreeToString( const COND* cond, unsigned char** buffer
 								if ( pComperandItem )
 								{
 									int				dataType	= ( ( ( Item_field* ) pComperandItem )->field )->type();
+									THD*			pMysqlThd	= ha_thd();
+#ifdef	_MARIA_SDB_10
+									MYSQL_TIME		myTime;
+
+									// Get the cached value as a time value
+									getTimeCachedResult( pMysqlThd, subItem, dataType, &myTime );
+
+									// Convert the time value to the field's data type
+									convertTimeToType  ( pMysqlThd, subItem, dataType, &myTime,
+														 *buffer + *nodeOffset + USER_DATA_OFFSET_DATA_TYPE,
+														 *buffer + *nodeOffset + USER_DATA_OFFSET_USER_DATA );
+#else	// MARIADB 5
 									const char*		pString		= ( ( ( Item_cache_str* ) subItem )->val_str( NULL ) )->ptr();
 									unsigned short	stringSize	= ( ( ( Item_cache_str* ) subItem )->val_str( NULL ) )->length();
 
-									convertTimeStringToTimeConstant( ha_thd(), subItem, pString, stringSize, dataType,
+									// Convert the cached value from a string to the field's data type
+									convertTimeStringToTimeConstant( pMysqlThd, subItem, pString, stringSize, dataType,
 																	 *buffer + *nodeOffset + USER_DATA_OFFSET_DATA_TYPE,
 																	 *buffer + *nodeOffset + USER_DATA_OFFSET_USER_DATA );
+#endif	// MARIADB 5
 
 									*( *buffer + *nodeOffset + USER_DATA_OFFSET_DATA_SIZE ) = ( unsigned char )( 8 );
 									( *nodeOffset )			   += USER_DATA_OFFSET_USER_DATA + 8;
 									break;
 								}
+								// Fall through ...
 
 							default:				// treat as a negative int
 								*( *buffer + *nodeOffset + USER_DATA_OFFSET_DATA_TYPE )	= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_SIGNED_INTEGER );
@@ -5039,8 +4979,6 @@ bool ha_scaledb::conditionTreeToString( const COND* cond, unsigned char** buffer
   };
 
 			 */
-enum function_type {FT_UNSUPPORTED=-1, FT_NONE=0, FT_MIN=1, FT_MAX=2, FT_SUM=3, FT_COUNT=4, FT_AVG=5, FT_STREAM_COUNT=6, FT_DATE=7, FT_HOUR=8, FT_MAX_CONCAT=9, FT_CHAR=10 };
-
 
 
 	
@@ -5351,7 +5289,7 @@ bool ha_scaledb::checkNestedFunc(char* name, char* my_func1, char* my_func2)
 	 if(strcasecmp(my_func1,func_name)==0)
 	 {
 		 char* func_name= strtok(NULL, "(");
-		 if(strcasecmp(my_func2,func_name)==0) {return true;}
+		 if(func_name!=NULL && strcasecmp(my_func2,func_name)==0) {return true;}
 		 else {return false;}
 	 }
      else
@@ -5359,6 +5297,116 @@ bool ha_scaledb::checkNestedFunc(char* name, char* my_func1, char* my_func2)
 		 return false;
 	 }
 }
+
+Item* ha_scaledb::NestedFunc(enum_field_types& type, function_type& function, int& no_fields, char* name, Item::Type ft, Item *item, Item_sum* sum, char* buf, int& pos, SelectAnalyticsBody1* sab1,unsigned short dbid, unsigned short tabid, bool& contains_analytics_function )
+{
+
+	int comma_count=0;
+	for(int i=0; i<=strlen(name);i++)
+	{
+		if(name[i]==',')
+		{
+			comma_count=comma_count+1;
+		}
+	}
+
+	int no_arguments=comma_count+1;
+
+	int arg=0;
+
+
+	Item_func *func = ((Item_func *)item->next);
+
+
+
+	if(checkNestedFunc(sum->name, "max","concat"))
+	{
+		sab1->function=FT_MAX_CONCAT;
+		//concat operator
+		char* buf_start=buf+pos;
+		while(arg<no_arguments)
+		{
+
+
+			item= item->next;
+			Item::Type ft1=item->type();
+			if(ft1==Item::FIELD_ITEM)
+			{
+				//save each field
+				Field *field1 = ((Item_field *)item)->field;
+				const char* col_name=field1->field_name;	
+				type= field1->type();
+				function=FT_NONE;
+
+				no_fields++;
+				addSelectField(buf,  pos, dbid, tabid, type, function,  col_name, contains_analytics_function );
+			}
+			else if(ft1==Item::FUNC_ITEM)
+			{
+				item= item->next;
+				function=FT_NONE;
+				if(checkFunc(item->name, "char")) {function=FT_CHAR;}
+				Item::Type ft2=item->type();
+				if(ft2==Item::FIELD_ITEM)
+				{								
+					Field *field2 = ((Item_field *)item)->field;
+					const char* col_name=field2->field_name;
+					type= field2->type();
+
+					no_fields++;
+					addSelectField(buf,  pos, dbid, tabid, type, function,  col_name,contains_analytics_function );
+				}
+				else if(ft2==Item::FUNC_ITEM)
+				{
+					item= item->next;
+					Item::Type ft2=item->type();
+					if(ft2==Item::FIELD_ITEM)
+					{								
+						Field *field2 = ((Item_field *)item)->field;
+						const char* col_name=field2->field_name;
+						type= field2->type();
+
+						no_fields++;
+						addSelectField(buf,  pos, dbid, tabid, type,function,  col_name,contains_analytics_function );
+					}
+				}
+				else
+				{
+					return 0;
+				}
+			}								
+			else if(ft1==Item::STRING_ITEM)
+			{
+				//skipping just a constant so can ignore.
+
+			}
+			else
+			{
+				return NULL;
+			}
+
+			arg++;
+		}
+
+		//reverse order
+		SelectAnalyticsBody2 tmp[10];
+		if(no_fields>9) {return NULL;} //max 10 arguments in nested funcition
+		int c,d;
+		for( c=no_fields-1,  d=0; c>=0; c--, d++)
+		{
+			tmp[d]=*((SelectAnalyticsBody2*)(buf_start+ c*sizeof(SelectAnalyticsBody2)));
+		}
+		//write back in correct order
+		for( c=0; c<no_fields; c++)
+		{
+			*((SelectAnalyticsBody2*)(buf_start+ c*sizeof(SelectAnalyticsBody2)))=tmp[c];
+		}
+
+
+	}
+	return item;
+}
+	
 int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned short dbid, unsigned short tabid)
 {
 	bool contains_analytics_function=false;
@@ -5432,6 +5480,28 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 					}
 
 				}
+				else if (sum->sum_func() == Item_sum::MIN_FUNC)
+				{
+						Item_sum_min *max = ((Item_sum_min *)item);
+						Item_result_field *rf= (Item_result_field *)sum;
+						Item::Type ft=item->next->type();
+						char* name= item->name;
+
+						if(ft==Item::FUNC_ITEM)
+						{
+							item=NestedFunc(type,function,no_fields,name, ft, item, sum,  buf,  pos,  sab1, dbid, tabid, contains_analytics_function );
+							if(item==NULL) {return 0;}			//unsupported so bail		
+						}
+						else
+						{
+							Field *field =((Item_field *)item->next)->field;
+							col_name=field->field_name;
+				     		type= field->type();				   
+							function=FT_MIN;
+					
+						}
+
+				}
 				else if (sum->sum_func() == Item_sum::MAX_FUNC)
 				{
 						Item_sum_max *max = ((Item_sum_max *)item);
@@ -5439,120 +5509,16 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 						Item::Type ft=item->next->type();
 						char* name= item->name;
 
-						int comma_count=0;
-						for(int i=0; i<=strlen(name);i++)
-						{
-							if(name[i]==',')
-							{
-							comma_count=comma_count+1;
-							}
-						}
-
-						int no_arguments=comma_count+1;
-
-						int arg=0;
 						if(ft==Item::FUNC_ITEM)
 						{
-							
-							 Item_func *func = ((Item_func *)item->next);
-
-
-
-							 if(checkNestedFunc(sum->name, "max","concat"))
-							 {
-								 sab1->function=FT_MAX_CONCAT;
-								//concat operator
-								 char* buf_start=buf+pos;
-								 while(arg<no_arguments)
-								 {
-
-								
-									item= item->next;
-									Item::Type ft1=item->type();
-									if(ft1==Item::FIELD_ITEM)
-									{
-										//save each field
-										Field *field1 = ((Item_field *)item)->field;
-										col_name=field1->field_name;	
-										type= field1->type();
-										function=FT_NONE;
-
-										no_fields++;
-										addSelectField(buf,  pos, dbid, tabid, type, function,  col_name, contains_analytics_function );
-									}
-									else if(ft1==Item::FUNC_ITEM)
-									{
-										item= item->next;
-										function=FT_NONE;
-										if(checkFunc(item->name, "char")) {function=FT_CHAR;}
-										Item::Type ft2=item->type();
-										if(ft2==Item::FIELD_ITEM)
-										{								
-											Field *field2 = ((Item_field *)item)->field;
-											col_name=field2->field_name;
-											type= field2->type();
-
-											no_fields++;
-											addSelectField(buf,  pos, dbid, tabid, type, function,  col_name,contains_analytics_function );
-										}
-										else if(ft2==Item::FUNC_ITEM)
-										{
-											item= item->next;
-											Item::Type ft2=item->type();
-											if(ft2==Item::FIELD_ITEM)
-											{								
-												Field *field2 = ((Item_field *)item)->field;
-												col_name=field2->field_name;
-												type= field2->type();
-
-												no_fields++;
-												addSelectField(buf,  pos, dbid, tabid, type,function,  col_name,contains_analytics_function );
-											}
-										}
-										else
-										{
-											return 0;
-										}
-									}								
-									else if(ft1==Item::STRING_ITEM)
-									{
-										//skipping just a constant so can ignore.
-										
-									}
-									else
-									{
-										return 0;
-									}
-
-									arg++;
-								 }
-
-								 //reverse order
-								 SelectAnalyticsBody2 tmp[10];
-								 int c,d;
-								 for( c=no_fields-1,  d=0; c>=0; c--, d++)
-								 {
-									 tmp[d]=*((SelectAnalyticsBody2*)(buf_start+ c*sizeof(SelectAnalyticsBody2)));
-								 }
-								 //write back in correct order
-								 for( c=0; c<no_fields; c++)
-								 {
-									*((SelectAnalyticsBody2*)(buf_start+ c*sizeof(SelectAnalyticsBody2)))=tmp[c];
-								 }
-
-
-							  }
-							  else
-							  {
-								  return 0;
-							  }
-
+							item=NestedFunc(type,function,no_fields,name, ft, item, sum,  buf,  pos,  sab1, dbid, tabid, contains_analytics_function );
+							if(item==NULL) {return 0;}			//unsupported so bail		
 						}
 						else
 						{
 							Field *field =((Item_field *)item->next)->field;
 							col_name=field->field_name;
-				     		        type= field->type();				   
+				     		type= field->type();				   
 							function=FT_MAX;
 					
 						}
@@ -5691,7 +5657,7 @@ void ha_scaledb::saveConditionToString(const COND *cond)
 
 		//check if analytics is enabled
 
-
+		 
 
 		char* s_analytics=SDBUtilFindComment(thd->query(), "sdb_analytics") ;
 
