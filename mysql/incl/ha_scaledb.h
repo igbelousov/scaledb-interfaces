@@ -579,7 +579,7 @@ private:
 	unsigned short analyticsStringAllocatedLength_;
 	unsigned short analyticsStringExtensionLength_;
 	unsigned short analyticsStringMaxLength_;
-
+	bool forceAnalytics_;
 	// number of rows in bulk insert 
 	ha_rows numOfBulkInsertRows_;
 	ha_rows numOfInsertedRows_;

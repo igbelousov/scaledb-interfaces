@@ -1558,6 +1558,7 @@ ha_scaledb::ha_scaledb(handlerton *hton, TABLE_SHARE *table_arg) :
 	analyticsStringExtensionLength_	=																// Must be a power of 2
 	analyticsStringAllocatedLength_	= 2048;															// Must be a power of 2
 	analyticsStringMaxLength_		= analyticsStringAllocatedLength_ * 8;
+	forceAnalytics_=false;
 	rowTemplate_.fieldArray_		= SDBArrayInit( 10, 5, sizeof( SDBFieldTemplate ),   true ); 
 	keyTemplate_[ 0 ].keyArray_		= SDBArrayInit( 10, 5, sizeof( SDBKeyPartTemplate ), true );
 	keyTemplate_[ 1 ].keyArray_		= SDBArrayInit( 10, 5, sizeof( SDBKeyPartTemplate ), true );
@@ -3785,6 +3786,7 @@ void ha_scaledb::prepareIndexOrSequentialQueryManager() {
 	{
 		analyticsStringLength_	= 0;
 	}
+	forceAnalytics_=false;
 }
 
 // prepare primary or first-key query manager
@@ -3903,7 +3905,7 @@ int ha_scaledb::prepareIndexKeyQuery(const uchar* key, uint key_len, enum ha_rke
 		{
 			analyticsStringLength_	= 0;
 		}
-
+		forceAnalytics_=false;
 		return retValue;
 	}
 
@@ -3977,6 +3979,17 @@ int ha_scaledb::prepareIndexKeyQuery(const uchar* key, uint key_len, enum ha_rke
 												   find_flag == HA_READ_KEY_EXACT && isFullKey && !use_prefetch,
 												   rowTemplate_, use_prefetch, conditionString_, conditionStringLength_, analyticsString_, analyticsStringLength_ );
 
+
+		if(forceAnalytics_==true && analyticsStringLength_==0)
+			{
+				conditionStringLength_	= 0;			
+				analyticsStringLength_	= 0;			
+				forceAnalytics_=false;
+				SDBSetErrorMessage( sdbUserId_, INVALID_STREAMING_OPERATION, "- force_sdb_analytics was set but not used." );
+				retValue = HA_ERR_GENERIC;
+				return retValue;
+			}
+
 	if ( conditionStringLength_ )
 	{
 		conditionStringLength_	= 0;
@@ -3986,6 +3999,7 @@ int ha_scaledb::prepareIndexKeyQuery(const uchar* key, uint key_len, enum ha_rke
 	{
 		analyticsStringLength_	= 0;
 	}
+	forceAnalytics_=false;
 
 	return retValue;
 }
@@ -5254,7 +5268,7 @@ void ha_scaledb::addSelectField(char* buf, int& pos, unsigned short dbid, unsign
 	char castype=	getCASType(type,0) ;
 	
 	SelectAnalyticsBody2* sab2= (SelectAnalyticsBody2*)(buf+pos);
-	if(strcmp("?",col_name)==0)
+	if ( ( !col_name ) || ( strcmp( "?", col_name ) == 0 ) )
 	{
 		//for count(*) don't have column info
 		sab2->field_offset=0;	//number of fields in operation
@@ -5273,10 +5287,17 @@ void ha_scaledb::addSelectField(char* buf, int& pos, unsigned short dbid, unsign
 	if(function!=FT_NONE) {contains_analytics=true;}
 	pos=pos+sizeof(SelectAnalyticsBody2);
 }
+char* trimwhitespace(char *str_base) {
+    char* buffer = str_base;
+    while((buffer = strchr(str_base, ' '))) {
+        strcpy(buffer, buffer+1);
+    }
 
+    return str_base;
+}
 bool ha_scaledb::checkFunc(char* name, char* my_function)
 {
-	 char* func_name= strtok(name, "(");
+	 char* func_name= trimwhitespace(strtok(name, "("));
 	 if(strcasecmp(my_function,func_name)==0) {return true;}
      else
 	 {
@@ -5285,10 +5306,10 @@ bool ha_scaledb::checkFunc(char* name, char* my_function)
 }
 bool ha_scaledb::checkNestedFunc(char* name, char* my_func1, char* my_func2)
 {
-	 char* func_name= strtok(name, "(");
+	 char* func_name= trimwhitespace(strtok(name, "("));
 	 if(strcasecmp(my_func1,func_name)==0)
 	 {
-		 char* func_name= strtok(NULL, "(");
+		 char* func_name= trimwhitespace(strtok(NULL, "("));
 		 if(func_name!=NULL && strcasecmp(my_func2,func_name)==0) {return true;}
 		 else {return false;}
 	 }
@@ -5300,11 +5321,14 @@ bool ha_scaledb::checkNestedFunc(char* name, char* my_func1, char* my_func2)
 
 Item* ha_scaledb::NestedFunc(enum_field_types& type, function_type& function, int& no_fields, char* name, Item::Type ft, Item *item, Item_sum* sum, char* buf, int& pos, SelectAnalyticsBody1* sab1,unsigned short dbid, unsigned short tabid, bool& contains_analytics_function )
 {
-
+	int len=strlen(name);
+	if(len>=1000) {return NULL;} //abort, function too long
+	char func_name[1000];
+	strcpy(func_name,name);
 	int comma_count=0;
-	for(int i=0; i<=strlen(name);i++)
+	for(int i=0; i<=len;i++)
 	{
-		if(name[i]==',')
+		if(func_name[i]==',')
 		{
 			comma_count=comma_count+1;
 		}
@@ -5319,7 +5343,7 @@ Item* ha_scaledb::NestedFunc(enum_field_types& type, function_type& function, in
 
 
 
-	if(checkNestedFunc(sum->name, "max","concat"))
+	if(checkNestedFunc(func_name, "max","concat"))
 	{
 		sab1->function=FT_MAX_CONCAT;
 		//concat operator
@@ -5403,6 +5427,10 @@ Item* ha_scaledb::NestedFunc(enum_field_types& type, function_type& function, in
 		}
 
 
+	}
+	else
+	{
+		return NULL;
 	}
 	return item;
 }
@@ -5593,7 +5621,14 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 		{
 			sab1->numberFields=1;
 			sab1->function=function;
-			if(function!=FT_NONE) {contains_analytics_function=true;}
+			switch ( function )
+			{
+				case FT_NONE:
+				case FT_UNSUPPORTED:
+					break;
+				default:
+					contains_analytics_function	= true;
+			}
 			addSelectField(buf,  pos, dbid, tabid, type, FT_NONE, col_name ,contains_analytics_function);
 		}
 		
@@ -5622,7 +5657,7 @@ void ha_scaledb::saveConditionToString(const COND *cond)
 	unsigned short TABID=0;
 	analyticsStringLength_		=
 	conditionStringLength_		= 0;
-
+	forceAnalytics_=false;
 	char* s_disable_pushdown=SDBUtilFindComment(thd->query(), "disable_condition_pushdown") ; //if disable_condition_pushdown is in comment then don't do pushdown
 
 	if (s_disable_pushdown==NULL)
@@ -5658,17 +5693,30 @@ void ha_scaledb::saveConditionToString(const COND *cond)
 		//check if analytics is enabled
 
 		 
+	//turn analytics on by default
+	//	char* s_analytics=SDBUtilFindComment(thd->query(), "sdb_analytics") ;
 
-		char* s_analytics=SDBUtilFindComment(thd->query(), "sdb_analytics") ;
+		char* s_force_analytics=SDBUtilFindComment(thd->query(), "force_sdb_analytics") ;
 
-
-
-		if  (s_analytics!= NULL &&  len1		> 0 && len2		> 0 )
+		if  (true )
 		{
-			//need to check condition string is big enough?
-			memcpy(	analyticsString_, group_buf, len1 );
-			memcpy(	analyticsString_+len1, select_buf, len2 );
-			analyticsStringLength_	= len1+len2;
+
+
+			if  ( len1		> 0 && len2		> 0 )
+			{
+				//need to check condition string is big enough?
+				memcpy(	analyticsString_, group_buf, len1 );
+				memcpy(	analyticsString_+len1, select_buf, len2 );
+				analyticsStringLength_	= len1+len2;
+			}
+			else
+			{
+				if(s_force_analytics!=NULL)
+				{
+					//analytics failed so return an error.
+					forceAnalytics_=true;
+				}
+			}
 		}
 	}
 
@@ -5715,6 +5763,7 @@ const COND* ha_scaledb::cond_push( const COND* pCond )
 			{
 				analyticsStringLength_	=
 				conditionStringLength_	= 0;
+				forceAnalytics_=false;
 			}
 		}
 
@@ -5913,6 +5962,7 @@ int ha_scaledb::rnd_init(bool scan) {
 	{
 		analyticsStringLength_ =
 		conditionStringLength_ = 0;
+		forceAnalytics_=false;
 	}
 	// For select statement, we use the sequential scan since full table scan is faster in this case.
 	// For non-select statement, if the table has index, then we prefer to use index 
@@ -5982,7 +6032,7 @@ int ha_scaledb::rnd_end() {
 
 	analyticsStringLength_	=
 	conditionStringLength_	= 0;
-
+	forceAnalytics_=false;
 	int errorNum = 0;
 	DBUG_RETURN(errorNum);
 }
@@ -6042,7 +6092,7 @@ int ha_scaledb::rnd_next(uchar* buf) {
 			{
 				analyticsStringLength_	= 0;
 			}
-			
+			forceAnalytics_=false;
 
 			// We fetch the result record and save it into buf
 			if (retValue == 0) {
@@ -6161,6 +6211,8 @@ int ha_scaledb::rnd_pos(uchar * buf, uchar *pos) {
 		{
 			analyticsStringLength_	= 0;
 		}
+		forceAnalytics_=false;
+
 	}
 
 	
