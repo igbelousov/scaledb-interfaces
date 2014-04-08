@@ -153,6 +153,8 @@ struct SelectAnalyticsBody2
 {
 		short field_offset;			//the position in table row
 		short length;			//the length of data 
+		short precision;
+		short scale;
 		char type;				//the column type
 		short function;			//this is operation to perform
 };
@@ -387,7 +389,7 @@ public:
 	bool checkFunc(char* name, char* my_function);
 	bool checkNestedFunc(char* name, char* my_func1, char* my_func2);
 	Item* NestedFunc(enum_field_types& type, function_type& function, int& no_fields, char* name, Item::Type ft, Item *item, Item_sum* sum, char* buf, int& pos, SelectAnalyticsBody1* sab1,unsigned short dbid, unsigned short tabid, bool& contains_analytics_function );
-	void addSelectField(char* buf, int& pos, unsigned short dbid, unsigned short tabid, enum_field_types type, short function,  const char* col_name, bool& contains_analytics );
+	void addSelectField(char* buf, int& pos, unsigned short dbid, unsigned short tabid, enum_field_types type, short function,  const char* col_name, bool& contains_analytics, short precison, short scale );
 #ifdef _HIDDEN_DIMENSION_TABLE // UTIL FUNC DECLERATION  
 	char * getDimensionTableName(char* table_name, char* col_name, char* dimension_table_name);
 	char * getDimensionTablePKName(char* table_name, char* col_name, char* dimension_pk_name);

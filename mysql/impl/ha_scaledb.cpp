@@ -5263,7 +5263,7 @@ int ha_scaledb::generateGroupConditionString(int cardinality, char* buf, int max
    }
 }
 
-void ha_scaledb::addSelectField(char* buf, int& pos, unsigned short dbid, unsigned short tabid, enum_field_types type, short function, const char* col_name, bool& contains_analytics )
+void ha_scaledb::addSelectField(char* buf, int& pos, unsigned short dbid, unsigned short tabid, enum_field_types type, short function, const char* col_name, bool& contains_analytics, short precision, short scale )
 {
 	char castype=	getCASType(type,0) ;
 	
@@ -5274,6 +5274,8 @@ void ha_scaledb::addSelectField(char* buf, int& pos, unsigned short dbid, unsign
 		sab2->field_offset=0;	//number of fields in operation
 		sab2->length=0;		//the length of data
 		sab2->type = 0;
+	        sab2->precision=0;
+		sab2->scale=0;
 	}
 	else
 	{
@@ -5281,6 +5283,8 @@ void ha_scaledb::addSelectField(char* buf, int& pos, unsigned short dbid, unsign
 		sab2->field_offset=SDBGetColumnOffsetByNumber(dbid, tabid, columnNumber);;	//number of fields in operation
 		sab2->length=SDBGetColumnSizeByNumber(dbid, tabid, columnNumber);		//the length of data
 		sab2->type = castype;				//the column type
+		sab2->precision=precision;
+		sab2->scale=scale;
 	}
 	sab2->function=function;		//this is operation to perform on the field
 
@@ -5321,9 +5325,11 @@ bool ha_scaledb::checkNestedFunc(char* name, char* my_func1, char* my_func2)
 
 Item* ha_scaledb::NestedFunc(enum_field_types& type, function_type& function, int& no_fields, char* name, Item::Type ft, Item *item, Item_sum* sum, char* buf, int& pos, SelectAnalyticsBody1* sab1,unsigned short dbid, unsigned short tabid, bool& contains_analytics_function )
 {
-	int len=strlen(name);
+	unsigned int len=strlen(name);
 	if(len>=1000) {return NULL;} //abort, function too long
 	char func_name[1000];
+	short precision=0;
+	short scale=0;
 	strcpy(func_name,name);
 	int comma_count=0;
 	for(int i=0; i<=len;i++)
@@ -5361,9 +5367,15 @@ Item* ha_scaledb::NestedFunc(enum_field_types& type, function_type& function, in
 				const char* col_name=field1->field_name;	
 				type= field1->type();
 				function=FT_NONE;
+				if(type==MYSQL_TYPE_NEWDECIMAL)
+				{			
+					Field_new_decimal* fnd=(Field_new_decimal*)field1;
+					precision=fnd->precision;
+					scale=fnd->decimals();
+				}
 
 				no_fields++;
-				addSelectField(buf,  pos, dbid, tabid, type, function,  col_name, contains_analytics_function );
+				addSelectField(buf,  pos, dbid, tabid, type, function,  col_name, contains_analytics_function,precision,scale );
 			}
 			else if(ft1==Item::FUNC_ITEM)
 			{
@@ -5376,9 +5388,14 @@ Item* ha_scaledb::NestedFunc(enum_field_types& type, function_type& function, in
 					Field *field2 = ((Item_field *)item)->field;
 					const char* col_name=field2->field_name;
 					type= field2->type();
-
+					if(type==MYSQL_TYPE_NEWDECIMAL)
+					{			
+						Field_new_decimal* fnd=(Field_new_decimal*)field2;
+						precision=fnd->precision;
+						scale=fnd->decimals();
+					}
 					no_fields++;
-					addSelectField(buf,  pos, dbid, tabid, type, function,  col_name,contains_analytics_function );
+					addSelectField(buf,  pos, dbid, tabid, type, function,  col_name,contains_analytics_function,precision,scale );
 				}
 				else if(ft2==Item::FUNC_ITEM)
 				{
@@ -5389,9 +5406,14 @@ Item* ha_scaledb::NestedFunc(enum_field_types& type, function_type& function, in
 						Field *field2 = ((Item_field *)item)->field;
 						const char* col_name=field2->field_name;
 						type= field2->type();
-
+						if(type==MYSQL_TYPE_NEWDECIMAL)
+						{			
+							Field_new_decimal* fnd=(Field_new_decimal*)field2;
+							precision=fnd->precision;
+							scale=fnd->decimals();
+						}
 						no_fields++;
-						addSelectField(buf,  pos, dbid, tabid, type,function,  col_name,contains_analytics_function );
+						addSelectField(buf,  pos, dbid, tabid, type,function,  col_name,contains_analytics_function,precision,scale );
 					}
 				}
 				else
@@ -5467,6 +5489,8 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 		const char* col_name;
 		enum_field_types type;
 		function_type function;
+		short precision=0;
+		short scale=0;
 		no_fields=0;	//reset the number of fields
 
 		switch (item->type())
@@ -5476,8 +5500,14 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 			{
 				Field *field = ((Item_field *)item)->field;
 				col_name=field->field_name;	
-	                        type= field->type();
+                type= field->type();
 				function=FT_NONE;
+				if(type==MYSQL_TYPE_NEWDECIMAL)
+				{			
+					Field_new_decimal* fnd=(Field_new_decimal*)field;
+					precision=fnd->precision;
+					scale=fnd->decimals();
+				}
 				break;
 			}
 			case  Item::SUM_FUNC_ITEM:
@@ -5491,6 +5521,12 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 					Field *field =((Item_field *)item->next)->field;
 					col_name=field->field_name;
                     type= field->type();
+					if(type==MYSQL_TYPE_NEWDECIMAL)
+					{			
+						Field_new_decimal* fnd=(Field_new_decimal*)field;
+						precision=fnd->precision;
+						scale=fnd->decimals();
+					}
 				}
 				else if (sum->sum_func() == Item_sum::COUNT_FUNC)
 				{
@@ -5526,7 +5562,12 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 							col_name=field->field_name;
 				     		type= field->type();				   
 							function=FT_MIN;
-					
+							if(type==MYSQL_TYPE_NEWDECIMAL)
+							{			
+								Field_new_decimal* fnd=(Field_new_decimal*)field;
+								precision=fnd->precision;
+								scale=fnd->decimals();
+							}
 						}
 
 				}
@@ -5548,6 +5589,12 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 							col_name=field->field_name;
 				     		type= field->type();				   
 							function=FT_MAX;
+							if(type==MYSQL_TYPE_NEWDECIMAL)
+							{			
+								Field_new_decimal* fnd=(Field_new_decimal*)field;
+								precision=fnd->precision;
+								scale=fnd->decimals();
+							}
 					
 						}
   					  
@@ -5558,8 +5605,9 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 					{
 						Field *field =((Item_field *)item->next)->field;
 						col_name=field->field_name;
-					        type= field->type();
+					    type= field->type();
 						function=FT_STREAM_COUNT;
+
 					}
 					else
 					{
@@ -5629,7 +5677,7 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 				default:
 					contains_analytics_function	= true;
 			}
-			addSelectField(buf,  pos, dbid, tabid, type, FT_NONE, col_name ,contains_analytics_function);
+			addSelectField(buf,  pos, dbid, tabid, type, FT_NONE, col_name ,contains_analytics_function,precision,scale);
 		}
 		
     }
