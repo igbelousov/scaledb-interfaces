@@ -5325,13 +5325,16 @@ bool ha_scaledb::checkNestedFunc(char* name, char* my_func1, char* my_func2)
 
 Item* ha_scaledb::NestedFunc(enum_field_types& type, function_type& function, int& no_fields, char* name, Item::Type ft, Item *item, Item_sum* sum, char* buf, int& pos, SelectAnalyticsBody1* sab1,unsigned short dbid, unsigned short tabid, bool& contains_analytics_function )
 {
-	unsigned int len=strlen(name);
+	int len	= ( int ) strlen( name );
+
 	if(len>=1000) {return NULL;} //abort, function too long
+
 	char func_name[1000];
 	short precision=0;
 	short scale=0;
 	strcpy(func_name,name);
 	int comma_count=0;
+
 	for(int i=0; i<=len;i++)
 	{
 		if(func_name[i]==',')
@@ -5741,8 +5744,8 @@ void ha_scaledb::saveConditionToString(const COND *cond)
 		//check if analytics is enabled
 
 		 
-	//turn analytics on by default
-	//	char* s_analytics=SDBUtilFindComment(thd->query(), "sdb_analytics") ;
+	//turn analytics off
+		char* s_disable_analytics=SDBUtilFindComment(thd->query(), "disable_sdb_analytics") ;
 
 		char* s_force_analytics=SDBUtilFindComment(thd->query(), "force_sdb_analytics") ;
 
@@ -5750,7 +5753,7 @@ void ha_scaledb::saveConditionToString(const COND *cond)
 		{
 
 
-			if  ( len1		> 0 && len2		> 0 )
+			if  (s_disable_analytics==NULL && len1		> 0 && len2		> 0 )
 			{
 				//need to check condition string is big enough?
 				memcpy(	analyticsString_, group_buf, len1 );
@@ -7559,8 +7562,10 @@ int  ha_scaledb::init_from_sql_statement_string(TABLE *table_arg, THD *thd, bool
   if (!(sql_copy= thd->strmake(sql, sql_length)))
     DBUG_RETURN(HA_ERR_OUT_OF_MEM);
 
-  if (parser_state.init(thd, sql_copy, sql_length))
-    DBUG_RETURN(HA_ERR_OUT_OF_MEM);
+  if ( parser_state.init( thd, sql_copy, ( unsigned int ) sql_length ) )
+  {
+	  DBUG_RETURN( HA_ERR_OUT_OF_MEM );
+  }
 
   thd->variables.sql_mode= MODE_NO_ENGINE_SUBSTITUTION | MODE_NO_DIR_IN_CREATE;
   thd->variables.character_set_client= system_charset_info;
