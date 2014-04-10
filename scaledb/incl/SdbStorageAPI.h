@@ -184,7 +184,7 @@ unsigned short SDBGetPartitionId(unsigned short userId, unsigned short dbId, cha
 unsigned short SDBDeleteTable(unsigned int userId, unsigned short dbId, 
 							  char* tableName, char* partitionName, unsigned short partitionId, unsigned short ddlFlag=0);
 
-unsigned short SDBRemoveLocalTableInfo(unsigned int userId, unsigned short dbId, unsigned short tableId); 
+unsigned short SDBRemoveLocalTableInfo(unsigned int userId, unsigned short dbId, unsigned short tableId, bool removeFromMemory); 
 
 //Rename a partition
 unsigned short SDBRenamePartition(unsigned int userId, unsigned short sdbDbId_, char* pTableName, char* fromPartitionName, char* toPartitionName,
@@ -210,7 +210,7 @@ unsigned short SDBOpenTable(unsigned short userId, unsigned short dbId, char *pT
 
 // close an open table based on table name (not its file-system-safe name)
 // the calling method needs to decide if we need to lock table before closing it.
-unsigned short SDBCloseTable(unsigned short userId, unsigned short dbId, char *pTableName, unsigned short partitionId, bool bLockTable, bool bNeedToCommits, bool isTableFlush=false);
+unsigned short SDBCloseTable(unsigned short userId, unsigned short dbId, char *pTableName, unsigned short partitionId, bool bLockTable, bool bNeedToCommits, bool isTableFlush,bool removeLocal);
 unsigned short SDBCloseParentTables(unsigned short userId, unsigned short dbId, char* pTableFsName);
 
 int SDBNumberShards(unsigned short dbId, unsigned short tableNumber);

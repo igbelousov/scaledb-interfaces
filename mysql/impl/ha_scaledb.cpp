@@ -2361,9 +2361,9 @@ int ha_scaledb::open(const char *name, int mode, uint test_if_locked) {
 		bool b=SDBGetTableStatus(userIdforOpen, sdbDbId_, tid);
 		SDBCommit(userIdforOpen, false);
 		if(b==false)
-		{
-			SDBRemoveLocalTableInfo(userIdforOpen, sdbDbId_, tid);
-			SDBCloseTable(userIdforOpen, sdbDbId_, pTblFsName, sdbPartitionId_, false, true);
+		{			
+			SDBCloseTable(userIdforOpen, sdbDbId_, pTblFsName, sdbPartitionId_, false, true, false, true);
+		
 		}
 	}
 	// this commit is needed to release the locks of a query done in SDBGetTableNumberByFileSystemName.
@@ -2540,7 +2540,7 @@ int ha_scaledb::close(void) {
 	// or this method is called from a system thread (such as mysqladmin shutdown command).
 	if (needToRemoveFromScaledbCache) 
 	{
-		errorCode = SDBCloseTable(sdbUserId_, sdbDbId_, table->s->table_name.str, sdbPartitionId_, true,needToCommit, flushTables);
+		errorCode = SDBCloseTable(sdbUserId_, sdbDbId_, table->s->table_name.str, sdbPartitionId_, true,needToCommit, flushTables, true);
 
 		if (errorCode){
 			if (bGetNewUserId){
@@ -2549,7 +2549,7 @@ int ha_scaledb::close(void) {
 			DBUG_RETURN(convertToMysqlErrorCode(errorCode));
 		}
 
-		SDBRemoveLocalTableInfo(sdbUserId_, sdbDbId_, sdbTableNumber_);
+		
 		SDBCommit(sdbUserId_,true); //table closed, so release session lock
 	}
 
@@ -5167,7 +5167,7 @@ int ha_scaledb::generateGroupConditionString(int cardinality, char* buf, int max
 
    const char* col_name;
    int n=0;
-   for (ORDER *cur_group= (((THD*) ha_thd())->lex)->select_lex.group_list.first ; cur_group ; cur_group= cur_group->next)
+   for (ORDER *cur_group= (((THD*) ha_thd())->lex)->select_lex.parent_lex->current_select->group_list.first ; cur_group ; cur_group= cur_group->next)
    {
 	   
 		if (pos+100 >max_buf)
@@ -5181,7 +5181,7 @@ int ha_scaledb::generateGroupConditionString(int cardinality, char* buf, int max
 		enum_field_types type;
 		item=*cur_group->item;
 		function_type function=FT_NONE;
-
+		int flag=0;
 		
 		switch (item->type())
 		{
@@ -5191,6 +5191,7 @@ int ha_scaledb::generateGroupConditionString(int cardinality, char* buf, int max
 				Field *field = ((Item_field *)item)->field;
 				col_name=field->field_name;	
 				type= field->type();	
+				flag=field->flags;
 				break;
 			}
 			case Item::FUNC_ITEM:
@@ -5205,7 +5206,8 @@ int ha_scaledb::generateGroupConditionString(int cardinality, char* buf, int max
 						 function=FT_CHAR;
 						 Field *field =((Item_field *)item->next)->field;
 						 col_name=field->field_name;
-						 type= field->type();	 
+						 type= field->type();	
+						 flag=field->flags;
 
 
 					 }else  if(checkFunc(func->name, "date"))      
@@ -5214,6 +5216,7 @@ int ha_scaledb::generateGroupConditionString(int cardinality, char* buf, int max
 						 Field *field =((Item_field *)item->next)->field;
 						 col_name=field->field_name;
 						  type= field->type();
+						  flag=field->flags;
 	
 						 
 					 }else  if(checkFunc(func->name, "hour"))   
@@ -5222,6 +5225,7 @@ int ha_scaledb::generateGroupConditionString(int cardinality, char* buf, int max
 						  Field *field =((Item_field *)item->next)->field;
 						  col_name=field->field_name;
 						   type= field->type();
+						   flag=field->flags;
 
 					 }
 					 else
@@ -5229,6 +5233,7 @@ int ha_scaledb::generateGroupConditionString(int cardinality, char* buf, int max
 						function=FT_UNSUPPORTED;
 						col_name=NULL;
 						type= MYSQL_TYPE_NULL;
+						flag=0;
 					 }
 
 					break;
@@ -5240,12 +5245,13 @@ int ha_scaledb::generateGroupConditionString(int cardinality, char* buf, int max
 	     }
 
 
-		char castype=	getCASType(type,0) ;
+		char castype=	getCASType(type,flag) ;
 	
 		GroupByAnalyticsBody* gab= (GroupByAnalyticsBody*)(buf+pos);
 
 		unsigned short columnNumber = SDBGetColumnNumberByName(dbid, tabid, col_name );
-
+		if(columnNumber==0 ) {return 0;}
+	
 		gab->field_offset=SDBGetColumnOffsetByNumber(dbid, tabid, columnNumber);
 		gab->length= SDBGetColumnSizeByNumber(dbid, tabid, columnNumber);
 		gab->type=castype;
@@ -5263,9 +5269,9 @@ int ha_scaledb::generateGroupConditionString(int cardinality, char* buf, int max
    }
 }
 
-void ha_scaledb::addSelectField(char* buf, int& pos, unsigned short dbid, unsigned short tabid, enum_field_types type, short function, const char* col_name, bool& contains_analytics, short precision, short scale )
+bool ha_scaledb::addSelectField(char* buf, int& pos, unsigned short dbid, unsigned short tabid, enum_field_types type, short function, const char* col_name, bool& contains_analytics, short precision, short scale, int flag )
 {
-	char castype=	getCASType(type,0) ;
+	char castype=	getCASType(type,flag) ;
 	
 	SelectAnalyticsBody2* sab2= (SelectAnalyticsBody2*)(buf+pos);
 	if ( ( !col_name ) || ( strcmp( "?", col_name ) == 0 ) )
@@ -5280,6 +5286,7 @@ void ha_scaledb::addSelectField(char* buf, int& pos, unsigned short dbid, unsign
 	else
 	{
 		unsigned short columnNumber = SDBGetColumnNumberByName(dbid, tabid, col_name );
+		if(columnNumber==0 ) {return false;}
 		sab2->field_offset=SDBGetColumnOffsetByNumber(dbid, tabid, columnNumber);;	//number of fields in operation
 		sab2->length=SDBGetColumnSizeByNumber(dbid, tabid, columnNumber);		//the length of data
 		sab2->type = castype;				//the column type
@@ -5290,6 +5297,7 @@ void ha_scaledb::addSelectField(char* buf, int& pos, unsigned short dbid, unsign
 
 	if(function!=FT_NONE) {contains_analytics=true;}
 	pos=pos+sizeof(SelectAnalyticsBody2);
+	return true;
 }
 char* trimwhitespace(char *str_base) {
     char* buffer = str_base;
@@ -5334,7 +5342,7 @@ Item* ha_scaledb::NestedFunc(enum_field_types& type, function_type& function, in
 	short scale=0;
 	strcpy(func_name,name);
 	int comma_count=0;
-
+	int flag=	0;
 	for(int i=0; i<=len;i++)
 	{
 		if(func_name[i]==',')
@@ -5370,6 +5378,7 @@ Item* ha_scaledb::NestedFunc(enum_field_types& type, function_type& function, in
 				const char* col_name=field1->field_name;	
 				type= field1->type();
 				function=FT_NONE;
+				flag=field1->flags;
 				if(type==MYSQL_TYPE_NEWDECIMAL)
 				{			
 					Field_new_decimal* fnd=(Field_new_decimal*)field1;
@@ -5378,7 +5387,8 @@ Item* ha_scaledb::NestedFunc(enum_field_types& type, function_type& function, in
 				}
 
 				no_fields++;
-				addSelectField(buf,  pos, dbid, tabid, type, function,  col_name, contains_analytics_function,precision,scale );
+				bool ret=addSelectField(buf,  pos, dbid, tabid, type, function,  col_name, contains_analytics_function,precision,scale,flag );
+				if(ret==false) {return NULL;}
 			}
 			else if(ft1==Item::FUNC_ITEM)
 			{
@@ -5391,6 +5401,7 @@ Item* ha_scaledb::NestedFunc(enum_field_types& type, function_type& function, in
 					Field *field2 = ((Item_field *)item)->field;
 					const char* col_name=field2->field_name;
 					type= field2->type();
+					flag=field2->flags;
 					if(type==MYSQL_TYPE_NEWDECIMAL)
 					{			
 						Field_new_decimal* fnd=(Field_new_decimal*)field2;
@@ -5398,7 +5409,8 @@ Item* ha_scaledb::NestedFunc(enum_field_types& type, function_type& function, in
 						scale=fnd->decimals();
 					}
 					no_fields++;
-					addSelectField(buf,  pos, dbid, tabid, type, function,  col_name,contains_analytics_function,precision,scale );
+					bool ret=addSelectField(buf,  pos, dbid, tabid, type, function,  col_name,contains_analytics_function,precision,scale,flag );
+					if(ret==false) {return NULL;}
 				}
 				else if(ft2==Item::FUNC_ITEM)
 				{
@@ -5409,6 +5421,7 @@ Item* ha_scaledb::NestedFunc(enum_field_types& type, function_type& function, in
 						Field *field2 = ((Item_field *)item)->field;
 						const char* col_name=field2->field_name;
 						type= field2->type();
+						flag=field2->flags;
 						if(type==MYSQL_TYPE_NEWDECIMAL)
 						{			
 							Field_new_decimal* fnd=(Field_new_decimal*)field2;
@@ -5416,7 +5429,8 @@ Item* ha_scaledb::NestedFunc(enum_field_types& type, function_type& function, in
 							scale=fnd->decimals();
 						}
 						no_fields++;
-						addSelectField(buf,  pos, dbid, tabid, type,function,  col_name,contains_analytics_function,precision,scale );
+						bool ret=addSelectField(buf,  pos, dbid, tabid, type,function,  col_name,contains_analytics_function,precision,scale,flag );
+						if(ret==false) {return NULL;}
 					}
 				}
 				else
@@ -5475,8 +5489,7 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 
 	int no_fields=0;	
 
-
-    List_iterator_fast<Item> fi((((THD*) ha_thd())->lex)->select_lex.item_list);
+    List_iterator_fast<Item> fi((((THD*) ha_thd())->lex)->select_lex.parent_lex->current_select->item_list);
 
 	int n=0;
   
@@ -5495,6 +5508,7 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 		short precision=0;
 		short scale=0;
 		no_fields=0;	//reset the number of fields
+		int flag=0;
 
 		switch (item->type())
 		{
@@ -5505,6 +5519,7 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 				col_name=field->field_name;	
                 type= field->type();
 				function=FT_NONE;
+				flag=field->flags;
 				if(type==MYSQL_TYPE_NEWDECIMAL)
 				{			
 					Field_new_decimal* fnd=(Field_new_decimal*)field;
@@ -5524,6 +5539,7 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 					Field *field =((Item_field *)item->next)->field;
 					col_name=field->field_name;
                     type= field->type();
+					flag=field->flags;
 					if(type==MYSQL_TYPE_NEWDECIMAL)
 					{			
 						Field_new_decimal* fnd=(Field_new_decimal*)field;
@@ -5544,6 +5560,7 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 					else
 					{
 						type=field->type();
+						flag=field->flags;
 					}
 
 				}
@@ -5563,7 +5580,8 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 						{
 							Field *field =((Item_field *)item->next)->field;
 							col_name=field->field_name;
-				     		type= field->type();				   
+				     		type= field->type();	
+							flag=field->flags;
 							function=FT_MIN;
 							if(type==MYSQL_TYPE_NEWDECIMAL)
 							{			
@@ -5592,6 +5610,7 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 							col_name=field->field_name;
 				     		type= field->type();				   
 							function=FT_MAX;
+							flag=field->flags;
 							if(type==MYSQL_TYPE_NEWDECIMAL)
 							{			
 								Field_new_decimal* fnd=(Field_new_decimal*)field;
@@ -5610,6 +5629,7 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 						col_name=field->field_name;
 					    type= field->type();
 						function=FT_STREAM_COUNT;
+						flag=field->flags;
 
 					}
 					else
@@ -5634,7 +5654,8 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 						 function=FT_DATE;
 						 Field *field =((Item_field *)item->next)->field;
 						 col_name=field->field_name;
-						 type= field->type();			
+						 type= field->type();		
+						 flag=field->flags;
 						 
 					 }else if(checkFunc(func->name, "hour"))   
 					 {
@@ -5642,12 +5663,14 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 						  Field *field =((Item_field *)item->next)->field;
 						  col_name=field->field_name;
 						  type= field->type();	
+					  	  flag=field->flags;
 					 }
 					 else
 					 {
 						function=FT_UNSUPPORTED;
 						col_name=NULL;
-						type= MYSQL_TYPE_NULL;					
+						type= MYSQL_TYPE_NULL;		
+						flag=0;
 					 }
 
 					
@@ -5680,7 +5703,8 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 				default:
 					contains_analytics_function	= true;
 			}
-			addSelectField(buf,  pos, dbid, tabid, type, FT_NONE, col_name ,contains_analytics_function,precision,scale);
+			bool ret=addSelectField(buf,  pos, dbid, tabid, type, FT_NONE, col_name ,contains_analytics_function,precision,scale,flag);
+			if (ret==false) {return 0;}
 		}
 		
     }
@@ -6693,7 +6717,7 @@ int ha_scaledb::create_dimension_table(TABLE *fact_table_arg,char * col_name, un
 
 	// 5. Bug 1008:  we need to open and close after create.
 	SDBOpenTable(sdbUserId_, sdbDbId_, _pDimensionTableName, 0, false);
-	int errorNum = SDBCloseTable(sdbUserId_, sdbDbId_, _pDimensionTableName, 0, false, true);
+	int errorNum = SDBCloseTable(sdbUserId_, sdbDbId_, _pDimensionTableName, 0, false, true, false, false);
 	if (errorNum) {
 		SDBRollBack(sdbUserId_, NULL, 0, false); // rollback new table record in transaction
 		DBUG_RETURN(convertToMysqlErrorCode(CREATE_TABLE_FAILED_IN_CLUSTER));
@@ -7011,7 +7035,7 @@ int ha_scaledb::create_multi_dimension_table(TABLE *fact_table_arg, char* index_
 
 	// 5. Bug 1008:  we need to open and close after create.
 	SDBOpenTable(sdbUserId_, sdbDbId_, _pDimensionTableName, 0, false);
-	int errorNum = SDBCloseTable(sdbUserId_, sdbDbId_, _pDimensionTableName, 0, false, true);
+	int errorNum = SDBCloseTable(sdbUserId_, sdbDbId_, _pDimensionTableName, 0, false, true, false, false);
 	if (errorNum) {
 		SDBRollBack(sdbUserId_, NULL, 0, false); // rollback new table record in transaction
 		DBUG_RETURN(convertToMysqlErrorCode(CREATE_TABLE_FAILED_IN_CLUSTER));
@@ -7311,7 +7335,7 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 			SDBOpenTable(sdbUserId_, sdbDbId_, pTableName, sdbPartitionId_, false); //protected by previous metalock
 
 			//close the table
-			SDBCloseTable(sdbUserId_, sdbDbId_, pTableName, sdbPartitionId_, false, true);
+			SDBCloseTable(sdbUserId_, sdbDbId_, pTableName, sdbPartitionId_, false, true, false, false);
 			
 				
 			//cleanup and return
@@ -7358,7 +7382,7 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 	errorNum = add_columns_to_table(thd, table_arg, ddlFlag,tableCharSet,rangekey,number_streaming_keys,number_streaming_attributes,dimensionTable,fkInfoArray);
 	if (errorNum) {
 		SDBRollBack(sdbUserId_, NULL, 0, true); // rollback new table record in transaction
-		SDBRemoveLocalTableInfo(sdbUserId_, sdbDbId_, sdbTableNumber_);
+		SDBRemoveLocalTableInfo(sdbUserId_, sdbDbId_, sdbTableNumber_,false);
 		FREE_MEMORY(pCreateTableStmt);
 		DBUG_RETURN(errorNum);
 	}
@@ -7372,7 +7396,7 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 		errorNum = create_fks(thd, table_arg, pTableName, fkInfoArray, pCreateTableStmt, bIsAlterTableStmt);
 		if (errorNum) {
 			SDBRollBack(sdbUserId_, NULL, 0, true); // rollback new table record in transaction
-			SDBRemoveLocalTableInfo(sdbUserId_, sdbDbId_, sdbTableNumber_);
+			SDBRemoveLocalTableInfo(sdbUserId_, sdbDbId_, sdbTableNumber_,false);
 			FREE_MEMORY(pCreateTableStmt);
 			SDBSetErrorMessage( sdbUserId_, ALTER_TABLE_FAILED_IN_CLUSTER, "- Foreign key invalid." );
 			DBUG_RETURN(convertToMysqlErrorCode(HA_ERR_GENERIC));
@@ -7381,7 +7405,7 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 		errorNum = add_indexes_to_table( thd, table_arg, pTableName, ddlFlag, fkInfoArray, pCreateTableStmt );
 		if (errorNum) {
 			SDBRollBack(sdbUserId_, NULL, 0, true); // rollback new table record in transaction
-			SDBRemoveLocalTableInfo(sdbUserId_, sdbDbId_, sdbTableNumber_);
+			SDBRemoveLocalTableInfo(sdbUserId_, sdbDbId_, sdbTableNumber_,false);
 			FREE_MEMORY(pCreateTableStmt);
 			DBUG_RETURN(errorNum);
 		}
@@ -7424,7 +7448,7 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 	{
 		SDBSetErrorMessage( sdbUserId_, INVALID_STREAMING_OPERATION, "- Streaming table must contain a Streaming KEY." );
 		SDBRollBack(sdbUserId_, NULL, 0, false); // rollback new table record in transaction
-		SDBRemoveLocalTableInfo(sdbUserId_, sdbDbId_, sdbTableNumber_);
+		SDBRemoveLocalTableInfo(sdbUserId_, sdbDbId_, sdbTableNumber_,false);
 		FREE_MEMORY(pCreateTableStmt);
 		DBUG_RETURN(convertToMysqlErrorCode(HA_ERR_GENERIC));
 	}
@@ -7433,7 +7457,7 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 	{
 		SDBSetErrorMessage( sdbUserId_, INVALID_STREAMING_OPERATION, "- It is illegal to specify Streaming attributes for non-Streaming tables." );
 		SDBRollBack(sdbUserId_, NULL, 0, false); // rollback new table record in transaction
-		SDBRemoveLocalTableInfo(sdbUserId_, sdbDbId_, sdbTableNumber_);
+		SDBRemoveLocalTableInfo(sdbUserId_, sdbDbId_, sdbTableNumber_,false);
 		FREE_MEMORY(pCreateTableStmt);
 		DBUG_RETURN(convertToMysqlErrorCode(HA_ERR_GENERIC));
 	}
@@ -7473,7 +7497,7 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 
 		if (errorNum) {
 			SDBRollBack(sdbUserId_, NULL, 0, false); // rollback new table record in transaction
-			SDBRemoveLocalTableInfo(sdbUserId_, sdbDbId_, sdbTableNumber_);
+			SDBRemoveLocalTableInfo(sdbUserId_, sdbDbId_, sdbTableNumber_,false);
 			FREE_MEMORY(pCreateTableStmt);
 			DBUG_RETURN(convertToMysqlErrorCode(CREATE_TABLE_FAILED_IN_CLUSTER));
 		}		
@@ -7487,10 +7511,10 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 		SDBOpenTable(sdbUserId_, sdbDbId_, pTableName, sdbPartitionId_, false);
 
 		// Bug 1079: CREATE TABLE statement will commit at the end of this method.
-		errorNum = SDBCloseTable(sdbUserId_, sdbDbId_, pTableName, sdbPartitionId_, false, true);
+		errorNum = SDBCloseTable(sdbUserId_, sdbDbId_, pTableName, sdbPartitionId_, false, true, false, false);
 		if (errorNum) {
 			SDBRollBack(sdbUserId_, NULL, 0, false); // rollback new table record in transaction
-			SDBRemoveLocalTableInfo(sdbUserId_, sdbDbId_, sdbTableNumber_);
+			SDBRemoveLocalTableInfo(sdbUserId_, sdbDbId_, sdbTableNumber_,false);
 			FREE_MEMORY(pCreateTableStmt);
 			DBUG_RETURN(convertToMysqlErrorCode(CREATE_TABLE_FAILED_IN_CLUSTER));
 		}
@@ -8505,7 +8529,7 @@ int ha_scaledb::add_indexes_to_table( THD* thd, TABLE *table_arg, char* tblName,
 			FREE_MEMORY(keySizes);
 			if (retValue == 0) { // an error occurs
 				SDBRollBack(sdbUserId_, NULL, 0, false);
-				SDBRemoveLocalTableInfo(sdbUserId_, sdbDbId_, sdbTableNumber_); // cleans up table name and field name
+				SDBRemoveLocalTableInfo(sdbUserId_, sdbDbId_, sdbTableNumber_,false); // cleans up table name and field name
 				retCode = METAINFO_FAIL_TO_CREATE_INDEX;
 				break;
 			}
@@ -8546,7 +8570,7 @@ int ha_scaledb::add_indexes_to_table( THD* thd, TABLE *table_arg, char* tblName,
 			FREE_MEMORY(keySizes);
 			if (retValue == 0) { // an error occurs as index number should be > 0
 				SDBRollBack(sdbUserId_, NULL, 0, false);
-				SDBRemoveLocalTableInfo(sdbUserId_, sdbDbId_, sdbTableNumber_); // cleans up table name and field name
+				SDBRemoveLocalTableInfo(sdbUserId_, sdbDbId_, sdbTableNumber_,false); // cleans up table name and field name
 				retCode = METAINFO_FAIL_TO_CREATE_INDEX;
 				break;
 			}
@@ -8657,7 +8681,7 @@ int ha_scaledb::delete_table(const char* name) {
 		int tid = SDBGetTableNumberByFileSystemName(sdbUserId_, sdbDbId_, tblFsName);
 		if(tid!=0)
 		{
-			SDBRemoveLocalTableInfo(sdbUserId_, sdbDbId_, tid);			
+			SDBRemoveLocalTableInfo(sdbUserId_, sdbDbId_, tid,false);			
 		}
 	}
 
@@ -8687,7 +8711,7 @@ int ha_scaledb::delete_table(const char* name) {
 	{
 		//even if drop fails, we MUST leave table closed because mysql has already closed the table
 		char* userFromTblName = SDBGetTableNameByNumber(sdbUserId_, sdbDbId_, sdbTableNumber_);
-		retCode=SDBCloseTable(sdbUserId_, sdbDbId_, userFromTblName, sdbPartitionId_, false, false);
+		retCode=SDBCloseTable(sdbUserId_, sdbDbId_, userFromTblName, sdbPartitionId_, false, false, false, false);
 		DBUG_RETURN(convertToMysqlErrorCode(LOCK_TABLE_FAILED));
 	}	
 	
@@ -8729,7 +8753,7 @@ int ha_scaledb::delete_table(const char* name) {
 			{
 				// Close the table which was opened above
 				char*			userFromTblName	= SDBGetTableNameByNumber( sdbUserId_, sdbDbId_, sdbTableNumber_ );
-				unsigned short	retClose		= SDBCloseTable( sdbUserId_, sdbDbId_, userFromTblName, sdbPartitionId_, false, false );
+				unsigned short	retClose		= SDBCloseTable( sdbUserId_, sdbDbId_, userFromTblName, sdbPartitionId_, false, false, false, false );
 			}
 
 			FREE_MEMORY(partitionName);
@@ -8761,7 +8785,7 @@ int ha_scaledb::delete_table(const char* name) {
 		{
 			// Close the table which was opened above
 			char*			userFromTblName	= SDBGetTableNameByNumber( sdbUserId_, sdbDbId_, sdbTableNumber_ );
-			unsigned short	retClose		= SDBCloseTable( sdbUserId_, sdbDbId_, userFromTblName, sdbPartitionId_, false, false );
+			unsigned short	retClose		= SDBCloseTable( sdbUserId_, sdbDbId_, userFromTblName, sdbPartitionId_, false, false , false, false);
 		}
 	}
 
