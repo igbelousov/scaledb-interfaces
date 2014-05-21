@@ -68,6 +68,11 @@ public:
 	void removeAlterTableName();
 	char* getAlterTableName() {return pAlterTableName_;}
 
+	uint32 incGlobalInsertsCount() {return globalInsertsCount_++;} 
+	uint32 getGlobalInsertsCount() {return globalInsertsCount_;} 
+	void   initGlobalInsertsCount() {globalInsertsCount_ = 0;}
+
+
 	int lockCount_; // number of table locks used in a statement
 	int numberOfLockTables_; // number of tables specified in LOCK TABLES statement
 	unsigned long txnIsolationLevel_; // transaciton isolation level
@@ -90,6 +95,8 @@ private:
 	unsigned short ddlFlag_; // This flag has multiple bit values.  Need to deal bits individually.
 
 	char* pAlterTableName_; // table name used in ALTER TABLE, CREATE/DROP INDEX statement
+
+	uint32 globalInsertsCount_; // global insert count per thread 
 };
 
 #endif   // _MYSQL_TXN_H

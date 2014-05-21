@@ -213,7 +213,8 @@ typedef enum SdbKeySearchDirection {
 #define WRONG_AUTO_INCR_VALUE 56
 #define BLOCK_DOES_NOT_EXIST 57
 #define INVALID_STREAMING_OPERATION 58
-#define ROW_REQUESTED_OUTSIDE_FILE_RANGE 59
+#define BLOCK_REQUESTED_OUTSIDE_FILE_RANGE 59	// This list is copied to scaledb_error.h
+#define TABLE_IN_USE_ON_ANOTHER_NODE 60
 
 #define CAS_FILE_IN_USE		 100
 
@@ -261,16 +262,22 @@ typedef enum SdbKeySearchDirection {
 
 // Pushdown operators and data types
 #define SDB_PUSHDOWN_OPERATOR_AND						'&'												// & for AND
+#define SDB_PUSHDOWN_OPERATOR_BITWISE_AND				'@'												// @ for bitwise AND
 #define SDB_PUSHDOWN_OPERATOR_OR						'|'												// | for OR
+#define SDB_PUSHDOWN_OPERATOR_BITWISE_OR				'+'												// + for bitwise OR
 #define SDB_PUSHDOWN_OPERATOR_XOR						'X'												// X for XOR
+#define SDB_PUSHDOWN_OPERATOR_BITWISE_XOR				'x'												// x for bitwise XOR
 #define SDB_PUSHDOWN_OPERATOR_EQ						'='												// = for EQ
 #define SDB_PUSHDOWN_OPERATOR_LE						'{'												// { for LE
 #define SDB_PUSHDOWN_OPERATOR_GE						'}'												// } for GE
 #define SDB_PUSHDOWN_OPERATOR_LT						'<'												// < for LT
 #define SDB_PUSHDOWN_OPERATOR_GT						'>'												// > for GT
 #define SDB_PUSHDOWN_OPERATOR_NE						'!'												// ! for NE
+#define SDB_PUSHDOWN_OPERATOR_BETWEEN					'~'												// ~ for BETWEEN
+#define SDB_PUSHDOWN_OPERATOR_IN						':'												// : for IN
 #define SDB_PUSHDOWN_COLUMN_DATA_TYPE_UNSIGNED_INTEGER	'U'												// U for unsigned int	(row)
 #define SDB_PUSHDOWN_COLUMN_DATA_TYPE_SIGNED_INTEGER	'I'												// I for   signed int	(row)
+#define SDB_PUSHDOWN_COLUMN_DATA_TYPE_BIT				'^'												// ^ for bit			(row)
 #define SDB_PUSHDOWN_COLUMN_DATA_TYPE_FLOAT				'F'												// F for float			(row)
 #define SDB_PUSHDOWN_COLUMN_DATA_TYPE_DECIMAL			'B'												// B for binary decimal	(row)
 #define SDB_PUSHDOWN_COLUMN_DATA_TYPE_DATE				'D'												// D for date			(row)
@@ -282,6 +289,7 @@ typedef enum SdbKeySearchDirection {
 #define SDB_PUSHDOWN_COLUMN_DATA_TYPE_VARCHAR			'V'												// V for varchar		(row)
 #define SDB_PUSHDOWN_LITERAL_DATA_TYPE_UNSIGNED_INTEGER	'u'												// u for unsigned int	(user)
 #define SDB_PUSHDOWN_LITERAL_DATA_TYPE_SIGNED_INTEGER	'i'												// i for signed   int	(user)
+#define SDB_PUSHDOWN_LITERAL_DATA_TYPE_BIT				'.'												// . for bit			(user)
 #define SDB_PUSHDOWN_LITERAL_DATA_TYPE_FLOAT			'f'												// f for float			(user)
 #define SDB_PUSHDOWN_LITERAL_DATA_TYPE_DECIMAL			'b'												// b for binary decimal	(user)
 #define SDB_PUSHDOWN_LITERAL_DATA_TYPE_DATE				SDB_PUSHDOWN_LITERAL_DATA_TYPE_UNSIGNED_INTEGER	// u for unsigned int	(user)
@@ -294,25 +302,28 @@ typedef enum SdbKeySearchDirection {
 #define SDB_PUSHDOWN_UNKNOWN							'?'												// ? for unknown
 
 // Pushdown condition string offsets
-#define LOGIC_OP_OFFSET_CHILDCOUNT 0
-#define LOGIC_OP_OFFSET_OPERATION (LOGIC_OP_OFFSET_CHILDCOUNT + 1)
-#define LOGIC_OP_NODE_LENGTH (LOGIC_OP_OFFSET_OPERATION + 1)
+#define LOGIC_OP_OFFSET_CHILDCOUNT	0
+#define LOGIC_OP_OFFSET_OPERATION	(LOGIC_OP_OFFSET_CHILDCOUNT + 2)
+#define LOGIC_OP_OFFSET_IS_NEGATED	(LOGIC_OP_OFFSET_OPERATION + 1)
+#define LOGIC_OP_NODE_LENGTH		(LOGIC_OP_OFFSET_IS_NEGATED + 1)
 
-#define COMP_OP_OFFSET_CHILDCOUNT 0
-#define COMP_OP_OFFSET_OPERATION (COMP_OP_OFFSET_CHILDCOUNT + 1)
-#define COMP_OP_NODE_LENGTH (COMP_OP_OFFSET_OPERATION + 1)
+#define COMP_OP_OFFSET_CHILDCOUNT	0
+#define COMP_OP_OFFSET_OPERATION	(COMP_OP_OFFSET_CHILDCOUNT + 2)
+#define COMP_OP_OFFSET_IS_NEGATED	(COMP_OP_OFFSET_OPERATION + 1)
+#define COMP_OP_NODE_LENGTH			(COMP_OP_OFFSET_IS_NEGATED + 1)
 
-#define ROW_DATA_OFFSET_CHILDCOUNT 0
-#define ROW_DATA_OFFSET_ROW_TYPE (ROW_DATA_OFFSET_CHILDCOUNT + 1)
+#define ROW_DATA_OFFSET_CHILDCOUNT	0
+#define ROW_DATA_OFFSET_ROW_TYPE	(ROW_DATA_OFFSET_CHILDCOUNT + 2)
 #define ROW_DATA_OFFSET_DATABASE_NUMBER (ROW_DATA_OFFSET_ROW_TYPE + 1)
 #define ROW_DATA_OFFSET_TABLE_NUMBER (ROW_DATA_OFFSET_DATABASE_NUMBER + 2)
-#define ROW_DATA_OFFSET_COLUMN_OFFSET (ROW_DATA_OFFSET_TABLE_NUMBER + 2)
+#define ROW_DATA_OFFSET_COLUMN_NUMBER (ROW_DATA_OFFSET_TABLE_NUMBER + 2)
+#define ROW_DATA_OFFSET_COLUMN_OFFSET (ROW_DATA_OFFSET_COLUMN_NUMBER + 2)
 #define ROW_DATA_OFFSET_COLUMN_SIZE (ROW_DATA_OFFSET_COLUMN_OFFSET + 2)
 #define ROW_DATA_NODE_LENGTH (ROW_DATA_OFFSET_COLUMN_SIZE + 2)
 
 #define USER_DATA_OFFSET_CHILDCOUNT 0
-#define USER_DATA_OFFSET_DATA_TYPE (USER_DATA_OFFSET_CHILDCOUNT + 1)
-#define USER_DATA_OFFSET_DATA_SIZE (USER_DATA_OFFSET_DATA_TYPE + 1)
-#define USER_DATA_OFFSET_USER_DATA (USER_DATA_OFFSET_DATA_SIZE + 1)
+#define USER_DATA_OFFSET_DATA_TYPE	(USER_DATA_OFFSET_CHILDCOUNT + 2)
+#define USER_DATA_OFFSET_DATA_SIZE	(USER_DATA_OFFSET_DATA_TYPE + 1)
+#define USER_DATA_OFFSET_USER_DATA	(USER_DATA_OFFSET_DATA_SIZE + 1)
 
 #endif //_SDB_COMMON_H

@@ -387,6 +387,8 @@ unsigned short SDBIsNonUniqueIndex(unsigned short dbId, unsigned int indexId);
 unsigned short SDBStreamingDelete(unsigned short userId, unsigned short dbId, unsigned short tableNumber, unsigned short partitionId,unsigned long long key, unsigned short column, bool delete_all, unsigned long long queryId);
 unsigned short SDBSetErrorMessage(unsigned short userId,  unsigned short sdb_error_code, char *buff);
 unsigned short SDBGetSystemLevelIndexType();
+unsigned long  SDBGetRangeKeyFieldID(unsigned short dbId, unsigned short tableId);
+unsigned long  SDBGetRangeKey(unsigned short dbId, unsigned short tableId);
 
 /*
 //////////////////////////////////////////////////////////////////////////////
@@ -405,7 +407,7 @@ unsigned short SDBCreateField(unsigned int userId, unsigned short dbId, unsigned
 bool SDBIsFieldAutoIncrement(unsigned short dbId, unsigned short tableId, unsigned short fieldId);
 char* SDBGetFileDataField(unsigned short userId, unsigned short tableId, unsigned short fieldId);
 unsigned long long  SDBGetAutoIncrValue(unsigned short dbId, unsigned short tableId);
-unsigned long long  SDBGetActualAutoIncrValue(unsigned short dbId, unsigned short tableId);
+unsigned long long  SDBGetActualAutoIncrValue(unsigned short userId,unsigned short dbId, unsigned short tableId);
 void SDBSetOverflowFlag(unsigned short dbId, unsigned short tableId, bool ovfFlag);
 
 /*
@@ -549,6 +551,7 @@ typedef struct SDBKeyTemplate {
 #define GET_DESIGNATOR_LEVEL(index_id) ((unsigned short)(index_id >> DESIGNATOR_LEVEL_OFFSET))
 
 
+bool SDBEqualDataTypes(unsigned char internalType, SDBFieldType externalType) ;
 
 unsigned short SDBGetQueryManagerId(unsigned int userId);
 
@@ -565,8 +568,8 @@ unsigned short SDBPrepareRowByTemplateEnterExit(unsigned short userId, unsigned 
 
 unsigned short SDBPrepareSequentialScan( unsigned int userId, unsigned short queryMgrId, unsigned short dbId, unsigned short partitionId, char *tableName, unsigned long long queryId,
 										 bool releaseLocksAfterRead, SDBRowTemplate& rowTemplate,
-										 const unsigned char* pConditionString = NULL, int conditionStringLength = 0,
-										 const unsigned char* pAnalyticsString = NULL, int analyticsStringLength = 0 );
+										 const unsigned char* pConditionString = NULL, unsigned int conditionStringLength = 0,
+										 const unsigned char* pAnalyticsString = NULL, unsigned int analyticsStringLength = 0 );
 
 unsigned short SDBEndSequentialScan( unsigned int userId, unsigned short queryMgrId, unsigned short dbId, unsigned short partitionId, char *tableName, unsigned long long queryId );
 
@@ -574,8 +577,8 @@ unsigned short SDBGetSeqRowByPosition(unsigned int userId, unsigned short queryM
 
 unsigned short SDBPrepareQuery( unsigned int userId, unsigned short queryMgrId, unsigned short partitionId, unsigned long long queryId,
 								bool releaseLocksAfterRead, unsigned short sdbCommandType, bool isPointQuery, SDBRowTemplate& rowTemplate, bool prefetch,
-								const unsigned char* pConditionString, unsigned short lengthConditionString,
-								const unsigned char* pAnalyticsString, unsigned short lengthAnalyticsString );
+								const unsigned char* pConditionString, unsigned int lengthConditionString,
+								const unsigned char* pAnalyticsString, unsigned int lengthAnalyticsString );
 
 long long SDBGetRowsCount(unsigned short queryMgrId);
 
@@ -596,8 +599,8 @@ void SDBSetActiveQueryManager(unsigned short queryMgrId);
 
 unsigned short SDBDefineQueryPrefix(unsigned short queryMgrId, unsigned short dbId, unsigned int indexId, char *fieldName, 
 									char* key, bool useStarForPrefixEnd, int keyPrefixSize, bool usePoundSign);
-unsigned short SDBQueryCursorNextSequential(unsigned int userId, unsigned short queryMgrId, unsigned short sdbCommandType);
-unsigned short SDBQueryCursorNext(unsigned int userId, unsigned short queryMgrId, unsigned short sdbCommandType);
+unsigned short SDBQueryCursorNextSequential(unsigned int userId, unsigned short queryMgrId, unsigned char *outBuff, SDBRowTemplate *outTemplate, unsigned short sdbCommandType);
+unsigned short SDBQueryCursorNext(unsigned int userId, unsigned short queryMgrId, unsigned char *outBuff, SDBRowTemplate *outTemplate, unsigned short sdbCommandType);
 bool SDBQueryCursorFieldIsNull(unsigned short queryMgrId, unsigned short fieldId);
 bool SDBQueryCursorFieldIsNullByIndex(unsigned short queryMgrId, unsigned int indexId, unsigned short fieldId);
 void SDBQueryCursorFreeBuffers(unsigned short queryMgrId);
@@ -737,7 +740,7 @@ bool SDBConditionStackPush(SdbConditionStack * stack,SimpleCondition  & item);
 void SDBConditionStackClearAll(SdbConditionStack * stack);
 bool SDBConditionStackIsEmpty(SdbConditionStack * stack);
 bool SDBConditionStackIsFull(SdbConditionStack * stack);
-void printMYSQLConditionBuffer(unsigned char * sqlBuffer, unsigned short sqlBufferLength);
+void printMYSQLConditionBuffer( unsigned char * sqlBuffer, unsigned int sqlBufferLength );
 /*
 //////////////////////////////////////////////////////////////////////////////
 //
