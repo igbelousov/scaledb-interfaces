@@ -75,7 +75,7 @@ handlerton *scaledb_hton=NULL;
 unsigned char ha_scaledb::mysqlInterfaceDebugLevel_ = 0; // defines the debug level for Interface component
 SDBFieldType  ha_scaledb::mysqlToSdbType_[MYSQL_TYPE_GEOMETRY+1] = {NO_TYPE, };
 
-
+extern int unsigned statisticsLevel_;
 const char* mysql_key_flag_strings[] = { "HA_READ_KEY_EXACT", "HA_READ_KEY_OR_NEXT",
         "HA_READ_KEY_OR_PREV", "HA_READ_AFTER_KEY", "HA_READ_BEFORE_KEY", "HA_READ_PREFIX",
         "HA_READ_PREFIX_LAST", "HA_READ_PREFIX_LAST_OR_PREV" };
@@ -4931,7 +4931,6 @@ bool ha_scaledb::conditionFieldToString( unsigned char** pCondString, unsigned i
 										 Item* pComperandItem, unsigned int* pComperandDataOffset,
 										 unsigned short countArgs, int typeFunc, unsigned short* pDbId, unsigned short* pTableId )
 {
-	int				tableNum		= 0;
 	unsigned char*	pComperandData	= ( pComperandDataOffset ? ( *pCondString + *pComperandDataOffset ) : NULL );
 	unsigned char*	pColumnData;
 	int				resultExtension;
@@ -4990,34 +4989,40 @@ bool ha_scaledb::conditionFieldToString( unsigned char** pCondString, unsigned i
 
 	pColumnData						= *pCondString + *pItemOffset;
 
-	// Fetch the table column metadata
+	// Fetch the database, table and column metadata
 	char*			databaseName	= SDBUtilDuplicateString( ( char* )( ( Item_ident* ) pFieldItem )->db_name );
 	unsigned short	dbId			= SDBGetDatabaseNumberByName( sdbUserId_, databaseName );
 
 	FREE_MEMORY( databaseName );
 
-	unsigned short	tableNumber		= SDBGetTableNumberByName( sdbUserId_, dbId, ( ( ( Item_ident* ) pFieldItem )->table_name ) );
-
-	if ( !tableNumber )
+	if ( ( *pDbId )				   && ( *pDbId != dbId ) )
 	{
-		return false;				//This seems to happen when the table is renamed
+		// We do not support a WHERE clause on multiple databases
+		return false;
 	}
 
-	if ( tableNum && ( tableNumber != tableNum ) )
+	unsigned short	tableId			= SDBGetTableNumberByName( sdbUserId_, dbId, ( ( ( Item_ident* ) pFieldItem )->table_name ) );
+
+	if ( !tableId )
 	{
-		return false;				//This means we are attempting to compare data from two different tables--this can cause problems (e.g. if the tables are stored on different CAS's)
+		return false;				// This seems to happen when the table is renamed
 	}
 
-	tableNum						= tableNumber;
+	if ( ( *pTableId )			   && ( *pTableId != tableId ) )
+	{
+		// We do not support a WHERE clause on multiple tables
+		return false;
+	}
 
-	unsigned short	columnNumber	= SDBGetColumnNumberByName( dbId, tableNumber, ( ( ( Item_ident* ) pFieldItem )->field_name ) );
-	unsigned short	columnSize		= SDBGetColumnSizeByNumber( dbId, tableNumber, columnNumber );
-	//unsigned char	columnType		= SDBGetColumnTypeByNumber( dbId, tableNumber, columnNumber );
+	unsigned short	columnId		= SDBGetColumnNumberByName( dbId, tableId, ( ( ( Item_ident* ) pFieldItem )->field_name ) );
 
-	if ( !columnNumber )
+	if ( !columnId )
 	{
 		return false;
 	}
+
+	unsigned short	columnSize		= SDBGetColumnSizeByNumber( dbId, tableId, columnId );
+	//unsigned char	columnType		= SDBGetColumnTypeByNumber( dbId, tableId, columnId );
 
 	fieldType						= ( ( ( Item_field* ) pFieldItem )->field )->type();
 
@@ -5085,13 +5090,13 @@ bool ha_scaledb::conditionFieldToString( unsigned char** pCondString, unsigned i
 	}
 
 	*pDbId																					= dbId;
-	*pTableId																				= tableNumber;
+	*pTableId																				= tableId;
 
 	// Write row data info to string
 	*( unsigned short* )( *pCondString + *pItemOffset + ROW_DATA_OFFSET_DATABASE_NUMBER )	= dbId;
-	*( unsigned short* )( *pCondString + *pItemOffset + ROW_DATA_OFFSET_TABLE_NUMBER )		= tableNumber;
-	*( unsigned short* )( *pCondString + *pItemOffset + ROW_DATA_OFFSET_COLUMN_NUMBER )		= columnNumber;
-	*( unsigned short* )( *pCondString + *pItemOffset + ROW_DATA_OFFSET_COLUMN_OFFSET )		= SDBGetColumnOffsetByNumber( dbId, tableNumber, columnNumber );
+	*( unsigned short* )( *pCondString + *pItemOffset + ROW_DATA_OFFSET_TABLE_NUMBER )		= tableId;
+	*( unsigned short* )( *pCondString + *pItemOffset + ROW_DATA_OFFSET_COLUMN_NUMBER )		= columnId;
+	*( unsigned short* )( *pCondString + *pItemOffset + ROW_DATA_OFFSET_COLUMN_OFFSET )		= SDBGetColumnOffsetByNumber( dbId, tableId, columnId );
 	*( unsigned short* )( *pCondString + *pItemOffset + ROW_DATA_OFFSET_COLUMN_SIZE )		= columnSize;
 
 	switch ( fieldType )
@@ -10724,6 +10729,12 @@ static MYSQL_SYSVAR_UINT(cluster_port, scaledb_cluster_port,
 		"This parameter specifies the port for connecting to mysql for DDL operations, leave option out if using default port.",
 		NULL, NULL, 3306, 1, UINT_MAX, 0);
 
+
+static MYSQL_SYSVAR_UINT(statistics_level, statisticsLevel_,
+  PLUGIN_VAR_NOCMDOPT,
+  "Set the statistics level",
+  NULL, NULL, 2L, 1L, 1000L, 0);
+
 static MYSQL_SYSVAR_STR(cluster_user, scaledb_cluster_user,
 		PLUGIN_VAR_NOCMDOPT | PLUGIN_VAR_READONLY,
 		"user name for connecting to mysql for DDL operations",
@@ -10740,6 +10751,7 @@ static struct st_mysql_sys_var* scaledb_system_variables[] = { MYSQL_SYSVAR(conf
         MYSQL_SYSVAR(buffer_size_data), MYSQL_SYSVAR(max_file_handles), MYSQL_SYSVAR(aio_flag),
         MYSQL_SYSVAR(max_column_length_in_base_file), MYSQL_SYSVAR(dead_lock_milliseconds),
         MYSQL_SYSVAR(cluster), MYSQL_SYSVAR(cluster_port), MYSQL_SYSVAR(cluster_user),
+  	    MYSQL_SYSVAR(statistics_level),
         MYSQL_SYSVAR(debug_string), NULL // the last element of this array must be NULL
         };
 

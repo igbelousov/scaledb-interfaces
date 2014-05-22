@@ -271,12 +271,24 @@ public:
 			);
 	}
 
-	ulong index_flags(uint idx, uint part, bool all_parts) const {
+	ulong index_flags(uint idx, uint part, bool all_parts) const
+	{
+
+		if(sdbDbId_!=0 && sdbTableNumber_ !=0 && SDBIsStreamingTable(sdbDbId_, sdbTableNumber_))
+		{
 		return (HA_READ_NEXT |
+			HA_READ_PREV |
+			HA_READ_RANGE |
+			HA_KEYREAD_ONLY);
+		}
+		else
+		{
+				return (HA_READ_NEXT |
 			HA_READ_PREV |
 			HA_READ_ORDER |
 			HA_READ_RANGE |
 			HA_KEYREAD_ONLY);
+		}
 	}
 
 	void print_header_thread_info(const char *msg);
