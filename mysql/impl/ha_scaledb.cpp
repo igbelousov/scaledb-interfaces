@@ -944,24 +944,30 @@ static group_by_handler *scaledb_create_group_by_handler(THD *thd,
 
 	ha_scaledb* scaledb					= (ha_scaledb*) (table_list->table->file);
 
+	scaledb->forceAnalytics_=false; //need to reset, because might have got set in the external lock
+
 	const COND* cond					= scaledb->cond_push( pWhere );
 
 #ifdef	SDB_USE_MDB_MRR
 	// Evaluate the indexes referenced in the WHERE clause to determine whether the query can be executed as a streaming range read
-	bool		ok						= scaledb->isRangeRead( table_list );
+	bool		isRangeReadQuery		= scaledb->isRangeRead( table_list );
 #else
 	// Parse the WHERE condition string to try and determine whether the query can be executed as a streaming range read
-	bool		ok						= scaledb->getRangeKeys( scaledb->conditionString(), scaledb->conditionStringLength(),
+	bool		isRangeReadQuery		= scaledb->getRangeKeys( scaledb->conditionString(), scaledb->conditionStringLength(),
 																 &scaledb->indexKeyRangeStart_, &scaledb->indexKeyRangeEnd_ );
 #endif
+	scaledb->generateAnalyticsString();
 
-	if ( ok == false || cond == NULL || scaledb->analyticsStringLength() == 0 || scaledb->analyticsSelectLength() == 0 )
+	bool		doCreateGroupByHandler	= ( isRangeReadQuery /* && pCond */ && scaledb->analyticsStringLength() && scaledb->analyticsSelectLength() );
+
+	if ( !doCreateGroupByHandler )
 	{
-		//if the pushdown failed, or the analytics string is empty, or there are no aggregate functions (analyticsSelectLength) then don't use group by handler
+		// Do not create the group-by handler if the analytics string is empty, or there are no aggregate functions (analyticsSelectLength)
 		return NULL;
 	}
 	else
 	{
+		scaledb->forceAnalytics_=false;
 		return new  ha_scaledb_groupby( thd, select_lex, fields, table_list, group_by, order_by, pWhere, having, scaledb_hton );
 	}
 }
@@ -1722,7 +1728,7 @@ ha_scaledb::ha_scaledb(handlerton *hton, TABLE_SHARE *table_arg) :
 	isStreamingDelete_ = false;
 
 	isIndexedQuery_			=
-	isIndexKeyEvaluation_	=
+	isQueryEvaluation_		=
 	isRangeKeyEvaluation_	= false;
 
 	sdbDbId_ = 0;
@@ -2011,6 +2017,7 @@ int ha_scaledb::external_lock(THD* thd, /* handle to the user thread */
 	{
 		char* s_force_analytics=SDBUtilFindComment(thd->query(), "force_sdb_analytics") ;
 		if(s_force_analytics!=NULL){forceAnalytics_=true;}
+		else {forceAnalytics_=false;}
 	}
 	// fetch sdbTableNumber_ if it is 0 (which means a new table handler).
 	if ((sdbTableNumber_ == 0) && (!virtualTableFlag_))
@@ -4123,6 +4130,24 @@ void ha_scaledb::prepareIndexQueryManager(unsigned int indexNum) {
 #endif
 }
 
+// Evaluate table definition for a subsequent table scan
+int ha_scaledb::evaluateTableScan()
+{
+	// Clear the start key and end key values that apply only to an indexed query
+	clearIndexKeyRanges();
+
+	if ( !( hasRangeDesignator() ) )
+	{
+		// Not a streaming table with a range key
+		return HA_ERR_END_OF_FILE;
+	}
+
+	// This query will not use an index
+	isIndexedQuery_									= false;
+
+	return 0;
+}
+
 // Evaluate and assign key values for a subsequent indexed query
 int ha_scaledb::evaluateIndexKey( const uchar* key, uint key_len, enum ha_rkey_function find_flag )
 {
@@ -4392,7 +4417,7 @@ int ha_scaledb::index_read(uchar* buf, const uchar* key, uint key_len,
 	// build template at the begin of scan 
 	buildRowTemplate(table, buf);
 
-	if ( isIndexKeyEvaluation() )
+	if ( isQueryEvaluation() )
 	{
 		retValue	= evaluateIndexKey( key, key_len, find_flag );
 
@@ -6801,24 +6826,36 @@ void ha_scaledb::saveConditionToString(const COND *cond)
 		}
 #endif	//CONDITION_PUSH_DEBUG
 
+	}
+}
+
+void ha_scaledb::generateAnalyticsString()
+{
+	THD* thd = ha_thd();
+
+
+	analyticsStringLength_		=
+	analyticsSelectLength_      = 0;
+	forceAnalytics_=false;
+
+		
 		char* s_force_analytics=SDBUtilFindComment(thd->query(), "force_sdb_analytics") ;
 
 		bool is_streaming_table=SDBIsStreamingTable(sdbDbId_, sdbTableNumber_);
 
-		if ( conditionStringLength_ && is_streaming_table )
+		if ( is_streaming_table )
 		{
 			//only proceed if condition pushdown was successful
 			int  cardinality=SDBUtilFindCommentIntValue(thd->query(), "cardinality") ;
 
-//disable default for now.
-		//	if(cardinality==0) {cardinality=1000;}
+
 
 			char	group_buf[ 2000 ];
 			char	select_buf[ 2000 ];
-			int		len1		= generateGroupConditionString(cardinality, group_buf, sizeof( group_buf ), DBID, TABID );
+			int		len1		= generateGroupConditionString(cardinality, group_buf, sizeof( group_buf ), sdbDbId_, sdbTableNumber_ );
 
 
-			int		len2		= generateSelectConditionString( select_buf, sizeof( select_buf ),DBID, TABID  );
+			int		len2		= generateSelectConditionString( select_buf, sizeof( select_buf ),sdbDbId_, sdbTableNumber_  );
 			analyticsSelectLength_=len2;
 
 			//check if analytics is enabled
@@ -6864,11 +6901,7 @@ void ha_scaledb::saveConditionToString(const COND *cond)
 				forceAnalytics_=true;
 			}
 		}
-	}
-
 }
-
-
 
 /**
   Push a condition and/or analytics to the scaledb storage engines for enhancing
@@ -7105,6 +7138,11 @@ int ha_scaledb::rnd_init(bool scan) {
 	DBUG_ENTER("ha_scaledb::rnd_init");
 	THD* thd = ha_thd();
 
+	if ( isQueryEvaluation() )
+	{
+		DBUG_RETURN( 0 );
+	}
+
 	sqlCommand_ = thd_sql_command(thd);
 	// For select statement, we use the sequential scan since full table scan is faster in this case.
 	// For non-select statement, if the table has index, then we prefer to use index 
@@ -7124,23 +7162,12 @@ int ha_scaledb::rnd_init(bool scan) {
 		{
 		case SQLCOM_SELECT:
 			{
-				if (forceAnalytics_==true && analyticsStringLength_==0)
+				if (forceAnalytics_==true)
 				{
-					conditionStringLength_	= 0;
-					analyticsStringLength_	= 0;
-					forceAnalytics_			= false;
-					isIndexedQuery_			= false;
 					SDBSetErrorMessage( sdbUserId_, INVALID_STREAMING_OPERATION, "- force_sdb_analytics was set but not used." );
 					DBUG_RETURN(HA_ERR_GENERIC);
 				}
-				else
-				{
-					conditionStringLength_ = 0;
-					analyticsStringLength_ = 0;
-					forceAnalytics_=false;
-
-				}
-
+		
 				break;
 			}
 		case SQLCOM_HA_READ:
@@ -7229,8 +7256,10 @@ int ha_scaledb::rnd_next(uchar* buf) {
 
 	ha_statistic_increment(&SSV::ha_read_rnd_next_count);
 
-	if ( isIndexKeyEvaluation() )
+	if ( isQueryEvaluation() )
 	{
+		errorNum	= evaluateTableScan();
+
 		DBUG_RETURN( errorNum );
 	}
 

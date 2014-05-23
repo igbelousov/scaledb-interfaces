@@ -402,6 +402,7 @@ public:
 	// this is to compile for mariadb interface
 	double keyread_time(uint index, uint ranges, ha_rows rows);
 
+	void generateAnalyticsString();
 
 	int index_init(uint index, bool sorted); // this method is optional
 	int index_end(); // this method is optional
@@ -625,45 +626,38 @@ public:
 		return isIndexedQuery_;
 	}
 
-	inline void	setIndexKeyEvaluation()
+	inline void	setQueryEvaluation()
 	{
-		isIndexKeyEvaluation_		= true;
+		isQueryEvaluation_			= true;
 	}
 
 	inline void	setRangeKeyEvaluation()
 	{
-		setIndexKeyEvaluation();
+		setQueryEvaluation();
 		isRangeKeyEvaluation_		= true;
 	}
 
-	inline void	clearIndexKeyEvaluation()
+	inline void	clearQueryEvaluation()
 	{
-		isIndexKeyEvaluation_		=
+		isQueryEvaluation_			=
 		isRangeKeyEvaluation_		= false;
 
-		if ( sdbDesignatorId_ )
-		{
-			ha_index_end();
-		}
-		else
-		{
-			ha_rnd_end();
-		}
+		ha_index_or_rnd_end();
 	}
 
 	inline void	clearRangeKeyEvaluation()
 	{
-		clearIndexKeyEvaluation();
+		clearQueryEvaluation();
 	}
 
-	inline bool	isIndexKeyEvaluation()
+	inline bool	isQueryEvaluation()
 	{
-		return isIndexKeyEvaluation_;
+		return isQueryEvaluation_;
 	}
 
 	inline bool isRangeKeyEvaluation()
 	{
-		return ( ( isIndexKeyEvaluation_ && isRangeKeyEvaluation_ ) ? true : false );
+		return ( ( isQueryEvaluation_ && isRangeKeyEvaluation_ ) ? true : false );
 	}
 
 	inline bool isRangeDesignator()
@@ -836,7 +830,7 @@ public:
 	unsigned char	indexKeyRangeEndData_[ 8 ];
 	key_range		indexKeyRangeStart_;
 	key_range		indexKeyRangeEnd_;
-
+	bool forceAnalytics_;
 private:
 
 	THR_LOCK_DATA lock; ///< MySQL lock
@@ -869,7 +863,7 @@ private:
 
 	// True if the current query is executed using an index traversal
 	bool	isIndexedQuery_;
-	bool	isIndexKeyEvaluation_;
+	bool	isQueryEvaluation_;
 	bool	isRangeKeyEvaluation_;
 
 	static const int SdbKeySearchDirectionTranslation[13][2];
@@ -897,7 +891,7 @@ private:
 	unsigned short analyticsStringAllocatedLength_;
 	unsigned short analyticsStringExtensionLength_;
 	unsigned short analyticsStringMaxLength_;
-	bool forceAnalytics_;
+
 	// number of rows in bulk insert 
 	ha_rows numOfBulkInsertRows_;
 	ha_rows numOfInsertedRows_;
@@ -933,6 +927,9 @@ private:
 #ifdef SDB_DEBUG
 	void debugHaSdb(char *funcName, const char* name1, const char* name2, TABLE *table_arg);
 #endif
+
+	// evaluate table scan - used for analytic queries
+	int evaluateTableScan();
 
 	// evaluate index key - used for analytic queries
 	int evaluateIndexKey( const uchar* key, uint key_len, enum ha_rkey_function find_flag );
@@ -1473,11 +1470,22 @@ public:
 #else
 		ha_scaledb* scaledb= (ha_scaledb*) (my_table_list_->table->file);
 	
-		int range_index=SDBGetRangeKey(scaledb->sdbDbId(), scaledb->sdbTableNumber()) ;
-		int index_id=SDBGetIndexExternalId(scaledb->sdbDbId(), range_index);
-		int rc=scaledb->ha_index_init(index_id, 1);  //need to patch in the range key
 
-		return rc;
+		if ( scaledb->isIndexedQuery() )
+		{
+
+			int range_index=SDBGetRangeKey(scaledb->sdbDbId(), scaledb->sdbTableNumber()) ;
+			int index_id=SDBGetIndexExternalId(scaledb->sdbDbId(), range_index);
+			int rc=scaledb->ha_index_init(index_id, 1);  //need to patch in the range key
+			return rc;
+		}
+		else
+		{
+			int rc=scaledb->rnd_init(true);
+			return rc;
+		}
+
+
 #endif
 	}
 
