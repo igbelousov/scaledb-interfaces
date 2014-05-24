@@ -95,7 +95,7 @@ typedef unsigned long long uint64;
 
 // Memory Management calls for the interface have different names from those defined in environment.h to avoid redefinitions and confusion
 //	These #defines are necessary because some of the interface functions call our own memory management functions in the DataUtil class.
-#ifdef SDB_DEBUG
+#if defined(SDB_DEBUG) || defined(SDB_DEBUG_MALLOC)
 #define ALLOCATE_MEMORY(a,b,c) SDBTestedMalloc(a,b,c)
 #define FREE_MEMORY SDBTestedFree	
 #define REALLOCATE_MEMORY SDBTestedRealloc

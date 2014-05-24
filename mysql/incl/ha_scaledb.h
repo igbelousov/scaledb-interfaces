@@ -137,6 +137,7 @@ struct GroupByAnalyticsHeader
 struct GroupByAnalyticsBody
 {
 		short field_offset;			//the position in table row
+		short columnNumber;                 //this is the column number
 		short length;			//the length of data 
 		char type;				//the column type
 		short function;			//this is operation to perform
@@ -159,6 +160,7 @@ struct SelectAnalyticsBody1
 struct SelectAnalyticsBody2
 {
 		short field_offset;			//the position in table row
+		short columnNumber;                 //this is the column number
 		short length;			//the length of data 
 		short precision;
 		short scale;
@@ -818,6 +820,11 @@ public:
 
 	unsigned short analyticsStringLength() {return analyticsStringLength_;}
 	unsigned short analyticsSelectLength() {return analyticsSelectLength_;}
+	void resetAnalyticsString()
+	{
+		analyticsSelectLength_=0;
+		analyticsStringLength_=0;
+	}
 	unsigned char* conditionString() {return conditionString_;}
 	unsigned int   conditionStringLength() {return conditionStringLength_;}
 

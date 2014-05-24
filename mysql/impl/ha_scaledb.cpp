@@ -962,6 +962,7 @@ static group_by_handler *scaledb_create_group_by_handler(THD *thd,
 
 	if ( !doCreateGroupByHandler )
 	{
+		scaledb->resetAnalyticsString();
 		// Do not create the group-by handler if the analytics string is empty, or there are no aggregate functions (analyticsSelectLength)
 		return NULL;
 	}
@@ -6058,6 +6059,7 @@ int ha_scaledb::generateGroupConditionString(int cardinality, char* buf, int max
 		if(columnNumber==0 ) {return 0;}
 	
 		gab->field_offset=SDBGetColumnOffsetByNumber(dbid, tabid, columnNumber);
+		gab->columnNumber=columnNumber;
 		gab->length= SDBGetColumnSizeByNumber(dbid, tabid, columnNumber);
 		gab->type=castype;
 		gab->function=function;
@@ -6088,6 +6090,7 @@ bool ha_scaledb::addSelectField(char* buf, int& pos, unsigned short dbid, unsign
 	{
 		//for count(*) don't have column info
 		sab2->field_offset=0;	//number of fields in operation
+		sab2->columnNumber=0;
 		sab2->length=0;		//the length of data
 		sab2->type = 0;
 	        sab2->precision=0;
@@ -6100,6 +6103,7 @@ bool ha_scaledb::addSelectField(char* buf, int& pos, unsigned short dbid, unsign
 		unsigned short columnNumber = SDBGetColumnNumberByName(dbid, tabid, col_name );
 		if(columnNumber==0 ) {return false;}
 		sab2->field_offset=SDBGetColumnOffsetByNumber(dbid, tabid, columnNumber);;	//number of fields in operation
+		sab2->columnNumber=columnNumber;
 		sab2->length=SDBGetColumnSizeByNumber(dbid, tabid, columnNumber);		//the length of data
 		sab2->type = castype;				//the column type
 		sab2->precision=precision;

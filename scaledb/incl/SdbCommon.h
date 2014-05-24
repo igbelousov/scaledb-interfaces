@@ -30,6 +30,10 @@
 
 #define SDB_PUSH_DOWN
 
+// We define if to test the size of malloced data 
+// the define is in this file so it will be used by both the engine and the interface modules  
+//#define SDB_DEBUG_MALLOC
+
 // types of users
 #define SDB_USER_TYPE_SYSTEM 1
 #define SDB_USER_TYPE_NODE   2
