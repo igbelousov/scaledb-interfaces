@@ -5965,10 +5965,28 @@ int ha_scaledb::generateGroupConditionString(int cardinality, char* buf, int max
 	Item *item;
 
 	int pos=0;
+	int select_limit=0;
+	SELECT_LEX  lex=(((THD*) ha_thd())->lex)->select_lex;
+	Item* limit= lex.select_limit;
+	if(limit!=NULL)
+	{
+		if(limit->type()==Item::INT_ITEM)
+		{
+			select_limit=(long)limit->val_int();
+		}
+	}
+	int info=0;
+	if(lex.order_list.elements>0)
+	{
+		info |= GH_ORDER_BY;   
+	}
+
 
 	GroupByAnalyticsHeader* gbh= (GroupByAnalyticsHeader*)buf;
 	gbh->cardinality=cardinality;
-	
+	gbh->limit=select_limit;
+	gbh->info_flag=info;
+
 	pos=pos+sizeof(GroupByAnalyticsHeader);
 
    const char* col_name;

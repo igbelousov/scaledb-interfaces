@@ -88,6 +88,12 @@ Version for file format.
 								// Disable this to instead parse the WHERE condition string to try and determine this
 #endif
 
+
+/* bits in group by header info_flags */
+#define GH_ORDER_BY             1       /* query contain an order by*/
+//#define GH_ANOTHER_FLAG                 2       /* add as required */
+
+
 #define SCALEDB_VERSION 1
 #if defined(MARIADB_BASE_VERSION) && MYSQL_VERSION_ID >= 100000
 #define _MARIA_SDB_10
@@ -132,6 +138,8 @@ typedef struct SimpleCondContext{
 struct GroupByAnalyticsHeader
 {
 	long cardinality;
+	long limit;
+	long info_flag;
 	short numberColumns;
 };
 struct GroupByAnalyticsBody
@@ -278,11 +286,11 @@ public:
 
 		if(sdbDbId_!=0 && sdbTableNumber_ !=0 && SDBIsStreamingTable(sdbDbId_, sdbTableNumber_))
 		{
-		return (HA_READ_NEXT |
-			HA_READ_PREV |
-			HA_READ_RANGE |
-			HA_KEYREAD_ONLY);
-		}
+				return (HA_READ_NEXT |
+					HA_READ_PREV |
+					HA_READ_RANGE |
+					HA_KEYREAD_ONLY);
+	}
 		else
 		{
 				return (HA_READ_NEXT |
