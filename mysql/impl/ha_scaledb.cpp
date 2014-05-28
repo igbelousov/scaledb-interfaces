@@ -10429,8 +10429,28 @@ int ha_scaledb::extra(enum ha_extra_function operation) {
 }
 
 // this is to compile mariadb interface
-double ha_scaledb::keyread_time(uint index, uint ranges, ha_rows rows) {
-        return 0;
+double ha_scaledb::keyread_time(uint index, uint ranges, ha_rows rows)
+{
+	if(sdbDbId_!=0 && sdbTableNumber_ !=0 && SDBIsStreamingTable(sdbDbId_, sdbTableNumber_))
+	{
+//if a table scan is required, lets make sure that the range key
+// will get used
+			int range_index=SDBGetRangeKey(sdbDbId_, sdbTableNumber_) ;
+			int index_id=SDBGetIndexExternalId(sdbDbId_, range_index);
+
+			if(index==index_id)
+			{
+				return 0;
+			}
+			else
+			{
+				return 100000;
+			}
+	}
+	else
+	{
+               return 0;
+	}
 }
 
 // ---------------------------------------------------------------------
@@ -10573,7 +10593,11 @@ double ha_scaledb::scan_time() {
 	//  //  if the seekLength is 0 it is an empty table - leave it to be zero in order to favor sequential scan 
 	//	if (seekLength == 0)
 	//		seekLength = 1;
-
+	if(sdbDbId_!=0 && sdbTableNumber_ !=0 && SDBIsStreamingTable(sdbDbId_, sdbTableNumber_))
+        {
+//if streaming table then need to reset the key map, so that all keys are available.
+	        table->covering_keys=table->s->keys_for_keyread;
+        }
 	return (double) seekLength;
 }
 
