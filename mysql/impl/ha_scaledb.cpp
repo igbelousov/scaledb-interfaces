@@ -957,8 +957,9 @@ static group_by_handler *scaledb_create_group_by_handler(THD *thd,
 																 &scaledb->indexKeyRangeStart_, &scaledb->indexKeyRangeEnd_ );
 #endif
 	scaledb->generateAnalyticsString();
-
-	bool		doCreateGroupByHandler	= ( isRangeReadQuery /* && pCond */ && scaledb->analyticsStringLength() && scaledb->analyticsSelectLength() );
+//if no where clause then still support streaming table because will do a sequential scan over implicit range index
+// so if cond==NULL, then use groupby handler
+	bool		doCreateGroupByHandler	= ( (isRangeReadQuery || cond==NULL)  && scaledb->analyticsStringLength() && scaledb->analyticsSelectLength() );
 
 	if ( !doCreateGroupByHandler )
 	{
@@ -10431,6 +10432,7 @@ int ha_scaledb::extra(enum ha_extra_function operation) {
 // this is to compile mariadb interface
 double ha_scaledb::keyread_time(uint index, uint ranges, ha_rows rows)
 {
+	//STREAMING_OPTIMIZATION
 	if(sdbDbId_!=0 && sdbTableNumber_ !=0 && SDBIsStreamingTable(sdbDbId_, sdbTableNumber_))
 	{
 //if a table scan is required, lets make sure that the range key
@@ -10593,11 +10595,6 @@ double ha_scaledb::scan_time() {
 	//  //  if the seekLength is 0 it is an empty table - leave it to be zero in order to favor sequential scan 
 	//	if (seekLength == 0)
 	//		seekLength = 1;
-	if(sdbDbId_!=0 && sdbTableNumber_ !=0 && SDBIsStreamingTable(sdbDbId_, sdbTableNumber_))
-        {
-//if streaming table then need to reset the key map, so that all keys are available.
-	        table->covering_keys=table->s->keys_for_keyread;
-        }
 	return (double) seekLength;
 }
 

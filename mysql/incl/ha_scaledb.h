@@ -286,11 +286,24 @@ public:
 
 		if(sdbDbId_!=0 && sdbTableNumber_ !=0 && SDBIsStreamingTable(sdbDbId_, sdbTableNumber_))
 		{
+//if streaming table and not range key then only do point lookup?
+			int range_index=SDBGetRangeKey(sdbDbId_, sdbTableNumber_) ;
+			int index_id=SDBGetIndexExternalId(sdbDbId_, range_index);
+
+			if(idx==index_id)
+			{
+
 				return (HA_READ_NEXT |
 					HA_READ_PREV |
+	   			        HA_READ_ORDER |
 					HA_READ_RANGE |
 					HA_KEYREAD_ONLY);
-	}
+			}
+			else
+			{
+					return (HA_KEYREAD_ONLY);
+			}
+	        }
 		else
 		{
 				return (HA_READ_NEXT |
