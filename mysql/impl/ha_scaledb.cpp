@@ -5246,8 +5246,8 @@ bool ha_scaledb::conditionFieldToString( unsigned char** pCondString, unsigned i
 
 						// Convert the time value to the field's data type
 						convertTimeToType( pMysqlThd, pFieldItem, dataType, &myTime,
-											pComperandData + USER_DATA_OFFSET_DATA_TYPE,
-											pComperandData + USER_DATA_OFFSET_USER_DATA );
+										   pComperandData + USER_DATA_OFFSET_DATA_TYPE,
+										   pComperandData + USER_DATA_OFFSET_USER_DATA );
 
 						isFromString				= false;
 #else	// MARIADB 5
@@ -5273,8 +5273,8 @@ bool ha_scaledb::conditionFieldToString( unsigned char** pCondString, unsigned i
 
 										// Convert the time string to a time value, and deposit into the condition string
 										convertTimeStringToTimeConstant( pMysqlThd, pComperandItem, pString, stringSize, dataType,
-																			pComperandData + USER_DATA_OFFSET_DATA_TYPE,
-																			pComperandData + USER_DATA_OFFSET_USER_DATA );
+																		 pComperandData + USER_DATA_OFFSET_DATA_TYPE,
+																		 pComperandData + USER_DATA_OFFSET_USER_DATA );
 										break;
 
 									case INT_RESULT:
@@ -5311,8 +5311,8 @@ bool ha_scaledb::conditionFieldToString( unsigned char** pCondString, unsigned i
 					{
 						// Convert the time string to a time value, and deposit into the condition string
 						convertTimeStringToTimeConstant( pMysqlThd, pComperandItem, pString, stringSize, dataType,
-															pComperandData + USER_DATA_OFFSET_DATA_TYPE,
-															pComperandData + USER_DATA_OFFSET_USER_DATA );
+														 pComperandData + USER_DATA_OFFSET_DATA_TYPE,
+														 pComperandData + USER_DATA_OFFSET_USER_DATA );
 					}
 
 					*( pComperandData + USER_DATA_OFFSET_DATA_SIZE ) = ( unsigned char )( 8 );
@@ -5324,13 +5324,18 @@ bool ha_scaledb::conditionFieldToString( unsigned char** pCondString, unsigned i
 		case MYSQL_TYPE_STRING:
 			if ( pComperandItem )
 			{
+				unsigned char*			fieldEntry[ ROW_DATA_NODE_LENGTH ];
+
+				// Save a copy of the field entry created above
+				memcpy( fieldEntry, *pCondString + *pItemOffset, ROW_DATA_NODE_LENGTH );
+
 				switch ( pComperandItem->type() )
 				{
 					case Item::INT_ITEM:
 					{
-						const uint		maxTimeStringSize( 255 );	// Maximum length of a time string
+						const uint		maxStringSize( 255 );	// Maximum length of a string
 						THD*			pMysqlThd	= ha_thd();
-						unsigned int	diffSize	= maxTimeStringSize - sizeof( long long );
+						unsigned int	diffSize	= maxStringSize - sizeof( long long );
 						long long		intValue	= ( ( Item_int* ) pComperandItem )->value;
 
 						*pItemOffset				= *pComperandDataOffset;
@@ -5352,7 +5357,7 @@ bool ha_scaledb::conditionFieldToString( unsigned char** pCondString, unsigned i
 							}
 						}
 
-						String			stringValue( ( char* )( *pCondString + *pItemOffset + USER_DATA_OFFSET_USER_DATA ), maxTimeStringSize, pMysqlThd->charset() );
+						String			stringValue( ( char* )( *pCondString + *pItemOffset + USER_DATA_OFFSET_USER_DATA ), maxStringSize, pMysqlThd->charset() );
 						const char*		pString;
 						unsigned int	stringSize;
 
@@ -5361,7 +5366,7 @@ bool ha_scaledb::conditionFieldToString( unsigned char** pCondString, unsigned i
 						pString						= stringValue.ptr();
 						stringSize					= stringValue.length();
 
-						if ( stringSize				> maxTimeStringSize )
+						if ( stringSize				> maxStringSize )
 						{
 							return false;
 						}
@@ -5370,15 +5375,6 @@ bool ha_scaledb::conditionFieldToString( unsigned char** pCondString, unsigned i
 																						  ( SDB_PUSHDOWN_LITERAL_DATA_TYPE_CHAR );
 						*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_SIZE )	= ( unsigned char )( stringSize );
 						*pItemOffset												   += ( unsigned int  )( USER_DATA_OFFSET_USER_DATA + stringSize );
-
-						// Recreate the field entry following the comperand entry
-						*( *pCondString + *pItemOffset + ROW_DATA_OFFSET_ROW_TYPE )								= SDB_PUSHDOWN_COLUMN_DATA_TYPE_CHAR;
-						*( unsigned short* )( *pCondString + *pItemOffset + ROW_DATA_OFFSET_DATABASE_NUMBER )	= dbId;
-						*( unsigned short* )( *pCondString + *pItemOffset + ROW_DATA_OFFSET_TABLE_NUMBER )		= tableId;
-						*( unsigned short* )( *pCondString + *pItemOffset + ROW_DATA_OFFSET_COLUMN_NUMBER )		= columnId;
-						*( unsigned short* )( *pCondString + *pItemOffset + ROW_DATA_OFFSET_COLUMN_OFFSET )		= columnOffset;
-						*( unsigned short* )( *pCondString + *pItemOffset + ROW_DATA_OFFSET_COLUMN_SIZE )		= columnSize;
-						*( unsigned short* )( *pCondString + *pItemOffset + ROW_DATA_OFFSET_CHILDCOUNT )		= ( unsigned short )( 0 );			// # of children of the row data
 						break;
 					}
 
@@ -5386,6 +5382,9 @@ bool ha_scaledb::conditionFieldToString( unsigned char** pCondString, unsigned i
 						// Other types are currently unsupported
 						return false;
 				}
+
+				// Restore the field entry to its new position following the comperand entry
+				memcpy( *pCondString + *pItemOffset, fieldEntry, ROW_DATA_NODE_LENGTH );
 			}
 			break;
 	}
@@ -5448,12 +5447,12 @@ bool ha_scaledb::conditionConstantToString( unsigned char** pCondString, unsigne
 			{
 				case MYSQL_TYPE_STRING:
 				{
-					const uint		maxTimeStringSize( 255 );	// Maximum length of a time string
+					const uint		maxStringSize( 255 );	// Maximum length of a string
 					THD*			pMysqlThd	= ha_thd();
 					Item_field*		pField		= ( Item_field* ) pConstItem;
 
 					// Extend the condition string if necessary
-					resultExtension				= checkConditionStringSize( pCondString, pItemOffset, USER_DATA_OFFSET_USER_DATA + maxTimeStringSize );
+					resultExtension				= checkConditionStringSize( pCondString, pItemOffset, USER_DATA_OFFSET_USER_DATA + maxStringSize );
 
 					if ( resultExtension		< 0 )
 					{
@@ -5469,7 +5468,7 @@ bool ha_scaledb::conditionConstantToString( unsigned char** pCondString, unsigne
 						}
 					}
 
-					String			stringValue( ( char* )( *pCondString + *pItemOffset + USER_DATA_OFFSET_USER_DATA ), maxTimeStringSize, pMysqlThd->charset() );
+					String			stringValue( ( char* )( *pCondString + *pItemOffset + USER_DATA_OFFSET_USER_DATA ), maxStringSize, pMysqlThd->charset() );
 					const char*		pString;
 					unsigned int	stringSize;
 
@@ -5478,7 +5477,7 @@ bool ha_scaledb::conditionConstantToString( unsigned char** pCondString, unsigne
 					pString						= stringValue.ptr();
 					stringSize					= stringValue.length();
 
-					if ( stringSize				> maxTimeStringSize )
+					if ( stringSize				> maxStringSize )
 					{
 						return false;
 					}
