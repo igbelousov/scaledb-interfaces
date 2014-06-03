@@ -1592,7 +1592,15 @@ public:
 #ifdef _USE_GROUPBY_SEQUENTIAL
 		int rc=scaledb->rnd_end();
 #else
-		int rc=scaledb->index_end();
+		int rc=0;
+		if (scaledb->isIndexedQuery() )
+		{
+			rc=scaledb->index_end();
+		}
+		else
+		{
+			rc=scaledb->rnd_end();
+		}
 #endif
 		
 		scaledb->setTempTable(NULL);
