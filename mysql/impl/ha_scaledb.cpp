@@ -5324,10 +5324,10 @@ bool ha_scaledb::conditionFieldToString( unsigned char** pCondString, unsigned i
 		case MYSQL_TYPE_STRING:
 			if ( pComperandItem )
 			{
-				unsigned char*			fieldEntry[ ROW_DATA_NODE_LENGTH ];
+				unsigned char			pFieldEntry[ ROW_DATA_NODE_LENGTH ];
 
 				// Save a copy of the field entry created above
-				memcpy( fieldEntry, *pCondString + *pItemOffset, ROW_DATA_NODE_LENGTH );
+				memcpy( pFieldEntry, *pCondString + *pItemOffset, ROW_DATA_NODE_LENGTH );
 
 				switch ( pComperandItem->type() )
 				{
@@ -5384,7 +5384,7 @@ bool ha_scaledb::conditionFieldToString( unsigned char** pCondString, unsigned i
 				}
 
 				// Restore the field entry to its new position following the comperand entry
-				memcpy( *pCondString + *pItemOffset, fieldEntry, ROW_DATA_NODE_LENGTH );
+				memcpy( *pCondString + *pItemOffset, pFieldEntry, ROW_DATA_NODE_LENGTH );
 			}
 			break;
 	}
