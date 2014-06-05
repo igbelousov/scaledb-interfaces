@@ -3687,6 +3687,11 @@ void ha_scaledb::buildRowTemplate(TABLE* tab, unsigned char * buff,bool checkAut
 //
 bool ha_scaledb::buildKeyTemplate(SDBKeyTemplate & t,unsigned char * key, unsigned int key_len,unsigned int index,bool & isFullKey, bool & allNulls) {
 
+	// fail if no index exists
+	if ( index == MAX_KEY ) {
+		return false;
+	}
+
 	// now we prepare query by assigning key values to the corresponding key fields
 	unsigned int keyOffset = 0; // points to key value (may include additional bytes for NULL or variable string.
 	KEY* pKey = table->s->key_info + index; // find out which index to use
@@ -4021,34 +4026,6 @@ unsigned short ha_scaledb::getOffsetByDesignator(unsigned short designator) {
 	return offset;
 }
 
-// prepare query manager
-void ha_scaledb::prepareIndexOrSequentialQueryManager() {
-	unsigned short retValue = 0;
-
-	if ((sdbTableNumber_ == 0) && (!virtualTableFlag_))
-		retValue = initializeDbTableId();
-
-	if (SDBIsTableWithIndexes(sdbDbId_, sdbTableNumber_)) {
-		prepareFirstKeyQueryManager();
-	} else {
-		// prepare for sequential scan
-		char* pTableFsName = SDBGetTableFileSystemNameByTableNumber(sdbDbId_, sdbTableNumber_);		
-		retValue	= SDBPrepareSequentialScan( sdbUserId_, sdbQueryMgrId_, sdbDbId_, sdbPartitionId_,
-												table->s->table_name.str, ( ( THD* ) ha_thd() )->query_id, releaseLocksAfterRead_, rowTemplate_,
-												conditionString_, conditionStringLength_, analyticsString_, analyticsStringLength_ );
-	}
-
-	if ( conditionStringLength_ )
-	{
-		conditionStringLength_	= 0;
-	}
-
-	if ( analyticsStringLength_ )
-	{
-		analyticsStringLength_	= 0;
-	}
-	forceAnalytics_=false;
-}
 
 // prepare primary or first-key query manager
 void ha_scaledb::prepareFirstKeyQueryManager() {
@@ -4289,9 +4266,10 @@ int ha_scaledb::prepareIndexKeyQuery(const uchar* key, uint key_len, enum ha_rke
 	}
 
 	// 4a. set the prefetch 
-	// if not equal range on unique index, i.e. a result set with one row,
-	//	we assume index_init set active_index before read_range_first is called 
-	if (releaseLocksAfterRead_){
+	if (releaseLocksAfterRead_)
+	{
+		// if not equal range on unique index, i.e. a result set with one row,
+		//	we assume index_init set active_index before read_range_first is called 
 		if ( SDBIsNonUniqueIndex(sdbDbId_, sdbDesignatorId_)  || !eq_range_ )
 		{
 			unsigned char direction = ( unsigned char ) SdbKeySearchDirectionTranslation[ find_flag ][ 0 ];
@@ -4303,19 +4281,32 @@ int ha_scaledb::prepareIndexKeyQuery(const uchar* key, uint key_len, enum ha_rke
 				direction = ( unsigned char ) SdbKeySearchDirectionTranslation[ end_key_->flag ][ 0 ];
 				keyIndex = 1;
 			}
-		
+
 			// if search for nulls range (i.e != NULL) ignore the prefetch - for now - speical case - add later 
 			if ( buildKeySucceed  && !allNulls )
 			{
 				// define the range 
 				SDBDefineQueryRangeKey( sdbQueryMgrId_, sdbDbId_, sdbDesignatorId_, this->keyTemplate_[ keyIndex ], ( end_key_ ? direction : 0 ) );	// direction is meaningful here
-																																					//	only if there is an end key
+				//	only if there is an end key
 				use_prefetch  = true;
 			}
 		}
 	}
 
-	
+	// 4b. streaming table corrections
+	if ( SDBIsStreamingTable(sdbDbId_, sdbTableNumber_) )
+	{
+		// streaming table indices do not use prefetch - only trie indices do
+		use_prefetch  = false;
+
+		if (active_index == table->s->primary_key ) {
+			// on streaming table the streaming_key is the single key_part that is indexed 
+			// therefore the  key is always full 
+			isFullKey = true;
+		}
+	}
+
+
 #ifdef _STREAMING_RANGE_DELETE
 	if(sdbCommandType_ == SDB_COMMAND_DELETE &&  SDBIsStreamingTable(sdbDbId_, sdbTableNumber_) && SDBIsDimensionTable(sdbDbId_, sdbTableNumber_)==false)
 	{
@@ -4335,7 +4326,7 @@ int ha_scaledb::prepareIndexKeyQuery(const uchar* key, uint key_len, enum ha_rke
 	}
 #endif
 	
-	// 4b. set the query cursor 
+	// 4c. set the query cursor 
 	retValue					= SDBPrepareQuery( sdbUserId_, sdbQueryMgrId_, sdbPartitionId_, ( ( THD* ) ha_thd() )->query_id,
 												   releaseLocksAfterRead_, sdbCommandType_,
 												   find_flag == HA_READ_KEY_EXACT && isFullKey && !use_prefetch,
@@ -10551,31 +10542,6 @@ int ha_scaledb::extra(enum ha_extra_function operation) {
 	return (0);
 }
 
-// this is to compile mariadb interface
-double ha_scaledb::keyread_time(uint index, uint ranges, ha_rows rows)
-{
-	//STREAMING_OPTIMIZATION
-	if(sdbDbId_!=0 && sdbTableNumber_ !=0 && SDBIsStreamingTable(sdbDbId_, sdbTableNumber_))
-	{
-//if a table scan is required, lets make sure that the range key
-// will get used
-			int range_index=SDBGetRangeKey(sdbDbId_, sdbTableNumber_) ;
-			int index_id=SDBGetIndexExternalId(sdbDbId_, range_index);
-
-			if(index==index_id)
-			{
-				return 0;
-			}
-			else
-			{
-				return 100000;
-			}
-	}
-	else
-	{
-               return 0;
-	}
-}
 
 // ---------------------------------------------------------------------
 //	Get the storage engine error message - call ScaleDB to get a message
@@ -10734,21 +10700,44 @@ double ha_scaledb::read_time(uint inx, uint ranges, ha_rows rows) {
 	}
 #endif
 
-	if (rows <= 2) {
 
-		return((double) rows);
+	//STREAMING_OPTIMIZATION
+	if(sdbDbId_!=0 && sdbTableNumber_ !=0 && SDBIsStreamingTable(sdbDbId_, sdbTableNumber_))
+	{
+		//if a table scan is required, lets make sure that the range key
+		// will get used
+		int range_index=SDBGetRangeKey(sdbDbId_, sdbTableNumber_) ;
+		int index_id=SDBGetIndexExternalId(sdbDbId_, range_index);
+
+		if(inx ==index_id)
+		{
+			// if range key return minimum 
+			return 1;
+		}
+		else
+		{
+			// on dimension and pk return bigger number
+			return 10000;
+		}
 	}
+	else
+	{
+		if (rows <= 2) {
 
-	/* Assume that the read time is proportional, but slightly bigger (*1.1),  to the scan time for all
-	rows  + at most two seeks per range. */
-	double time_for_scan_index = scan_time()*1.1;
+			return((double) rows);
+		}
 
-	if (stats.records < rows) {
+		/* Assume that the read time is proportional, but slightly bigger (*1.1),  to the scan time for all
+		rows  + at most two seeks per range. */
+		double time_for_scan_index = scan_time()*1.1;
 
-		return(time_for_scan_index);
+		if (stats.records < rows) {
+
+			return(time_for_scan_index);
+		}
+
+		return(ranges + (((double) rows / (double) stats.records) * time_for_scan_index));
 	}
-
-	return(ranges + (((double) rows / (double) stats.records) * time_for_scan_index));
 }
 
 

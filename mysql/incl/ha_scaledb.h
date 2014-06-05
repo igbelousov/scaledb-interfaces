@@ -301,7 +301,7 @@ public:
 			}
 			else
 			{
-					return (HA_KEYREAD_ONLY);
+					return (HA_KEYREAD_ONLY | HA_READ_NEXT | HA_ONLY_WHOLE_INDEX);
 			}
 	        }
 		else
@@ -422,8 +422,12 @@ public:
 	int index_read_idx(uchar* buf, uint keynr, const uchar* key, uint key_len, enum ha_rkey_function find_flag);
 	// The following functions works like index_read, but it find the last row with the current key value or prefix.
 	int index_read_last(uchar * buf, const uchar * key, uint key_len);
+	
 	// this is to compile for mariadb interface
-	double keyread_time(uint index, uint ranges, ha_rows rows);
+	double keyread_time(uint index, uint ranges, ha_rows rows) 
+	{
+		return read_time(index,ranges,rows);
+	}
 
 	void generateAnalyticsString();
 
@@ -970,9 +974,6 @@ private:
 
 	// prepare query manager using any avaiable key
 	void prepareFirstKeyQueryManager();
-
-	// prepare query manager 
-	void prepareIndexOrSequentialQueryManager();
 
 	// output handle and MySQL user thread id
 	void outputHandleAndThd();
