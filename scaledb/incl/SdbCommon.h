@@ -219,7 +219,7 @@ typedef enum SdbKeySearchDirection {
 #define INVALID_STREAMING_OPERATION 58
 #define BLOCK_REQUESTED_OUTSIDE_FILE_RANGE 59	// This list is copied to scaledb_error.h
 #define TABLE_IN_USE_ON_ANOTHER_NODE 60
-
+#define QUERY_ABORTED				61
 #define CAS_FILE_IN_USE		 100
 
 #define ENGINE_INDEX_ERROR 201

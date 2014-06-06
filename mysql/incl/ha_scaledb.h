@@ -84,7 +84,7 @@ Version for file format.
 */
 #if MYSQL_VERSION_ID >= 100011  //only enable for montys branch
 #define USE_GROUP_BY_HANDLER
-#define SDB_USE_MDB_MRR			// Use MariaDB multi-range-read functionality to determine whether the WHERE clause includes conditions on indexed columns
+//#define SDB_USE_MDB_MRR			// Use MariaDB multi-range-read functionality to determine whether the WHERE clause includes conditions on indexed columns
 								// Disable this to instead parse the WHERE condition string to try and determine this
 #endif
 
@@ -652,7 +652,10 @@ public:
 	{
 		return isIndexedQuery_;
 	}
-
+	inline void setIsIndexedQuery()
+	{
+		 isIndexedQuery_=true;
+	}
 	inline void	setQueryEvaluation()
 	{
 		isQueryEvaluation_			= true;
@@ -1564,21 +1567,34 @@ public:
 			rc			= scaledb->rnd_next( temp_table_->record[ 0 ] );
 		}
 #else
-		if ( first_ )
+		if ( scaledb->isIndexedQuery() )
 		{
-			if ( scaledb->indexKeyRangeEnd_.key )
+			if ( first_ )
 			{
-				scaledb->setEndRange( &( scaledb->indexKeyRangeEnd_ ) );
-			}
+				if ( scaledb->indexKeyRangeEnd_.key )
+				{
+					scaledb->setEndRange( &( scaledb->indexKeyRangeEnd_ ) );
+				}
 
-			rc			= scaledb->index_read( temp_table_->record[ 0 ],
-											   ( const uchar* ) scaledb->indexKeyRangeStart_.key, scaledb->indexKeyRangeStart_.length, scaledb->indexKeyRangeStart_.flag );
-			first_		= false;
+				rc			= scaledb->index_read( temp_table_->record[ 0 ],
+					( const uchar* ) scaledb->indexKeyRangeStart_.key, scaledb->indexKeyRangeStart_.length, scaledb->indexKeyRangeStart_.flag );
+				first_		= false;
+			}
+			else
+			{
+				rc			= scaledb->index_next( temp_table_->record[ 0 ] );
+			}
 		}
 		else
 		{
-			rc			= scaledb->index_next( temp_table_->record[ 0 ] );
+			if ( first_ )
+			{
+				first_	= false;
+			}
+
+			rc			= scaledb->rnd_next( temp_table_->record[ 0 ] );
 		}
+
 #endif
 	
 		return rc;
@@ -1613,7 +1629,31 @@ public:
 	{
 	 return 0;
 	}
-};
+
+
+	void print_error(int error, myf errflag)
+	{
+
+		ha_scaledb* scaledb= (ha_scaledb*) (my_table_list_->table->file);
+
+		if(error==HA_ERR_GENERIC)
+		{
+
+
+			String str;
+			bool temporary= scaledb->get_error_message(error, &str);
+			if (!str.is_empty())
+			{
+				const char* engine= scaledb->table_type();
+				my_error(ER_GET_ERRMSG, errflag, error, str.c_ptr(),engine);
+				return;
+			}
+		}
+		//fall through to defautlt handler
+
+		my_error(ER_GET_ERRNO, MYF(0), error, hton_name(ht)->str);
+	}
+	};
 
 
 #endif //USE_GROUP_BY_HANDLER

@@ -512,7 +512,11 @@ static int convertToMysqlErrorCode(int scaledbErrorCode) {
 			mysqlErrorCode = HA_ERR_NO_SUCH_TABLE;
 			break;
 		}
-
+	case QUERY_ABORTED:
+		{
+			mysqlErrorCode = HA_ERR_GENERIC;
+			break;
+		}
 		
 	default:
 		mysqlErrorCode = HA_ERR_GENERIC;
@@ -955,6 +959,7 @@ static group_by_handler *scaledb_create_group_by_handler(THD *thd,
 	// Parse the WHERE condition string to try and determine whether the query can be executed as a streaming range read
 	bool		isRangeReadQuery		= scaledb->getRangeKeys( scaledb->conditionString(), scaledb->conditionStringLength(),
 																 &scaledb->indexKeyRangeStart_, &scaledb->indexKeyRangeEnd_ );
+	if(isRangeReadQuery) {scaledb->setIsIndexedQuery();}
 #endif
 	scaledb->generateAnalyticsString();
 //if no where clause then still support streaming table because will do a sequential scan over implicit range index
@@ -3461,6 +3466,10 @@ int ha_scaledb::fetchSingleRow(unsigned char* buf) {
 		// no row
 		in_range_check_pushed_down = FALSE; //reset
 		table->status = STATUS_NOT_FOUND;
+		if(retValue==QUERY_ABORTED)
+		{
+			SDBSetErrorMessage( sdbUserId_, QUERY_ABORTED, " - Insufficient resources to complete the query." );
+		}
 		DBUG_RETURN(convertToMysqlErrorCode(retValue));
 	}
 
