@@ -84,7 +84,7 @@ Version for file format.
 */
 #if MYSQL_VERSION_ID >= 100011  //only enable for montys branch
 #define USE_GROUP_BY_HANDLER
-//#define SDB_USE_MDB_MRR			// Use MariaDB multi-range-read functionality to determine whether the WHERE clause includes conditions on indexed columns
+#define SDB_USE_MDB_MRR			// Use MariaDB multi-range-read functionality to determine whether the WHERE clause includes conditions on indexed columns
 								// Disable this to instead parse the WHERE condition string to try and determine this
 #endif
 
@@ -137,45 +137,45 @@ typedef struct SimpleCondContext{
 #pragma pack(1)  //prevent padding of struct
 struct GroupByAnalyticsHeader
 {
-	long cardinality;
-	long limit;
-	long info_flag;
-	short numberColumns;
+	uint   cardinality;
+	uint   limit;
+	uint   info_flag;
+	ushort numberColumns;
 };
 struct GroupByAnalyticsBody
 {
-		short field_offset;			//the position in table row
-		short columnNumber;                 //this is the column number
-		short length;			//the length of data 
-		char type;				//the column type
-		short function;			//this is operation to perform
-		short function_length;  //the column type	
+		ushort field_offset;		//the position in table row
+		ushort columnNumber;     //this is the column number
+		ushort length;			//the length of data 
+		ushort function;			//this is operation to perform
+		ushort function_length;  //the column type	
+		char  type;				//the column type
 };
 
 
 struct SelectAnalyticsHeader
 {
-	short numberColumns;
+	ushort numberColumns;
 };
 
 struct SelectAnalyticsBody1
 {
-		short numberFields;		//the number of fields in column	
-		short function;	
+		ushort numberFields;		//the number of fields in column	
+		ushort function;	
 };
 
 	
 struct SelectAnalyticsBody2
 {
-		short field_offset;			//the position in table row
-		short columnNumber;                 //this is the column number
-		short length;			//the length of data 
-		short precision;
-		short scale;
+		ushort field_offset;			//the position in table row
+		ushort columnNumber;                 //this is the column number
+		ushort length;			//the length of data 
+		ushort precision;
+		ushort scale;
+		ushort function;			//this is operation to perform
+		ushort result_precision;
+		ushort result_scale;
 		char type;				//the column type
-		short function;			//this is operation to perform
-		short result_precision;
-		short result_scale;
 };
 #pragma pack()
 
@@ -669,10 +669,10 @@ public:
 
 	inline void	clearQueryEvaluation()
 	{
+		ha_index_or_rnd_end();
+
 		isQueryEvaluation_			=
 		isRangeKeyEvaluation_		= false;
-
-		ha_index_or_rnd_end();
 	}
 
 	inline void	clearRangeKeyEvaluation()
@@ -1638,7 +1638,7 @@ public:
 
 		if(error==HA_ERR_GENERIC)
 		{
-
+			scaledb->lastSDBErrorLength=0; //make sure only latest error gets returned
 
 			String str;
 			bool temporary= scaledb->get_error_message(error, &str);

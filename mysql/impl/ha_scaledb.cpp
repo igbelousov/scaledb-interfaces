@@ -7352,6 +7352,11 @@ int ha_scaledb::rnd_end() {
 	}
 #endif
 
+	if ( isQueryEvaluation() )
+	{
+		DBUG_RETURN( 0 );
+	}
+
 	char* pTableName		= SDBGetTableNameByNumber( sdbUserId_, sdbDbId_, sdbTableNumber_ );
 
 #ifdef SDB_DEBUG
@@ -10445,6 +10450,11 @@ int ha_scaledb::index_end(void) {
 		SDBDebugEnd(); // synchronize threads printout
 	}
 #endif
+
+	if ( isQueryEvaluation() )
+	{
+		return 0;
+	}
 
 	active_index = MAX_KEY;
 	return 0;
