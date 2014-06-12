@@ -573,6 +573,8 @@ unsigned short SDBPrepareSequentialScan( unsigned int userId, unsigned short que
 
 unsigned short SDBEndSequentialScan( unsigned int userId, unsigned short queryMgrId, unsigned short dbId, unsigned short partitionId, char *tableName, unsigned long long queryId );
 
+unsigned short SDBEndIndexedQuery( unsigned int userId, unsigned short queryMgrId, unsigned short dbId, unsigned short partitionId, char *tableName, unsigned long long queryId );
+
 unsigned short SDBGetSeqRowByPosition(unsigned int userId, unsigned short queryMgrId, unsigned long long rowId);
 
 unsigned short SDBPrepareQuery( unsigned int userId, unsigned short queryMgrId, unsigned short partitionId, unsigned long long queryId,
@@ -859,6 +861,7 @@ void dummyEnterMethod(unsigned short uId);
 #define API_GET_TABLE_LOCK_LEVEL			71
 #define API_GET_TABLE_STATS_2				72
 #define API_END_SEQUENTIAL_SCAN				73
+#define API_END_INDEXED_QUERY				74
 
 
 #endif //_SDB_STORAGE_API_H

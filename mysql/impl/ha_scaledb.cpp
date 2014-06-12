@@ -10456,7 +10456,19 @@ int ha_scaledb::index_end(void) {
 		return 0;
 	}
 
-	active_index = MAX_KEY;
+	char* pTableName		= SDBGetTableNameByNumber( sdbUserId_, sdbDbId_, sdbTableNumber_ );
+
+#ifdef SDB_DEBUG
+	SDBDebugStart      ();
+	SDBDebugPrintString( "\nEnd of indexed query on table [" );
+	SDBDebugPrintString( pTableName );
+	SDBDebugPrintString( "]\n" );
+	SDBDebugEnd        ();
+#endif
+
+	SDBEndIndexedQuery( sdbUserId_, sdbQueryMgrId_, sdbDbId_, sdbPartitionId_, pTableName, ( ( THD* ) ha_thd() )->query_id );
+
+	active_index			= MAX_KEY;
 	return 0;
 }
 
