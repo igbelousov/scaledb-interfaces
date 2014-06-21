@@ -7644,6 +7644,8 @@ int ha_scaledb::info(uint flag) {
 		errkey = get_last_index_error_key();		
 	}
 
+	bool            isFactTable     = SDBIsStreamingTable(sdbDbId_, sdbTableNumber_) && !SDBIsDimensionTable(sdbDbId_, sdbTableNumber_);
+	unsigned short  rangeDesignator = SDBGetRangeKey(  sdbDbId_, sdbTableNumber_ );
 	unsigned short	sdbIndexTableId	= SDBGetIndexTableNumberForTable( sdbDbId_, sdbTableNumber_ );
 	bool			isVariableStats	= false;
 	bool			isConstStats	= false;
@@ -7717,25 +7719,37 @@ int ha_scaledb::info(uint flag) {
 			for ( uint j = 0; j < table->key_info[ i ].key_parts; j++ )
 #endif //_MARIA_SDB_10
 			{
+			
 				// Get number of distinct key values for this key part
-				ha_rows		nDistinctKeys	= ( ha_rows ) SDBGetTableStats( sdbUserId_, sdbDbId_, idDesignator, sdbPartitionId_, SDB_STATS_INFO_FILE_DISTINCT_KEYS, j );
-
-				if ( !nDistinctKeys )
-				{
-					// The current transaction inserted rows - we treat each row as a uniuqe key - to get an upper bound on the current number of uniuqe keys 
-					rec_per_key				= records;
+				if ( isFactTable ) {
+					// on fact table we don't have avarge estimate - we just pass a fix number and use the record in range 
+					if (GET_DESIGNATOR_NUMBER(idDesignator) == rangeDesignator) {
+						rec_per_key				= 1;
+					}
+					else {
+						rec_per_key				= 2;
+					}
 				}
-				else
-				{
-					rec_per_key				= records / nDistinctKeys;
-				}
+				else {
+					ha_rows		nDistinctKeys	= ( ha_rows ) SDBGetTableStats( sdbUserId_, sdbDbId_, idDesignator, sdbPartitionId_, SDB_STATS_INFO_FILE_DISTINCT_KEYS, j );
 
-				/*	Since MySQL seems to favor table scans
+					if ( !nDistinctKeys )
+					{
+						// The current transaction inserted rows - we treat each row as a uniuqe key - to get an upper bound on the current number of uniuqe keys 
+						rec_per_key				= records;
+					}
+					else
+					{
+						rec_per_key				= records / nDistinctKeys;
+					}
+
+					/*	Since MySQL seems to favor table scans
 					too much over index searches, we pretend
 					index selectivity is 2 times better than
 					our estimate: */
 
-				rec_per_key					= rec_per_key / 2;
+					rec_per_key					= rec_per_key / 2;
+				}
 
 				if ( !rec_per_key )
 				{
@@ -10731,44 +10745,48 @@ double ha_scaledb::read_time(uint inx, uint ranges, ha_rows rows) {
 	}
 #endif
 
+	double readTime ;
+	
 
-	//STREAMING_OPTIMIZATION
-	if(sdbDbId_!=0 && sdbTableNumber_ !=0 && SDBIsStreamingTable(sdbDbId_, sdbTableNumber_))
-	{
-		//if a table scan is required, lets make sure that the range key
-		// will get used
-		int range_index=SDBGetRangeKey(sdbDbId_, sdbTableNumber_) ;
-		int index_id=SDBGetIndexExternalId(sdbDbId_, range_index);
-
-		if(inx ==index_id)
-		{
-			// if range key return minimum 
-			return 1;
-		}
-		else
-		{
-			// on dimension and pk return bigger number
-			return 10000;
-		}
+	if (rows <= 2) {
+		readTime = ((double) rows);
 	}
-	else
-	{
-		if (rows <= 2) {
-
-			return((double) rows);
-		}
-
+	else {
 		/* Assume that the read time is proportional, but slightly bigger (*1.1),  to the scan time for all
 		rows  + at most two seeks per range. */
 		double time_for_scan_index = scan_time()*1.1;
 
 		if (stats.records < rows) {
 
-			return(time_for_scan_index);
+			readTime =  time_for_scan_index;
 		}
+		else {
+			readTime = (ranges + (((double) rows / (double) stats.records) * time_for_scan_index));
 
-		return(ranges + (((double) rows / (double) stats.records) * time_for_scan_index));
+		}
 	}
+
+	////STREAMING_OPTIMIZATION
+	//if(sdbDbId_!=0 && sdbTableNumber_ !=0 && SDBIsStreamingTable(sdbDbId_, sdbTableNumber_))
+	//{
+	//	//if a table scan is required, lets make sure that the range key
+	//	// will get used
+	//	int range_index=SDBGetRangeKey(sdbDbId_, sdbTableNumber_) ;
+	//	int index_id=SDBGetIndexExternalId(sdbDbId_, range_index);
+
+	//	if(inx ==index_id)
+	//	{
+	//		// if range key return minimum 
+	//		readTime 1;
+	//	}
+	//	else
+	//	{
+	//		// on dimension and pk return bigger number
+	//		return 2;
+	//	}
+	//}
+
+	return readTime;
 }
 
 

@@ -283,35 +283,22 @@ public:
 
 	ulong index_flags(uint idx, uint part, bool all_parts) const
 	{
-
+		ulong flags;
+		
 		if(sdbDbId_!=0 && sdbTableNumber_ !=0 && SDBIsStreamingTable(sdbDbId_, sdbTableNumber_))
 		{
-//if streaming table and not range key then only do point lookup?
-			int range_index=SDBGetRangeKey(sdbDbId_, sdbTableNumber_) ;
-			int index_id=SDBGetIndexExternalId(sdbDbId_, range_index);
-
-			if(idx==index_id)
-			{
-
-				return (HA_READ_NEXT |
-					HA_READ_PREV |
-	   			        HA_READ_ORDER |
-					HA_READ_RANGE |
-					HA_KEYREAD_ONLY);
-			}
-			else
-			{
-					return (HA_KEYREAD_ONLY | HA_READ_NEXT | HA_ONLY_WHOLE_INDEX);
-			}
-	        }
+			// to skip MIN/MAX  optimization we remove the order from streaming tables 
+			// As a result we also remove loose-index-scans but since on streaming tables we apply exact keys only - it does not matter at this point
+			// we keep the range reads and the point reads
+			flags = (HA_READ_NEXT | HA_READ_PREV |                 HA_READ_RANGE | HA_KEYREAD_ONLY);
+		}
 		else
 		{
-				return (HA_READ_NEXT |
-			HA_READ_PREV |
-			HA_READ_ORDER |
-			HA_READ_RANGE |
-			HA_KEYREAD_ONLY);
+			// for general case: support all operations 
+			flags = (HA_READ_NEXT | HA_READ_PREV | HA_READ_ORDER | HA_READ_RANGE | HA_KEYREAD_ONLY);
 		}
+		
+		return flags ;
 	}
 
 	void print_header_thread_info(const char *msg);
