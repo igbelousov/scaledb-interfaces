@@ -7644,8 +7644,8 @@ int ha_scaledb::info(uint flag) {
 		errkey = get_last_index_error_key();		
 	}
 
-	bool            isFactTable     = SDBIsStreamingTable(sdbDbId_, sdbTableNumber_) && !SDBIsDimensionTable(sdbDbId_, sdbTableNumber_);
-	unsigned short  rangeDesignator = SDBGetRangeKey(  sdbDbId_, sdbTableNumber_ );
+	bool			isFactTable		= SDBIsStreamingTable(sdbDbId_, sdbTableNumber_) && !SDBIsDimensionTable(sdbDbId_, sdbTableNumber_);
+	unsigned short	rangeDesignator	= ( unsigned short ) SDBGetRangeKey( sdbDbId_, sdbTableNumber_ );
 	unsigned short	sdbIndexTableId	= SDBGetIndexTableNumberForTable( sdbDbId_, sdbTableNumber_ );
 	bool			isVariableStats	= false;
 	bool			isConstStats	= false;
