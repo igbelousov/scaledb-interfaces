@@ -6434,7 +6434,93 @@ Item* ha_scaledb::NestedFunc(enum_field_types& type, function_type& function, in
 	}
 	return item;
 }
+
+#ifdef  PROCESS_COUNT_DISTINCT
+Item* ha_scaledb::multiArgumentFunction(function_type funct, enum_field_types& type, function_type& function, int& no_fields, char* name, Item::Type ft, Item *item, Item_sum* sum, char* buf, int& pos, SelectAnalyticsBody1* sab1,unsigned short dbid, unsigned short tabid, bool& contains_analytics_function )
+{
+	int len	= ( int ) strlen( name );
+
+	if(len>=1000) {return NULL;} //abort, function too long
+
+	char func_name[1000];
+	short precision=0;
+	short result_precision=0;
+	short result_scale=0;
+	short scale=0;
+	strcpy(func_name,name);
+	int comma_count=0;
+	int flag=	0;
+	for(int i=0; i<=len;i++)
+	{
+		if(func_name[i]==',')
+		{
+			comma_count=comma_count+1;
+		}
+	}
+
+	int no_arguments=comma_count+1;
+
+	int arg=0;
+
+
+	Item_func *func = ((Item_func *)item->next);
+
 	
+		sab1->function=funct;
+		//concat operator
+		char* buf_start=buf+pos;
+		while(arg<no_arguments)
+		{
+
+
+			item= item->next;
+			Item::Type ft1=item->type();
+			if(ft1==Item::FIELD_ITEM)
+			{
+				//save each field
+				Field *field1 = ((Item_field *)item)->field;
+				const char* col_name=field1->field_name;	
+				type= field1->type();
+				function=FT_NONE;
+				flag=field1->flags;
+				if(type==MYSQL_TYPE_NEWDECIMAL)
+				{			
+					Field_new_decimal* fnd=(Field_new_decimal*)field1;
+					precision=fnd->precision;
+					scale=fnd->decimals();
+				}
+
+				no_fields++;
+				bool ret=addSelectField(buf,  pos, dbid, tabid, type, function,  col_name, contains_analytics_function,precision,scale,flag,result_precision,result_scale );
+				if(ret==false) {return NULL;}
+			}
+			else
+			{
+					return NULL;
+			}
+			
+			arg++;
+		}
+
+		//reverse order
+		SelectAnalyticsBody2 tmp[10];
+		if(no_fields>9) {return NULL;} //max 10 arguments in nested funcition
+		int c,d;
+		for( c=no_fields-1,  d=0; c>=0; c--, d++)
+		{
+			tmp[d]=*((SelectAnalyticsBody2*)(buf_start+ c*sizeof(SelectAnalyticsBody2)));
+		}
+		//write back in correct order
+		for( c=0; c<no_fields; c++)
+		{
+			*((SelectAnalyticsBody2*)(buf_start+ c*sizeof(SelectAnalyticsBody2)))=tmp[c];
+		}
+	
+	return item;
+}
+#endif //  PROCESS_COUNT_DISTINCT	
+
+
 int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned short dbid, unsigned short tabid)
 {
 	bool contains_analytics_function=false;
@@ -6531,6 +6617,19 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 					}
 
 				}
+#ifdef  PROCESS_COUNT_DISTINCT
+				else if (sum->sum_func() == Item_sum::COUNT_DISTINCT_FUNC)
+				{
+					function=FT_COUNT_DISTINCT;
+					Field *field =((Item_field *)item->next)->field;
+					Item::Type ft=item->next->type();
+					char* name= item->name;  //count distinct can have multile arguemnts
+					item=multiArgumentFunction(FT_COUNT_DISTINCT, type,function,no_fields,name, ft, item, sum,  buf,  pos,  sab1, dbid, tabid, contains_analytics_function );
+					contains_analytics_function=true;
+					if(item==NULL) {return 0;}			//unsupported so bail	
+			
+				}				
+#endif //  PROCESS_COUNT_DISTINCT
 				else if (sum->sum_func() == Item_sum::MIN_FUNC)
 				{
 						Item_sum_min *max = ((Item_sum_min *)item);

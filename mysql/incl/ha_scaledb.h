@@ -178,10 +178,12 @@ struct SelectAnalyticsBody2
 		char type;				//the column type
 };
 #pragma pack()
-
-
+//#define PROCESS_COUNT_DISTINCT
+#ifdef  PROCESS_COUNT_DISTINCT
+enum function_type { FT_NONE=0, FT_MIN=1, FT_MAX=2, FT_SUM=3, FT_COUNT=4, FT_AVG=5, FT_COUNT_DISTINCT=6, FT_STREAM_COUNT=7, FT_DATE=8, FT_HOUR=9, FT_MAX_CONCAT=10, FT_CHAR=11, FT_UNSUPPORTED=12 };
+#else
 enum function_type { FT_NONE=0, FT_MIN=1, FT_MAX=2, FT_SUM=3, FT_COUNT=4, FT_AVG=5, FT_STREAM_COUNT=6, FT_DATE=7, FT_HOUR=8, FT_MAX_CONCAT=9, FT_CHAR=10, FT_UNSUPPORTED=11 };
-
+#endif
 
 
 
@@ -453,6 +455,9 @@ public:
 	bool checkFunc(char* name, char* my_function);
 	bool checkNestedFunc(char* name, char* my_func1, char* my_func2);
 	Item* NestedFunc(enum_field_types& type, function_type& function, int& no_fields, char* name, Item::Type ft, Item *item, Item_sum* sum, char* buf, int& pos, SelectAnalyticsBody1* sab1,unsigned short dbid, unsigned short tabid, bool& contains_analytics_function );
+#ifdef  PROCESS_COUNT_DISTINCT
+	Item* multiArgumentFunction(function_type funct, enum_field_types& type, function_type& function, int& no_fields, char* name, Item::Type ft, Item *item, Item_sum* sum, char* buf, int& pos, SelectAnalyticsBody1* sab1,unsigned short dbid, unsigned short tabid, bool& contains_analytics_function );
+#endif // PROCESS_COUNT_DISTINCT
 	bool addSelectField(char* buf, int& pos, unsigned short dbid, unsigned short tabid, enum_field_types type, short function,  const char* col_name, bool& contains_analytics, short precison, short scale, int flag, short result_precision, short result_scale );
 #ifdef _HIDDEN_DIMENSION_TABLE // UTIL FUNC DECLERATION  
 	char * getDimensionTableName(char* table_name, char* col_name, char* dimension_table_name);
@@ -538,7 +543,7 @@ public:
 
 	// disable keys -- only myisam supports this.  Other storage engines do NOT support it.
 	// need to comment out this method as it does not work well with foreign key constraint
-	//int disable_indexes(uint mode);
+//	int disable_indexes(uint mode);
 
 	// enable keys -- only myisam supports this.  Other storage engines do NOT support it.
 	// need to comment out this method as it does not work well with foreign key constraint
