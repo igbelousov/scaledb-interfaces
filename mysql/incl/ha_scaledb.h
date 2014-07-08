@@ -178,7 +178,7 @@ struct SelectAnalyticsBody2
 		char type;				//the column type
 };
 #pragma pack()
-//#define PROCESS_COUNT_DISTINCT
+#define PROCESS_COUNT_DISTINCT
 #ifdef  PROCESS_COUNT_DISTINCT
 enum function_type { FT_NONE=0, FT_MIN=1, FT_MAX=2, FT_SUM=3, FT_COUNT=4, FT_AVG=5, FT_COUNT_DISTINCT=6, FT_STREAM_COUNT=7, FT_DATE=8, FT_HOUR=9, FT_MAX_CONCAT=10, FT_CHAR=11, FT_UNSUPPORTED=12 };
 #else
