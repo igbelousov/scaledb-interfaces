@@ -6082,7 +6082,54 @@ char ha_scaledb::getCASType(enum_field_types mysql_type, int flags)
 					}
 }
 
+int ha_scaledb::getOrderByPosition(const char* col_name)
+{
+	if(col_name==NULL) {return 0;}
+	int pos=0;
+	SELECT_LEX  lex=(((THD*) ha_thd())->lex)->select_lex;
+	ORDER *order;
+	const char* field_name;
+	for (order = (ORDER *) lex.order_list.first; order;  order = order->next)
+    {
+        pos++;
+		
+		Item* item=*order->item;
 
+		switch (item->type())
+		{
+
+			case Item::FIELD_ITEM:
+			{
+				
+				Field *field =((Item_field *)item)->field;
+				field_name=field->field_name;
+				break;
+			}
+			case Item::SUM_FUNC_ITEM:
+			{			
+					Field *field =((Item_field *)item->next)->field;
+					field_name=field->field_name;
+					break;
+			}
+			default:
+				{
+
+					return 0;
+				}
+           
+		}
+
+
+
+		if(strcmp( field_name, col_name ) == 0 )
+		{
+			//the column is in the order by so return the position (either 1,2,3 ...)
+			return pos;
+		}
+    }
+
+	return 0;
+}
 int ha_scaledb::generateGroupConditionString(int cardinality, char* buf, int max_buf, unsigned short dbid, unsigned short tabid)
 {
 	Item *item;
@@ -6205,6 +6252,7 @@ int ha_scaledb::generateGroupConditionString(int cardinality, char* buf, int max
 		gab->type=castype;
 		gab->function=function;
 		gab->function_length=gab->length;
+		gab->orderByPosition=getOrderByPosition(col_name);
 		pos=pos+sizeof(GroupByAnalyticsBody);
     }
   
@@ -6238,6 +6286,7 @@ bool ha_scaledb::addSelectField(char* buf, int& pos, unsigned short dbid, unsign
 		sab2->scale=0;
 		sab2->result_precision=0;
 		sab2->result_scale=0;
+		sab2->orderByPosition=0;
 	}
 	else
 	{
@@ -6251,6 +6300,7 @@ bool ha_scaledb::addSelectField(char* buf, int& pos, unsigned short dbid, unsign
 		sab2->scale=scale;
 		sab2->result_precision=result_precision;
 		sab2->result_scale=result_scale;
+		sab2->orderByPosition=getOrderByPosition(col_name);
 	}
 	sab2->function=function;		//this is operation to perform on the field
 
