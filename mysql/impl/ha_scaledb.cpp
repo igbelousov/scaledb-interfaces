@@ -6082,6 +6082,13 @@ char ha_scaledb::getCASType(enum_field_types mysql_type, int flags)
 					}
 }
 
+int ha_scaledb::numberInOrderBy()
+{
+	SELECT_LEX  lex=(((THD*) ha_thd())->lex)->select_lex;
+	int n=lex.order_list.elements;
+	return n;
+}
+
 int ha_scaledb::getOrderByPosition(const char* col_name)
 {
 	if(col_name==NULL) {return 0;}
@@ -6260,12 +6267,14 @@ int ha_scaledb::generateGroupConditionString(int cardinality, char* buf, int max
    {
           //there are NO group by so return analytics with col=0;
 	   gbh->numberColumns=0;
+	   gbh->numberInOrderby=0;
 	   return sizeof(GroupByAnalyticsHeader);
    }
    else
    {
 	 
 		gbh->numberColumns=n;
+		gbh->numberInOrderby=numberInOrderBy();
 		return pos;
    }
 }
