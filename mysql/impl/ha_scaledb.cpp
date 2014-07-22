@@ -6871,13 +6871,20 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 
 		sah->numberColumns=n;//this is the total number of columns
 	
-
-		if(contains_analytics_function==false) {return 0;}
+	
+	
+		if(contains_analytics_function==false)
+		{
+			return pos;
+//support analytics even if no aggregate functions.
+//                 	return 0;
+		}
 		else
 		{
 			//only return a buffer if the query contained an analytics function (eg SUM(...))
 			return pos;
 		}
+	
 }
 
 
