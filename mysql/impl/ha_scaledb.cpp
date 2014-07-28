@@ -6156,6 +6156,7 @@ int ha_scaledb::generateGroupConditionString(int cardinality, char* buf, int max
 	if(lex.order_list.elements>0)
 	{
 		info |= GH_ORDER_BY;   
+		if(lex.order_list.first->asc) {info |= ANALYTIC_FLAG_ASCENDING;}
 	}
 
 

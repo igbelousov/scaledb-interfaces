@@ -91,6 +91,7 @@ Version for file format.
 
 /* bits in group by header info_flags */
 #define GH_ORDER_BY             1       /* query contain an order by*/
+#define ANALYTIC_FLAG_ASCENDING 2
 //#define GH_ANOTHER_FLAG                 2       /* add as required */
 
 
