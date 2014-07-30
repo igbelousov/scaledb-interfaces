@@ -450,12 +450,15 @@ public:
 
 	int info(uint); ///< required
 
+	int addOrderByToList(char* buf, int& pos, SelectAnalyticsHeader* sah,unsigned short dbid, unsigned short tabid);
+	bool isInSelectList(SelectAnalyticsHeader* sah, char*  col_name, unsigned short dbid, unsigned short tabid);
+
 	// create a user table.
 	int parseTableOptions(HA_CREATE_INFO *create_info, bool& streamTable, bool& dimensionTable, unsigned long long&  dimensionSize, char** rangekey);
 
 	char getCASType(enum_field_types mysql_type, int flags);
 	int getSDBSize(enum_field_types fieldType, Field* field) ;
-	int generateGroupConditionString(int cardinality, char* buf, int max_buf, unsigned short dbid, unsigned short tabid);
+	int generateGroupConditionString(int cardinality, char* buf, int max_buf, unsigned short dbid, unsigned short tabid, char* select_buf);
 	int generateSelectConditionString(char* buf, int max_buf, unsigned short dbid, unsigned short tabid);
 	bool checkFunc(char* name, char* my_function);
 	bool checkNestedFunc(char* name, char* my_func1, char* my_func2);

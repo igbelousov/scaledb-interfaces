@@ -6089,6 +6089,123 @@ int ha_scaledb::numberInOrderBy()
 	return n;
 }
 
+
+int ha_scaledb::addOrderByToList(char* buf, int& pos,  SelectAnalyticsHeader* sah, unsigned short dbid, unsigned short tabid)
+{
+	int n=0;
+	
+	short precision=0;
+	short result_precision=0;
+	short result_scale=0;
+	short scale=0;
+	enum_field_types type;
+	const char* field_name;
+	function_type function=FT_NONE;
+	int flag=0;
+
+	SELECT_LEX  lex=(((THD*) ha_thd())->lex)->select_lex;
+	ORDER *order;
+
+	for (order = (ORDER *) lex.order_list.first; order;  order = order->next)
+    {
+     
+		bool found=false;
+		Item* item=*order->item;
+
+		switch (item->type())
+		{
+
+			case Item::FIELD_ITEM:
+			{
+				//save each field
+				Field *field1 = ((Item_field *)item)->field;
+				const char* col_name=field1->field_name;	
+				type= field1->type();
+				function=FT_NONE;
+				flag=field1->flags;
+				if(type==MYSQL_TYPE_NEWDECIMAL)
+				{			
+					Field_new_decimal* fnd=(Field_new_decimal*)field1;
+					precision=fnd->precision;
+					scale=fnd->decimals();
+				}
+
+
+
+				Field *field =((Item_field *)item)->field;
+				field_name=field->field_name;
+				found=isInSelectList( sah, (char*)field_name,dbid,tabid);
+				break;
+			}
+		
+			default:
+			{
+
+				break;
+			}
+       
+		}	
+		if(!found)
+		{
+			//add to groupby list.
+
+
+			char castype=	getCASType(type,flag) ;
+
+			GroupByAnalyticsBody* gab= (GroupByAnalyticsBody*)(buf+pos);
+
+			unsigned short columnNumber = SDBGetColumnNumberByName(dbid, tabid, field_name );
+			if(columnNumber==0 ) {return 0;}
+
+			gab->field_offset=SDBGetColumnOffsetByNumber(dbid, tabid, columnNumber);
+			gab->columnNumber=columnNumber;
+			gab->length= SDBGetColumnSizeByNumber(dbid, tabid, columnNumber);
+			gab->type=castype;
+			gab->function=function;
+			gab->function_length=gab->length;
+			gab->orderByPosition=getOrderByPosition(field_name);
+			pos=pos+sizeof(GroupByAnalyticsBody);
+			n++;
+
+		}
+    }
+	return n;
+}
+
+bool ha_scaledb::isInSelectList(SelectAnalyticsHeader* sah, char*  col_name, unsigned short dbid, unsigned short tabid)
+{
+
+	bool found=false;
+	unsigned short columnNumber = SDBGetColumnNumberByName(dbid, tabid, col_name );
+	if(columnNumber==0 ) {return false;}
+	
+	int	field_offset=SDBGetColumnOffsetByNumber(dbid, tabid, columnNumber);
+
+	char* pos=  ((char*)sah)+sizeof(SelectAnalyticsHeader);
+	for (unsigned short i = 0; i < sah->numberColumns; ++i)
+	{
+
+		SelectAnalyticsBody1* sab1= (SelectAnalyticsBody1*)(pos);
+		pos=pos+ sizeof(SelectAnalyticsBody1);
+		for (unsigned short j = 0; j <  sab1->numberFields; ++j)
+		{	
+			SelectAnalyticsBody2* sab2= (SelectAnalyticsBody2*)(pos);
+
+			
+			int field=sab2->field_offset;	
+			if(field==field_offset) {found=true;}
+
+			pos=pos+ sizeof(SelectAnalyticsBody2);
+
+		}
+	  
+	}
+
+	return found;
+
+
+}
+
 int ha_scaledb::getOrderByPosition(const char* col_name)
 {
 	if(col_name==NULL) {return 0;}
@@ -6137,8 +6254,9 @@ int ha_scaledb::getOrderByPosition(const char* col_name)
 
 	return 0;
 }
-int ha_scaledb::generateGroupConditionString(int cardinality, char* buf, int max_buf, unsigned short dbid, unsigned short tabid)
+int ha_scaledb::generateGroupConditionString(int cardinality, char* buf, int max_buf, unsigned short dbid, unsigned short tabid, char* select_buf)
 {
+	SelectAnalyticsHeader* sah= (SelectAnalyticsHeader*)select_buf;
 	Item *item;
 
 	int pos=0;
@@ -6260,10 +6378,24 @@ int ha_scaledb::generateGroupConditionString(int cardinality, char* buf, int max
 		gab->type=castype;
 		gab->function=function;
 		gab->function_length=gab->length;
-		gab->orderByPosition=getOrderByPosition(col_name);
+//need to enable the following code and the group by code should then ONLY do groupby on fields where orderByPosition=0
+//		gab->orderByPosition=0;
+		gab->orderByPosition=getOrderByPosition(col_name);  //then remove this
 		pos=pos+sizeof(GroupByAnalyticsBody);
     }
   
+/*
+1) the projection list is returned
+2) if the query contains a group by which is NOT in the projection list then the group by field is added as the first field
+3) if the query contains and ORDER BY and the field being ordered by is NOT in the projection list then order by field is added to front of projection list (but after group by if it exists)
+4) if group by contains multiple fields then add these fields in the order they appear (if the field is NOT in projection list)
+*/
+
+   	int n2=addOrderByToList(buf,pos,sah,dbid, tabid);
+	n=n+n2;
+
+
+
    if(n==0)  
    {
           //there are NO group by so return analytics with col=0;
@@ -6869,9 +7001,7 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 		}
 		
     }
-
-		sah->numberColumns=n;//this is the total number of columns
-	
+	sah->numberColumns=n;
 	
 	
 		if(contains_analytics_function==false)
@@ -7163,12 +7293,12 @@ void ha_scaledb::generateAnalyticsString()
 
 			char	group_buf[ 2000 ];
 			char	select_buf[ 2000 ];
-			int		len1		= generateGroupConditionString(cardinality, group_buf, sizeof( group_buf ), sdbDbId_, sdbTableNumber_ );
-
+	
 
 			int		len2		= generateSelectConditionString( select_buf, sizeof( select_buf ),sdbDbId_, sdbTableNumber_  );
 			analyticsSelectLength_=len2;
 
+			int		len1		= generateGroupConditionString(cardinality, group_buf, sizeof( group_buf ), sdbDbId_, sdbTableNumber_, select_buf );
 			//check if analytics is enabled
 
 
