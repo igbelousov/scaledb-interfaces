@@ -6099,16 +6099,17 @@ int ha_scaledb::addOrderByToList(char* buf, int& pos,  SelectAnalyticsHeader* sa
 	short result_scale=0;
 	short scale=0;
 	enum_field_types type;
-	const char* field_name;
+	const char* field_name=NULL;
 	function_type function=FT_NONE;
+	char* alias_name=NULL;
 	int flag=0;
 
 	SELECT_LEX  lex=(((THD*) ha_thd())->lex)->select_lex;
 	ORDER *order;
 
 	for (order = (ORDER *) lex.order_list.first; order;  order = order->next)
-    {
-     
+    {	
+	        const char* col_name=NULL;
 		bool found=false;
 		Item* item=*order->item;
 
@@ -6137,6 +6138,61 @@ int ha_scaledb::addOrderByToList(char* buf, int& pos,  SelectAnalyticsHeader* sa
 				found=isInSelectList( sah, (char*)field_name,dbid,tabid);
 				break;
 			}
+			case  Item::SUM_FUNC_ITEM:
+			{			
+				Item_sum *sum = ((Item_sum *)item);
+				int yy=sum->sum_func();
+				if (sum->sum_func() == Item_sum::SUM_FUNC)
+				{				
+					function=FT_SUM;
+
+					Field *field =((Item_field *)item->next)->field;
+					col_name=field->field_name;
+          			        type= field->type();
+					flag=field->flags;
+					if(type==MYSQL_TYPE_NEWDECIMAL)
+					{			
+						Field_new_decimal* fnd=(Field_new_decimal*)field;
+						precision=fnd->precision;
+						result_precision =item->decimal_precision();
+						scale=fnd->decimals();
+						result_scale = item->decimals;
+					}
+					if(item->name!=NULL)
+					{
+						//if an alias  column, so MUST be in orderby so no need to add
+						alias_name=item->name;
+						found=true;
+					}
+				}
+				else if (sum->sum_func() == Item_sum::COUNT_FUNC)
+				{
+					function=FT_COUNT;
+					Field *field =((Item_field *)item->next)->field;
+
+					col_name=field->field_name;
+					type=field->type();
+					flag=field->flags;
+					if(type==MYSQL_TYPE_NEWDECIMAL)
+					{			
+						Field_new_decimal* fnd=(Field_new_decimal*)field;
+						precision=fnd->precision;
+						result_precision =item->decimal_precision();
+						scale=fnd->decimals();
+						result_scale = item->decimals;
+					}
+					if(item->name!=NULL)
+					{
+						//if an alias  column, so MUST be in orderby so no need to add
+						alias_name=item->name;
+						found=true;
+					}
+			
+
+				}
+
+				break;
+			}
 		
 			default:
 			{
@@ -6148,23 +6204,13 @@ int ha_scaledb::addOrderByToList(char* buf, int& pos,  SelectAnalyticsHeader* sa
 		if(!found)
 		{
 			//add to groupby list.
+			bool contains_analytics_function=false;
+			SelectAnalyticsBody1* sab1= (SelectAnalyticsBody1*)(buf+pos);
+			sab1->numberFields=1;
+			sab1->function=FT_NONE;
+			pos=pos+ sizeof(SelectAnalyticsBody1);
 
-
-			char castype=	getCASType(type,flag) ;
-
-			GroupByAnalyticsBody* gab= (GroupByAnalyticsBody*)(buf+pos);
-
-			unsigned short columnNumber = SDBGetColumnNumberByName(dbid, tabid, field_name );
-			if(columnNumber==0 ) {return 0;}
-
-			gab->field_offset=SDBGetColumnOffsetByNumber(dbid, tabid, columnNumber);
-			gab->columnNumber=columnNumber;
-			gab->length= SDBGetColumnSizeByNumber(dbid, tabid, columnNumber);
-			gab->type=castype;
-			gab->function=function;
-			gab->function_length=gab->length;
-			gab->orderByPosition=getOrderByPosition(field_name);
-			pos=pos+sizeof(GroupByAnalyticsBody);
+			bool ret=addSelectField(buf,  pos, dbid, tabid, type, function,  field_name, contains_analytics_function,precision,scale,flag,result_precision,result_scale ,alias_name);
 			n++;
 
 		}
@@ -6206,13 +6252,14 @@ bool ha_scaledb::isInSelectList(SelectAnalyticsHeader* sah, char*  col_name, uns
 
 }
 
-int ha_scaledb::getOrderByPosition(const char* col_name)
+int ha_scaledb::getOrderByPosition(const char* col_name, const char* col_alias)
 {
 	if(col_name==NULL) {return 0;}
 	int pos=0;
 	SELECT_LEX  lex=(((THD*) ha_thd())->lex)->select_lex;
 	ORDER *order;
-	const char* field_name;
+	const char* field_name=NULL;
+	const char* alias_name=NULL;
 	for (order = (ORDER *) lex.order_list.first; order;  order = order->next)
     {
         pos++;
@@ -6233,6 +6280,7 @@ int ha_scaledb::getOrderByPosition(const char* col_name)
 			{			
 					Field *field =((Item_field *)item->next)->field;
 					field_name=field->field_name;
+					alias_name= item->name;
 					break;
 			}
 			default:
@@ -6244,12 +6292,23 @@ int ha_scaledb::getOrderByPosition(const char* col_name)
 		}
 
 
-
-		if(strcmp( field_name, col_name ) == 0 )
+		// if the column is in the order by so return the position (either 1,2,3 ...)
+		// if there is an alias, check the alias.
+		if(alias_name==NULL || col_alias == NULL)
 		{
-			//the column is in the order by so return the position (either 1,2,3 ...)
-			return pos;
+			if(strcmp( field_name, col_name ) == 0 )
+			{
+				return pos;
+			}
 		}
+		else
+		{
+			if(strcmp( alias_name, col_alias ) == 0) 
+			{
+				return pos;
+			}
+		}
+
     }
 
 	return 0;
@@ -6285,7 +6344,8 @@ int ha_scaledb::generateGroupConditionString(int cardinality, char* buf, int max
 
 	pos=pos+sizeof(GroupByAnalyticsHeader);
 
-   const char* col_name;
+   const char* col_name=NULL;
+   const char* alias_name=NULL;
    int n=0;
    for (ORDER *cur_group= (((THD*) ha_thd())->lex)->select_lex.parent_lex->current_select->group_list.first ; cur_group ; cur_group= cur_group->next)
    {
@@ -6378,23 +6438,10 @@ int ha_scaledb::generateGroupConditionString(int cardinality, char* buf, int max
 		gab->type=castype;
 		gab->function=function;
 		gab->function_length=gab->length;
-//need to enable the following code and the group by code should then ONLY do groupby on fields where orderByPosition=0
-//		gab->orderByPosition=0;
-		gab->orderByPosition=getOrderByPosition(col_name);  //then remove this
+		gab->orderByPosition=getOrderByPosition(col_name,alias_name); 
 		pos=pos+sizeof(GroupByAnalyticsBody);
     }
   
-/*
-1) the projection list is returned
-2) if the query contains a group by which is NOT in the projection list then the group by field is added as the first field
-3) if the query contains and ORDER BY and the field being ordered by is NOT in the projection list then order by field is added to front of projection list (but after group by if it exists)
-4) if group by contains multiple fields then add these fields in the order they appear (if the field is NOT in projection list)
-*/
-
-   	int n2=addOrderByToList(buf,pos,sah,dbid, tabid);
-	n=n+n2;
-
-
 
    if(n==0)  
    {
@@ -6411,24 +6458,46 @@ int ha_scaledb::generateGroupConditionString(int cardinality, char* buf, int max
 		return pos;
    }
 }
+int ha_scaledb::generateOrderByConditionString(char* buf, int max_buf, unsigned short dbid, unsigned short tabid, char* select_buf)
+{
 
-bool ha_scaledb::addSelectField(char* buf, int& pos, unsigned short dbid, unsigned short tabid, enum_field_types type, short function, const char* col_name, bool& contains_analytics, short precision, short scale, int flag, short result_precision, short result_scale )
+/*
+1) the projection list is returned
+2) if the query contains a group by which is NOT in the projection list then the group by field is added as the first field
+3) if the query contains and ORDER BY and the field being ordered by is NOT in the projection list then order by field is added to front of projection list (but after group by if it exists)
+4) if group by contains multiple fields then add these fields in the order they appear (if the field is NOT in projection list)
+*/
+
+	SelectAnalyticsHeader* sah= (SelectAnalyticsHeader*)select_buf;
+	
+	SelectAnalyticsHeader* sah_new= (SelectAnalyticsHeader*)buf;
+	int pos=sizeof(SelectAnalyticsHeader);
+  	int n2=addOrderByToList(buf,pos,sah,dbid, tabid);
+
+
+	sah_new->numberColumns=sah->numberColumns+n2;
+	return pos;
+
+}
+
+
+bool ha_scaledb::addSelectField(char* buf, int& pos, unsigned short dbid, unsigned short tabid, enum_field_types type, short function, const char* col_name, bool& contains_analytics, short precision, short scale, int flag, short result_precision, short result_scale, char* alias_name )
 {
 	char castype=	getCASType(type,flag) ;
 	
 	SelectAnalyticsBody2* sab2= (SelectAnalyticsBody2*)(buf+pos);
-	if ( ( !col_name ) || ( strcmp( "?", col_name ) == 0 ) || ( !dbid ) || ( !tabid ) )
+	if (( !col_name ) || ( strcmp( "?", col_name ) == 0 ) || ( !dbid ) || ( !tabid ) )
 	{
 		//for count(*) don't have column info
 		sab2->field_offset=0;	//number of fields in operation
 		sab2->columnNumber=0;
 		sab2->length=0;		//the length of data
-		sab2->type = 0;
-	        sab2->precision=0;
-		sab2->scale=0;
-		sab2->result_precision=0;
-		sab2->result_scale=0;
-		sab2->orderByPosition=0;
+		sab2->type = castype;				//the column type
+		sab2->precision=precision;
+		sab2->scale=scale;
+		sab2->result_precision=result_precision;
+		sab2->result_scale=result_scale;
+		sab2->orderByPosition=getOrderByPosition(col_name,alias_name);
 	}
 	else
 	{
@@ -6442,7 +6511,7 @@ bool ha_scaledb::addSelectField(char* buf, int& pos, unsigned short dbid, unsign
 		sab2->scale=scale;
 		sab2->result_precision=result_precision;
 		sab2->result_scale=result_scale;
-		sab2->orderByPosition=getOrderByPosition(col_name);
+		sab2->orderByPosition=getOrderByPosition(col_name,alias_name);
 	}
 	sab2->function=function;		//this is operation to perform on the field
 
@@ -6540,7 +6609,7 @@ Item* ha_scaledb::NestedFunc(enum_field_types& type, function_type& function, in
 				}
 
 				no_fields++;
-				bool ret=addSelectField(buf,  pos, dbid, tabid, type, function,  col_name, contains_analytics_function,precision,scale,flag,result_precision,result_scale );
+				bool ret=addSelectField(buf,  pos, dbid, tabid, type, function,  col_name, contains_analytics_function,precision,scale,flag,result_precision,result_scale,NULL );
 				if(ret==false) {return NULL;}
 			}
 			else if(ft1==Item::FUNC_ITEM)
@@ -6562,7 +6631,7 @@ Item* ha_scaledb::NestedFunc(enum_field_types& type, function_type& function, in
 						scale=fnd->decimals();
 					}
 					no_fields++;
-					bool ret=addSelectField(buf,  pos, dbid, tabid, type, function,  col_name,contains_analytics_function,precision,scale,flag,result_precision,result_scale );
+					bool ret=addSelectField(buf,  pos, dbid, tabid, type, function,  col_name,contains_analytics_function,precision,scale,flag,result_precision,result_scale,NULL );
 					if(ret==false) {return NULL;}
 				}
 				else if(ft2==Item::FUNC_ITEM)
@@ -6582,7 +6651,7 @@ Item* ha_scaledb::NestedFunc(enum_field_types& type, function_type& function, in
 							scale=fnd->decimals();
 						}
 						no_fields++;
-						bool ret=addSelectField(buf,  pos, dbid, tabid, type,function,  col_name,contains_analytics_function,precision,scale,flag,result_precision,result_scale );
+						bool ret=addSelectField(buf,  pos, dbid, tabid, type,function,  col_name,contains_analytics_function,precision,scale,flag,result_precision,result_scale,NULL );
 						if(ret==false) {return NULL;}
 					}
 				}
@@ -6683,7 +6752,7 @@ Item* ha_scaledb::multiArgumentFunction(function_type funct, enum_field_types& t
 				}
 
 				no_fields++;
-				bool ret=addSelectField(buf,  pos, dbid, tabid, type, function,  col_name, contains_analytics_function,precision,scale,flag,result_precision,result_scale );
+				bool ret=addSelectField(buf,  pos, dbid, tabid, type, function,  col_name, contains_analytics_function,precision,scale,flag,result_precision,result_scale,NULL );
 				if(ret==false) {return NULL;}
 			}
 			else
@@ -6742,6 +6811,7 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 		SelectAnalyticsBody1* sab1= (SelectAnalyticsBody1*)(buf+pos);
 		pos=pos+sizeof(SelectAnalyticsBody1);
 		const char* col_name;
+		char* alias_name=NULL;
 		enum_field_types type;
 		function_type function;
 		short precision=0;
@@ -6797,17 +6867,14 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 					function=FT_COUNT;
 					Field *field =((Item_field *)item->next)->field;
 
-					col_name=field->field_name;
+					col_name= field->field_name;
+					type= field->type();
+					flag=field->flags;
 					if(strcmp("?",col_name)==0)
-					{
-	                                        type=MYSQL_TYPE_NULL;
+					{			
+					   alias_name= item->name;
 					}
-					else
-					{
-						type=field->type();
-						flag=field->flags;
-					}
-
+					
 				}
 #ifdef  PROCESS_COUNT_DISTINCT
 				else if (sum->sum_func() == Item_sum::COUNT_DISTINCT_FUNC)
@@ -6996,7 +7063,7 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 				default:
 					contains_analytics_function	= true;
 			}
-			bool ret=addSelectField(buf,  pos, dbid, tabid, type, FT_NONE, col_name ,contains_analytics_function,precision,scale,flag,result_precision,result_scale);
+			bool ret=addSelectField(buf,  pos, dbid, tabid, type, function, col_name ,contains_analytics_function,precision,scale,flag,result_precision,result_scale, alias_name);
 			if (ret==false) {return 0;}
 		}
 		
@@ -7293,14 +7360,23 @@ void ha_scaledb::generateAnalyticsString()
 
 			char	group_buf[ 2000 ];
 			char	select_buf[ 2000 ];
-	
+			char	order_and_select_buf[ 2000 ];
 
 			int		len2		= generateSelectConditionString( select_buf, sizeof( select_buf ),sdbDbId_, sdbTableNumber_  );
-			analyticsSelectLength_=len2;
+
+			int len3=generateOrderByConditionString( order_and_select_buf,  2000,   sdbDbId_,   sdbTableNumber_,  select_buf);
+
+
+		
 
 			int		len1		= generateGroupConditionString(cardinality, group_buf, sizeof( group_buf ), sdbDbId_, sdbTableNumber_, select_buf );
 			//check if analytics is enabled
 
+			//append the select buffer
+			memcpy(order_and_select_buf+len3,select_buf+sizeof(SelectAnalyticsHeader),len2-sizeof(SelectAnalyticsHeader));
+
+			int len4 = len3 + len2-sizeof(SelectAnalyticsHeader);
+                        analyticsSelectLength_=len4;
 
 			//turn analytics off
 			char* s_disable_analytics=SDBUtilFindComment(thd->query(), "disable_sdb_analytics") ;
@@ -7314,8 +7390,8 @@ void ha_scaledb::generateAnalyticsString()
 				{
 					//need to check condition string is big enough?
 					memcpy(	analyticsString_, group_buf, len1 );
-					memcpy(	analyticsString_+len1, select_buf, len2 );
-					analyticsStringLength_	= len1+len2;
+					memcpy(	analyticsString_+len1, order_and_select_buf, len4 );
+					analyticsStringLength_	= len1+len4;
 
 					if(s_force_analytics!=NULL)
 					{
