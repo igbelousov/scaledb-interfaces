@@ -139,6 +139,7 @@ typedef struct SimpleCondContext{
 struct GroupByAnalyticsHeader
 {
 	uint   cardinality;
+	char   thread_count;
 	uint   limit;
 	uint   info_flag;
 	ushort numberColumns;
@@ -458,7 +459,7 @@ public:
 
 	char getCASType(enum_field_types mysql_type, int flags);
 	int getSDBSize(enum_field_types fieldType, Field* field) ;
-	int generateGroupConditionString(int cardinality, char* buf, int max_buf, unsigned short dbid, unsigned short tabid, char* select_buf);
+	int generateGroupConditionString(int cardinality, int thread_count, char* buf, int max_buf, unsigned short dbid, unsigned short tabid, char* select_buf);
 	int generateSelectConditionString(char* buf, int max_buf, unsigned short dbid, unsigned short tabid);
 	int generateOrderByConditionString(char* buf, int max_buf, unsigned short dbid, unsigned short tabid, char* select_buf);
 	bool checkFunc(char* name, char* my_function);
