@@ -7985,6 +7985,12 @@ int ha_scaledb::info(uint flag) {
 	}
 
 	THD* thd = ha_thd();
+	
+	// Temporary Fix- Maria DB ahould call my_ok() bfore running an SQL command 
+	if ( thd->is_error() ) {
+		my_ok(thd);
+	}
+
 	placeSdbMysqlTxnInfo(thd);
 	sdbUserId_ = pSdbMysqlTxn_->getScaleDbUserId();
 

@@ -279,6 +279,7 @@ typedef enum SdbKeySearchDirection {
 #define SDB_PUSHDOWN_OPERATOR_NE						'!'												// ! for NE
 #define SDB_PUSHDOWN_OPERATOR_BETWEEN					'~'												// ~ for BETWEEN
 #define SDB_PUSHDOWN_OPERATOR_IN						':'												// : for IN
+#define SDB_PUSHDOWN_OPERATOR_COND_RESULT				'R'												// R for Condition Result
 #define SDB_PUSHDOWN_COLUMN_DATA_TYPE_UNSIGNED_INTEGER	'U'												// U for unsigned int	(row)
 #define SDB_PUSHDOWN_COLUMN_DATA_TYPE_SIGNED_INTEGER	'I'												// I for   signed int	(row)
 #define SDB_PUSHDOWN_COLUMN_DATA_TYPE_BIT				'^'												// ^ for bit			(row)
@@ -329,5 +330,11 @@ typedef enum SdbKeySearchDirection {
 #define USER_DATA_OFFSET_DATA_TYPE	(USER_DATA_OFFSET_CHILDCOUNT + 2)
 #define USER_DATA_OFFSET_DATA_SIZE	(USER_DATA_OFFSET_DATA_TYPE + 1)
 #define USER_DATA_OFFSET_USER_DATA	(USER_DATA_OFFSET_DATA_SIZE + 1)
+
+#define COND_RESULT_OFFSET_VALUE	0																	// Same offset as child count in other node types
+#define COND_RESULT_OFFSET_TYPE		(COND_RESULT_OFFSET_VALUE + 2)
+#define COND_RESULT_NODE_LENGTH		(COND_RESULT_OFFSET_TYPE + 1)
+
+enum condBool	{ CONDFALSE, CONDTRUE, CONDMAYBE };
 
 #endif //_SDB_COMMON_H
