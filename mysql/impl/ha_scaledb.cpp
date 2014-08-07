@@ -974,6 +974,40 @@ static group_by_handler *scaledb_create_group_by_handler(THD *thd,
 	}
 	else
 	{
+		//disable the code for now.
+
+		if(scaledb->rangeBounds.isValid() && cond!=NULL)
+		{
+			//the condition tree contains a valid range key range and these range keys are going to get used, so replace the range key part
+			//of the where cluase. All i am going to do is move teh part of string after the range forward to fill the gap.
+			//note* also need to add  a boolean true
+			char bool_true_node[3];
+			*((short*)&bool_true_node[0])= CONDTRUE;
+			bool_true_node[2]=SDB_PUSHDOWN_OPERATOR_COND_RESULT;
+			int bool_node_length=sizeof(bool_true_node);
+
+			int len_to_remove= scaledb->rangeBounds.endRange - scaledb->rangeBounds.startRange;
+			unsigned char* start_pos = scaledb->rangeBounds.startRange + scaledb->conditionString();
+			unsigned char* end_pos   = scaledb->rangeBounds.endRange + scaledb->conditionString();
+			int move_len= scaledb->conditionStringLength()-scaledb->rangeBounds.endRange;
+
+			if( (scaledb->conditionStringLength() - len_to_remove) == 0)
+			{
+				//if after removing the range tree the condition string is empty then dont add the bool node, just send an empty condition tree
+				scaledb->setConditionStringLength(0);
+			}
+			else
+			{
+				scaledb->setConditionStringLength(scaledb->conditionStringLength() - len_to_remove + bool_node_length );
+				//note to avoid array overflow the bool node length must be < the condition string pulled out (which is currently the case since the bool node is only 3 chars and
+				//the range will be much longer than that).
+				memcpy(start_pos+bool_node_length,end_pos,move_len); //move the remainder of condition first, leave space for bool node
+				memcpy(start_pos,bool_true_node,bool_node_length); //insert the boolean node	
+			}
+			
+		}
+
+		
 		scaledb->forceAnalytics_=false;
 		return new  ha_scaledb_groupby( thd, select_lex, fields, table_list, group_by, order_by, pWhere, having, scaledb_hton );
 	}
@@ -4623,12 +4657,15 @@ bool ha_scaledb::conditionTreeToString( const COND* cond, unsigned char** buffer
 
 			// All children visited. Write current node info to buffer
 			*( unsigned short* )( *buffer + *nodeOffset + LOGIC_OP_OFFSET_CHILDCOUNT )	= ( unsigned short )( childCount );	// # of children
-
+			bool and_cond=false;
 			switch ( ( ( Item_cond* ) cond )->functype() )
 			{
 				case Item_func::COND_AND_FUNC:
-					*( *buffer + *nodeOffset + LOGIC_OP_OFFSET_OPERATION )	= SDB_PUSHDOWN_OPERATOR_AND;	// & for AND
-					break;
+					{
+						*( *buffer + *nodeOffset + LOGIC_OP_OFFSET_OPERATION )	= SDB_PUSHDOWN_OPERATOR_AND;	// & for AND
+						and_cond=true;
+						break;
+					}
 				case Item_func::COND_OR_FUNC:
 					*( *buffer + *nodeOffset + LOGIC_OP_OFFSET_OPERATION )	= SDB_PUSHDOWN_OPERATOR_OR;		// | for OR
 					break;
@@ -4642,6 +4679,14 @@ bool ha_scaledb::conditionTreeToString( const COND* cond, unsigned char** buffer
 			*( bool* )( *buffer + *nodeOffset + LOGIC_OP_OFFSET_IS_NEGATED )	= false;						// Operator result should not be negated
 
 			*nodeOffset						   += LOGIC_OP_NODE_LENGTH;
+
+			if(and_cond==true && rangeBounds.endSet==true && rangeBounds.endRange==0)
+			{
+
+				rangeBounds.endRange=*nodeOffset;
+			}
+
+
 			break;
 		}
 
@@ -4807,7 +4852,7 @@ bool ha_scaledb::conditionTreeToString( const COND* cond, unsigned char** buffer
 
 			//Children visited. Write current node info to buffer
 			*( unsigned short* )( *buffer + *nodeOffset + COMP_OP_OFFSET_CHILDCOUNT )	= ( unsigned short )( countArgs );			// # of children
-
+			bool between_end=false;
 			switch ( typeFunc )
 			{
 				case Item_func::EQ_FUNC:
@@ -4829,8 +4874,11 @@ bool ha_scaledb::conditionTreeToString( const COND* cond, unsigned char** buffer
 					*( *buffer + *nodeOffset + COMP_OP_OFFSET_OPERATION )	= ( unsigned char )( SDB_PUSHDOWN_OPERATOR_NE );		// This represents !=
 					break;
 				case Item_func::BETWEEN:
+					{
+						between_end=true;
 					*( *buffer + *nodeOffset + COMP_OP_OFFSET_OPERATION )	= ( unsigned char )( SDB_PUSHDOWN_OPERATOR_BETWEEN );	// This represents BETWEEN
 					break;
+					}
 				case Item_func::IN_FUNC:
 					*( *buffer + *nodeOffset + COMP_OP_OFFSET_OPERATION )	= ( unsigned char )( SDB_PUSHDOWN_OPERATOR_IN );		// This represents IN
 						break;
@@ -4852,6 +4900,22 @@ bool ha_scaledb::conditionTreeToString( const COND* cond, unsigned char** buffer
 
 			*nodeOffset							   += COMP_OP_NODE_LENGTH;
 			// end visit operator
+			if(between_end)
+			{				
+				if(rangeBounds.endSet==true)
+				{
+					//have already found the end range, can't be multiple end ranges so fail.
+					rangeBounds.valid=false;
+				}
+				else
+				{
+					//must be the end of range.
+					rangeBounds.valid=true;
+					rangeBounds.endSet=true;		
+					rangeBounds.endRange=*nodeOffset;
+				}
+			}
+
 			break;
 		}
 
@@ -5047,6 +5111,42 @@ bool ha_scaledb::conditionFieldToString( unsigned char** pCondString, unsigned i
 	{
 		return false;
 	}
+
+	if(SDBGetRangeKeyFieldID(sdbDbId(),  sdbTableNumber())==columnId)
+	{
+		//this is the start of a range specification
+		if(rangeBounds.startSet==false)
+		{	
+			rangeBounds.startSet=true;		
+			rangeBounds.startRange=*pItemOffset;
+		}
+		else
+		{
+			if(rangeBounds.endSet==true)
+			{
+				//have already found the end range, can't be multiple end ranges so fail.
+				rangeBounds.valid=false;
+			}
+			else
+			{
+			//must be the end of range.
+				rangeBounds.valid=true;
+				rangeBounds.endSet=true;
+			
+			}
+		}
+	}
+	else
+	{
+		if(rangeBounds.startSet==true && rangeBounds.endSet==false)
+		{
+			//a start range has been found, but no end range set yet, and looking at a differnt field so fail
+			rangeBounds.valid=false;
+		}
+
+	}
+	
+
 
 	unsigned short	columnSize		= SDBGetColumnSizeByNumber( dbId, tableId, columnId );
 	//unsigned char	columnType		= SDBGetColumnTypeByNumber( dbId, tableId, columnId );
@@ -7320,6 +7420,7 @@ void ha_scaledb::saveConditionToString(const COND *cond)
 	analyticsSelectLength_      = 0;
 	forceAnalytics_=false;
 
+	rangeBounds.clear();
 	char* s_disable_pushdown=SDBUtilFindComment(thd->query(), "disable_condition_pushdown") ; //if disable_condition_pushdown is in comment then don't do pushdown
 
 	if (s_disable_pushdown==NULL)

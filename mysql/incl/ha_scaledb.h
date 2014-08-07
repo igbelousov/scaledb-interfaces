@@ -190,7 +190,34 @@ enum function_type { FT_NONE=0, FT_MIN=1, FT_MAX=2, FT_SUM=3, FT_COUNT=4, FT_AVG
 enum function_type { FT_NONE=0, FT_MIN=1, FT_MAX=2, FT_SUM=3, FT_COUNT=4, FT_AVG=5, FT_STREAM_COUNT=6, FT_DATE=7, FT_HOUR=8, FT_MAX_CONCAT=9, FT_CHAR=10, FT_UNSUPPORTED=11 };
 #endif
 
-
+struct rangebounds
+{
+	public:
+	void clear()
+	{
+		startRange=0;
+		endRange=0;
+		startSet=false;
+		endSet=false;
+		valid=false;
+	}
+	int startRange;
+	int endRange;
+	bool startSet;
+	bool endSet;
+	bool valid;
+	bool isValid()
+	{
+		if(valid ==true && startSet==true && endSet==true && endRange>0)
+		{
+			return true;
+		}
+		else
+		{
+			return false;
+		}
+	}
+};
 
 class ha_scaledb: public handler
 {
@@ -564,7 +591,7 @@ public:
 	const COND* cond_push(const COND *cond);
 	void cond_pop();
 	void saveConditionToString(const COND *cond);
-	bool conditionTreeToString(const COND *cond, unsigned char **start, unsigned int *place, unsigned short* DBID, unsigned short* TABID);
+	bool conditionTreeToString(const COND *cond, unsigned char **start, unsigned int *place, unsigned short* DBID, unsigned short* TABID );
 	bool conditionMultEqToString( unsigned char** pCondString, unsigned int* pCondOffset, const COND* pCondMultEq );
 	bool conditionFieldToString( unsigned char** pCondString, unsigned int* pItemOffset, Item* pFieldItem,
 								 Item* pComperandItem, unsigned int* pComperandDataOffset,
@@ -868,6 +895,8 @@ public:
 	key_range		indexKeyRangeStart_;
 	key_range		indexKeyRangeEnd_;
 	bool forceAnalytics_;
+	rangebounds rangeBounds;
+	void setConditionStringLength(unsigned int len) { conditionStringLength_=len;}
 private:
 
 	THR_LOCK_DATA lock; ///< MySQL lock
@@ -920,6 +949,8 @@ private:
 	unsigned int   condStringExtensionLength_;
 	unsigned int   condStringMaxLength_;
 	bool           pushCondition_;
+
+
 
 	// Analytics Push Variables
 	unsigned char* analyticsString_;
