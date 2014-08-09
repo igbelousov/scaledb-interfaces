@@ -5487,6 +5487,18 @@ bool ha_scaledb::conditionFieldToString( unsigned char** pCondString, unsigned i
 				memcpy( *pCondString + *pItemOffset, pFieldEntry, ROW_DATA_NODE_LENGTH );
 			}
 			break;
+
+		case MYSQL_TYPE_DOUBLE:
+		case MYSQL_TYPE_FLOAT:
+			if ( pComperandItem )
+			{
+				// Use the floating point representation of the value
+				double				dValue			= ( ( Item_decimal* ) pComperandItem )->val_real();
+
+				*( pComperandData + USER_DATA_OFFSET_DATA_TYPE )						=  ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_FLOAT );
+				*( double* )( pComperandData + USER_DATA_OFFSET_USER_DATA )				= dValue;
+			}
+			break;
 	}
 
 	*pItemOffset				   += ROW_DATA_NODE_LENGTH;
@@ -5653,38 +5665,49 @@ bool ha_scaledb::conditionConstantToString( unsigned char** pCondString, unsigne
 
 		case Item::DECIMAL_ITEM:
 		{
-			*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_TYPE )	=  ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_DECIMAL );	
-			*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_SIZE )	=  ( unsigned char )( 8 );		// max size in bytes of decimal
-							
 			if ( pComperandItem )
 			{
-				my_decimal		dValue;
-
-				Item_field*		pField			= ( Item_field* ) pComperandItem;
-				my_decimal*		pValue			= ( my_decimal* )( ( Item_decimal* ) pConstItem )->val_decimal( &dValue );
-				unsigned char*	pBinary			= ( unsigned char* )( *pCondString + *pItemOffset + USER_DATA_OFFSET_USER_DATA );
-				int				iPrecision		= pField->decimal_precision();
-				int				iScale			= pField->decimals;
-				int				iLength			= *( unsigned short* )( pComperandData + ROW_DATA_OFFSET_COLUMN_SIZE );
-
-				if ( iLength					> sizeof( long long ) )
+				if ( *( pComperandData + ROW_DATA_OFFSET_ROW_TYPE )							   == SDB_PUSHDOWN_COLUMN_DATA_TYPE_FLOAT )
 				{
-					// Decimal values longer than 8 bytes are not yet supported
-					return false;
+					// Use the floating point representation of the value
+					double			dValue		= ( ( Item_decimal* ) pConstItem )->val_real();
+
+					*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_TYPE )				=  ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_FLOAT );
+					*( double* )( *pCondString + *pItemOffset + USER_DATA_OFFSET_USER_DATA )	= dValue;
 				}
+				else
+				{
+					*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_TYPE )				=  ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_DECIMAL );
 
-				memset( pBinary, '\0', sizeof( long long ) );
+					my_decimal		dValue;
 
-				int				retValue		= my_decimal2binary( E_DEC_FATAL_ERROR & ~E_DEC_OVERFLOW,
+					Item_field*		pField		= ( Item_field* ) pComperandItem;
+					my_decimal*		pValue		= ( my_decimal* )( ( Item_decimal* ) pConstItem )->val_decimal( &dValue );
+					unsigned char*	pBinary		= ( unsigned char* )( *pCondString + *pItemOffset + USER_DATA_OFFSET_USER_DATA );
+					int				iPrecision	= pField->decimal_precision();
+					int				iScale		= pField->decimals;
+					int				iLength		= *( unsigned short* )( pComperandData + ROW_DATA_OFFSET_COLUMN_SIZE );
+
+					if ( iLength				> sizeof( long long ) )
+					{
+						// Decimal values longer than 8 bytes are not yet supported
+						return false;
+					}
+
+					memset( pBinary, '\0', sizeof( long long ) );
+
+					int				retValue	= my_decimal2binary( E_DEC_FATAL_ERROR & ~E_DEC_OVERFLOW,
 																	 pValue, pBinary, iPrecision, iScale );
 
-				if ( retValue )
-				{
-					return false;
+					if ( retValue )
+					{
+						return false;
+					}
 				}
 			}
 
-			( *pItemOffset )					   += USER_DATA_OFFSET_USER_DATA + 8;
+			*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_SIZE )	=  ( unsigned char )( 8 );		// max size in bytes of decimal or float
+			( *pItemOffset )											   += USER_DATA_OFFSET_USER_DATA + 8;
 			break;
 		}
 
