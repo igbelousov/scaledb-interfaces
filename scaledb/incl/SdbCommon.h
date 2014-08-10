@@ -264,47 +264,59 @@ typedef enum SdbKeySearchDirection {
 #define METAINFO_MISSING_FOREIGN_TABLE  1036
 #define METAINFO_ROW_SIZE_TOO_LARGE	1037
 
-// Pushdown operators and data types
-#define SDB_PUSHDOWN_OPERATOR_AND						'&'												// & for AND
-#define SDB_PUSHDOWN_OPERATOR_BITWISE_AND				'@'												// @ for bitwise AND
-#define SDB_PUSHDOWN_OPERATOR_OR						'|'												// | for OR
-#define SDB_PUSHDOWN_OPERATOR_BITWISE_OR				'+'												// + for bitwise OR
-#define SDB_PUSHDOWN_OPERATOR_XOR						'X'												// X for XOR
-#define SDB_PUSHDOWN_OPERATOR_BITWISE_XOR				'x'												// x for bitwise XOR
-#define SDB_PUSHDOWN_OPERATOR_EQ						'='												// = for EQ
-#define SDB_PUSHDOWN_OPERATOR_LE						'{'												// { for LE
-#define SDB_PUSHDOWN_OPERATOR_GE						'}'												// } for GE
-#define SDB_PUSHDOWN_OPERATOR_LT						'<'												// < for LT
-#define SDB_PUSHDOWN_OPERATOR_GT						'>'												// > for GT
-#define SDB_PUSHDOWN_OPERATOR_NE						'!'												// ! for NE
-#define SDB_PUSHDOWN_OPERATOR_BETWEEN					'~'												// ~ for BETWEEN
-#define SDB_PUSHDOWN_OPERATOR_IN						':'												// : for IN
-#define SDB_PUSHDOWN_OPERATOR_COND_RESULT				'R'												// R for Condition Result
-#define SDB_PUSHDOWN_COLUMN_DATA_TYPE_UNSIGNED_INTEGER	'U'												// U for unsigned int	(row)
-#define SDB_PUSHDOWN_COLUMN_DATA_TYPE_SIGNED_INTEGER	'I'												// I for   signed int	(row)
-#define SDB_PUSHDOWN_COLUMN_DATA_TYPE_BIT				'^'												// ^ for bit			(row)
-#define SDB_PUSHDOWN_COLUMN_DATA_TYPE_FLOAT				'F'												// F for float			(row)
-#define SDB_PUSHDOWN_COLUMN_DATA_TYPE_DECIMAL			'B'												// B for binary decimal	(row)
-#define SDB_PUSHDOWN_COLUMN_DATA_TYPE_DATE				'D'												// D for date			(row)
-#define SDB_PUSHDOWN_COLUMN_DATA_TYPE_TIME				'T'												// T for time			(row)
-#define SDB_PUSHDOWN_COLUMN_DATA_TYPE_DATETIME			'A'												// A for datetime		(row)
-#define SDB_PUSHDOWN_COLUMN_DATA_TYPE_YEAR				'Y'												// Y for year			(row)
-#define SDB_PUSHDOWN_COLUMN_DATA_TYPE_TIMESTAMP			'S'												// S for timestamp		(row)
-#define SDB_PUSHDOWN_COLUMN_DATA_TYPE_CHAR				'C'												// C for char			(row)
-#define SDB_PUSHDOWN_COLUMN_DATA_TYPE_VARCHAR			'V'												// V for varchar		(row)
-#define SDB_PUSHDOWN_LITERAL_DATA_TYPE_UNSIGNED_INTEGER	'u'												// u for unsigned int	(user)
-#define SDB_PUSHDOWN_LITERAL_DATA_TYPE_SIGNED_INTEGER	'i'												// i for signed   int	(user)
-#define SDB_PUSHDOWN_LITERAL_DATA_TYPE_BIT				'.'												// . for bit			(user)
-#define SDB_PUSHDOWN_LITERAL_DATA_TYPE_FLOAT			'f'												// f for float			(user)
-#define SDB_PUSHDOWN_LITERAL_DATA_TYPE_DECIMAL			'b'												// b for binary decimal	(user)
-#define SDB_PUSHDOWN_LITERAL_DATA_TYPE_DATE				SDB_PUSHDOWN_LITERAL_DATA_TYPE_UNSIGNED_INTEGER	// u for unsigned int	(user)
-#define SDB_PUSHDOWN_LITERAL_DATA_TYPE_TIME				SDB_PUSHDOWN_LITERAL_DATA_TYPE_SIGNED_INTEGER	// i for signed   int	(user)
-#define SDB_PUSHDOWN_LITERAL_DATA_TYPE_DATETIME			'a'												// a for datetime		(user)
-#define SDB_PUSHDOWN_LITERAL_DATA_TYPE_YEAR				SDB_PUSHDOWN_LITERAL_DATA_TYPE_UNSIGNED_INTEGER	// u for unsigned int	(user)
-#define SDB_PUSHDOWN_LITERAL_DATA_TYPE_TIMESTAMP		's'												// s for timestamp		(user)
-#define SDB_PUSHDOWN_LITERAL_DATA_TYPE_CHAR				'c'												// c for char			(user)
-#define SDB_PUSHDOWN_LITERAL_DATA_TYPE_VARCHAR			'v'												// v for varchar		(user)
-#define SDB_PUSHDOWN_UNKNOWN							'?'												// ? for unknown
+// Condition pushdown operators and data types
+enum SdbConditionPushdownType:unsigned char
+{
+	SDB_PUSHDOWN_UNKNOWN,																					// PLACEHOLDER
+
+	// Operators
+	SDB_PUSHDOWN_OPERATOR_AND,																				// AND
+	SDB_PUSHDOWN_OPERATOR_BITWISE_AND,																		// bitwise AND
+	SDB_PUSHDOWN_OPERATOR_OR,																				// OR
+	SDB_PUSHDOWN_OPERATOR_BITWISE_OR,																		// bitwise OR
+	SDB_PUSHDOWN_OPERATOR_XOR,																				// XOR
+	SDB_PUSHDOWN_OPERATOR_BITWISE_XOR,																		// bitwise XOR
+	SDB_PUSHDOWN_OPERATOR_EQ,																				// EQ
+	SDB_PUSHDOWN_OPERATOR_LE,																				// LE
+	SDB_PUSHDOWN_OPERATOR_GE,																				// GE
+	SDB_PUSHDOWN_OPERATOR_LT,																				// LT
+	SDB_PUSHDOWN_OPERATOR_GT,																				// GT
+	SDB_PUSHDOWN_OPERATOR_NE,																				// NE
+	SDB_PUSHDOWN_OPERATOR_BETWEEN,																			// BETWEEN
+	SDB_PUSHDOWN_OPERATOR_IN,																				// IN
+	SDB_PUSHDOWN_OPERATOR_COND_RESULT,																		// Condition Result
+																											// ^^^^^^^^^^^^^^^^^^^^^^^ ADD NEW OPERATORS HERE
+
+	// Data Types
+	SDB_PUSHDOWN_COLUMN_DATA_TYPE_UNSIGNED_INTEGER,															// unsigned int		(row)
+	SDB_PUSHDOWN_COLUMN_DATA_TYPE_SIGNED_INTEGER,															// signed   int		(row)
+	SDB_PUSHDOWN_COLUMN_DATA_TYPE_BIT,																		// bit				(row)
+	SDB_PUSHDOWN_COLUMN_DATA_TYPE_FLOAT,																	// float			(row)
+	SDB_PUSHDOWN_COLUMN_DATA_TYPE_DECIMAL,																	// binary decimal	(row)
+	SDB_PUSHDOWN_COLUMN_DATA_TYPE_DATE,																		// date				(row)
+	SDB_PUSHDOWN_COLUMN_DATA_TYPE_TIME,																		// time				(row)
+	SDB_PUSHDOWN_COLUMN_DATA_TYPE_DATETIME,																	// datetime			(row)
+	SDB_PUSHDOWN_COLUMN_DATA_TYPE_YEAR,																		// year				(row)
+	SDB_PUSHDOWN_COLUMN_DATA_TYPE_TIMESTAMP,																// timestamp		(row)
+	SDB_PUSHDOWN_COLUMN_DATA_TYPE_CHAR,																		// char				(row)
+	SDB_PUSHDOWN_COLUMN_DATA_TYPE_VARCHAR,																	// varchar			(row)
+	SDB_PUSHDOWN_LITERAL_DATA_TYPE_UNSIGNED_INTEGER,														// unsigned int		(user)
+	SDB_PUSHDOWN_LITERAL_DATA_TYPE_SIGNED_INTEGER,															// signed   int		(user)
+	SDB_PUSHDOWN_LITERAL_DATA_TYPE_BIT,																		// bit				(user)
+	SDB_PUSHDOWN_LITERAL_DATA_TYPE_FLOAT,																	// float			(user)
+	SDB_PUSHDOWN_LITERAL_DATA_TYPE_DECIMAL,																	// binary decimal	(user)
+	SDB_PUSHDOWN_LITERAL_DATA_TYPE_DATETIME,																// datetime			(user)
+	SDB_PUSHDOWN_LITERAL_DATA_TYPE_TIMESTAMP,																// timestamp		(user)
+	SDB_PUSHDOWN_LITERAL_DATA_TYPE_CHAR,																	// char				(user)
+	SDB_PUSHDOWN_LITERAL_DATA_TYPE_VARCHAR,																	// varchar			(user)
+																											// ^^^^^^^^^^^^^^^^^^^^^^^ ADD NEW DATA TYPES HERE
+
+	// Synonyms need to be at the end
+	SDB_PUSHDOWN_LITERAL_DATA_TYPE_DATE				=	SDB_PUSHDOWN_LITERAL_DATA_TYPE_UNSIGNED_INTEGER,	// date				(user)
+	SDB_PUSHDOWN_LITERAL_DATA_TYPE_TIME				=	SDB_PUSHDOWN_LITERAL_DATA_TYPE_SIGNED_INTEGER,		// time				(user)
+	SDB_PUSHDOWN_LITERAL_DATA_TYPE_YEAR				=	SDB_PUSHDOWN_LITERAL_DATA_TYPE_UNSIGNED_INTEGER,	// year				(user)
+																											// ^^^^^^^^^^^^^^^^^^^^^^^ ADD NEW SYONONYMS HERE
+};
 
 // Pushdown condition string offsets
 #define LOGIC_OP_OFFSET_CHILDCOUNT	0
