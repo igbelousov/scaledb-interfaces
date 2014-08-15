@@ -6232,10 +6232,9 @@ int ha_scaledb::addOrderByToList(char* buf, int& pos,  SelectAnalyticsHeader* sa
 
 	for (order = (ORDER *) lex.order_list.first; order;  order = order->next)
     {	
-	        const char* col_name=NULL;
 		bool found=false;
 		Item* item=*order->item;
-
+		alias_name=item->name;
 		switch (item->type())
 		{
 
@@ -6258,7 +6257,7 @@ int ha_scaledb::addOrderByToList(char* buf, int& pos,  SelectAnalyticsHeader* sa
 
 				Field *field =((Item_field *)item)->field;
 				field_name=field->field_name;
-				found=isInSelectList( sah, (char*)field_name,dbid,tabid);
+				found=isInSelectList( sah, (char*)field_name,dbid,tabid,function);
 				break;
 			}
 			case  Item::SUM_FUNC_ITEM:
@@ -6270,7 +6269,7 @@ int ha_scaledb::addOrderByToList(char* buf, int& pos,  SelectAnalyticsHeader* sa
 					function=FT_SUM;
 
 					Field *field =((Item_field *)item->next)->field;
-					col_name=field->field_name;
+					field_name=field->field_name;
           			        type= field->type();
 					flag=field->flags;
 					if(type==MYSQL_TYPE_NEWDECIMAL)
@@ -6284,8 +6283,16 @@ int ha_scaledb::addOrderByToList(char* buf, int& pos,  SelectAnalyticsHeader* sa
 					if(item->name!=NULL)
 					{
 						//if an alias  column, so MUST be in orderby so no need to add
-						alias_name=item->name;
 						found=true;
+					}
+					else
+					{
+						//for case like this 
+						//SELECT client_number,op_number,sum(type)  FROM test.cdr_scaledb_streaming group by client_number,op_number order by sum(type);
+						//mysql ALWAYS adds the orderby field to the front of the projection list (even though it appears in the select list
+						//the  only exception is if an alias is used
+						//i am not sure why but to be compataqbile we need todo the same.
+						found=false;
 					}
 				}
 				else if (sum->sum_func() == Item_sum::COUNT_FUNC)
@@ -6293,7 +6300,7 @@ int ha_scaledb::addOrderByToList(char* buf, int& pos,  SelectAnalyticsHeader* sa
 					function=FT_COUNT;
 					Field *field =((Item_field *)item->next)->field;
 
-					col_name=field->field_name;
+					field_name=field->field_name;
 					type=field->type();
 					flag=field->flags;
 					if(type==MYSQL_TYPE_NEWDECIMAL)
@@ -6323,7 +6330,7 @@ int ha_scaledb::addOrderByToList(char* buf, int& pos,  SelectAnalyticsHeader* sa
 				break;
 			}
        
-		}	
+		}		
 		if(!found)
 		{
 			//add to groupby list.
@@ -6341,7 +6348,7 @@ int ha_scaledb::addOrderByToList(char* buf, int& pos,  SelectAnalyticsHeader* sa
 	return n;
 }
 
-bool ha_scaledb::isInSelectList(SelectAnalyticsHeader* sah, char*  col_name, unsigned short dbid, unsigned short tabid)
+bool ha_scaledb::isInSelectList(SelectAnalyticsHeader* sah, char*  col_name, unsigned short dbid, unsigned short tabid, function_type ft)
 {
 
 	bool found=false;
@@ -6362,7 +6369,8 @@ bool ha_scaledb::isInSelectList(SelectAnalyticsHeader* sah, char*  col_name, uns
 
 			
 			int field=sab2->field_offset;	
-			if(field==field_offset) {found=true;}
+			function_type ftype= (function_type)sab2->function;
+			if(field==field_offset && ftype==ft) {found=true;}
 
 			pos=pos+ sizeof(SelectAnalyticsBody2);
 
@@ -6375,8 +6383,8 @@ bool ha_scaledb::isInSelectList(SelectAnalyticsHeader* sah, char*  col_name, uns
 
 }
 
-int ha_scaledb::getOrderByPosition(const char* col_name, const char* col_alias)
-{
+int ha_scaledb::getOrderByPosition(const char* col_name, const char* col_alias, function_type ft)
+{	
 	if(col_name==NULL) {return 0;}
 	int pos=0;
 	SELECT_LEX  lex=(((THD*) ha_thd())->lex)->select_lex;
@@ -6402,8 +6410,11 @@ int ha_scaledb::getOrderByPosition(const char* col_name, const char* col_alias)
 			case Item::SUM_FUNC_ITEM:
 			{			
 					Field *field =((Item_field *)item->next)->field;
-					field_name=field->field_name;
-					alias_name= item->name;
+					if(ft==FT_SUM)
+					{
+						field_name=field->field_name;
+						alias_name= item->name;
+					}
 					break;
 			}
 			default:
@@ -6419,7 +6430,7 @@ int ha_scaledb::getOrderByPosition(const char* col_name, const char* col_alias)
 		// if there is an alias, check the alias.
 		if(alias_name==NULL || col_alias == NULL)
 		{
-			if(strcmp( field_name, col_name ) == 0 )
+			if(field_name!= NULL && strcmp( field_name, col_name ) == 0 )
 			{
 				return pos;
 			}
@@ -6562,7 +6573,7 @@ int ha_scaledb::generateGroupConditionString(int cardinality, int thread_count, 
 		gab->type=castype;
 		gab->function=function;
 		gab->function_length=gab->length;
-		gab->orderByPosition=getOrderByPosition(col_name,alias_name); 
+		gab->orderByPosition=getOrderByPosition(col_name,alias_name,function); 
 		pos=pos+sizeof(GroupByAnalyticsBody);
     }
   
@@ -6621,7 +6632,7 @@ bool ha_scaledb::addSelectField(char* buf, int& pos, unsigned short dbid, unsign
 		sab2->scale=scale;
 		sab2->result_precision=result_precision;
 		sab2->result_scale=result_scale;
-		sab2->orderByPosition=getOrderByPosition(col_name,alias_name);
+		sab2->orderByPosition=getOrderByPosition(col_name,alias_name,FT_NONE);
 	}
 	else
 	{
@@ -6635,7 +6646,7 @@ bool ha_scaledb::addSelectField(char* buf, int& pos, unsigned short dbid, unsign
 		sab2->scale=scale;
 		sab2->result_precision=result_precision;
 		sab2->result_scale=result_scale;
-		sab2->orderByPosition=getOrderByPosition(col_name,alias_name);
+		sab2->orderByPosition=getOrderByPosition(col_name,alias_name,(function_type)function);
 	}
 	sab2->function=function;		//this is operation to perform on the field
 
@@ -6944,7 +6955,7 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 		short scale=0;
 		no_fields=0;	//reset the number of fields
 		int flag=0;
-
+	    alias_name= item->name;
 		switch (item->type())
 		{
 
@@ -6993,12 +7004,12 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 
 					col_name= field->field_name;
 					type= field->type();
-					flag=field->flags;
-					if(strcmp("?",col_name)==0)
+					flag=field->flags;		
+	if(strcmp("?",col_name)==0)
 					{			
 					   alias_name= item->name;
 					}
-					
+		
 				}
 #ifdef  PROCESS_COUNT_DISTINCT
 				else if (sum->sum_func() == Item_sum::COUNT_DISTINCT_FUNC)

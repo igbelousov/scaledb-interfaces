@@ -451,7 +451,7 @@ public:
 	}
 
 	void generateAnalyticsString();
-	int getOrderByPosition(const char* col_name, const char* col_alias);
+	int getOrderByPosition(const char* col_name, const char* col_alias, function_type ft);
 	int numberInOrderBy();
 	int index_init(uint index, bool sorted); // this method is optional
 	int index_end(); // this method is optional
@@ -479,7 +479,7 @@ public:
 	int info(uint); ///< required
 
 	int addOrderByToList(char* buf, int& pos, SelectAnalyticsHeader* sah,unsigned short dbid, unsigned short tabid);
-	bool isInSelectList(SelectAnalyticsHeader* sah, char*  col_name, unsigned short dbid, unsigned short tabid);
+	bool isInSelectList(SelectAnalyticsHeader* sah, char*  col_name, unsigned short dbid, unsigned short tabid, function_type ft);
 
 	// create a user table.
 	int parseTableOptions(HA_CREATE_INFO *create_info, bool& streamTable, bool& dimensionTable, unsigned long long&  dimensionSize, char** rangekey);
