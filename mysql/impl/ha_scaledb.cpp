@@ -991,7 +991,7 @@ static group_by_handler *scaledb_create_group_by_handler(THD *thd,
 			unsigned char* end_pos   = scaledb->rangeBounds.endRange + scaledb->conditionString();
 			int move_len= scaledb->conditionStringLength()-scaledb->rangeBounds.endRange;
 
-			if( (scaledb->conditionStringLength() - len_to_remove) == 0)
+			if( (scaledb->conditionStringLength() - len_to_remove) == 0 || (scaledb->conditionStringLength() - len_to_remove) == LOGIC_OP_NODE_LENGTH)
 			{
 				//if after removing the range tree the condition string is empty then dont add the bool node, just send an empty condition tree
 				scaledb->setConditionStringLength(0);
@@ -1002,7 +1002,9 @@ static group_by_handler *scaledb_create_group_by_handler(THD *thd,
 				//note to avoid array overflow the bool node length must be < the condition string pulled out (which is currently the case since the bool node is only 3 chars and
 				//the range will be much longer than that).
 				memcpy(start_pos+bool_node_length,end_pos,move_len); //move the remainder of condition first, leave space for bool node
+				*( unsigned short* )(start_pos+bool_node_length)=2; //set children to 2 (the boolean node and the other node )
 				memcpy(start_pos,bool_true_node,bool_node_length); //insert the boolean node	
+
 			}
 			
 		}
@@ -4664,6 +4666,11 @@ bool ha_scaledb::conditionTreeToString( const COND* cond, unsigned char** buffer
 					{
 						*( *buffer + *nodeOffset + LOGIC_OP_OFFSET_OPERATION )	= SDB_PUSHDOWN_OPERATOR_AND;	// & for AND
 						and_cond=true;
+						if(rangeBounds.endSet==true && rangeBounds.endRange==0)
+						{
+							rangeBounds.endRange=*nodeOffset;
+						}
+
 						break;
 					}
 				case Item_func::COND_OR_FUNC:
@@ -4680,11 +4687,6 @@ bool ha_scaledb::conditionTreeToString( const COND* cond, unsigned char** buffer
 
 			*nodeOffset						   += LOGIC_OP_NODE_LENGTH;
 
-			if(and_cond==true && rangeBounds.endSet==true && rangeBounds.endRange==0)
-			{
-
-				rangeBounds.endRange=*nodeOffset;
-			}
 
 
 			break;
@@ -6226,6 +6228,56 @@ int ha_scaledb::addOrderByToList(char* buf, int& pos,  SelectAnalyticsHeader* sa
 	function_type function=FT_NONE;
 	char* alias_name=NULL;
 	int flag=0;
+
+
+//check if groupby is NOT in select lsit, if so add.
+
+   for (ORDER *cur_group= (((THD*) ha_thd())->lex)->select_lex.parent_lex->current_select->group_list.first ; cur_group ; cur_group= cur_group->next)
+   {	   
+		bool found=false;
+		
+		
+		int function_length=0;
+		enum_field_types type;
+	
+		Item* group_item=*cur_group->item;
+		function_type function=FT_NONE;
+		int flag=0;
+		
+		switch (group_item->type())
+		{
+			case Item::FIELD_ITEM:
+				{
+				function=FT_NONE;
+
+				Field *field =((Item_field *)group_item)->field;
+				field_name=field->field_name;
+				type= field->type();
+				found=isInSelectList( sah, (char*)field_name,dbid,tabid,function);
+				break;
+				}
+			default:
+				{
+//only add if the field is not an aggregate (add later once tested)
+					found=true;
+				}
+
+		}
+		if(!found)
+		{
+			//add to groupby list.
+			bool contains_analytics_function=false;
+			SelectAnalyticsBody1* sab1= (SelectAnalyticsBody1*)(buf+pos);
+			sab1->numberFields=1;
+			sab1->function=FT_NONE;
+			pos=pos+ sizeof(SelectAnalyticsBody1);
+
+			bool ret=addSelectField(buf,  pos, dbid, tabid, type, function,  field_name, contains_analytics_function,precision,scale,flag,result_precision,result_scale ,alias_name);
+			n++;
+
+		}
+	}
+
 
 	SELECT_LEX  lex=(((THD*) ha_thd())->lex)->select_lex;
 	ORDER *order;
