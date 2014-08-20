@@ -6258,8 +6258,9 @@ int ha_scaledb::addOrderByToList(char* buf, int& pos,  SelectAnalyticsHeader* sa
 				}
 			default:
 				{
-//only add if the field is not an aggregate (add later once tested)
+//group fields cannot be aggregates, so not a alid condition but leave.
 					found=true;
+					break;
 				}
 
 		}
@@ -6278,11 +6279,10 @@ int ha_scaledb::addOrderByToList(char* buf, int& pos,  SelectAnalyticsHeader* sa
 		}
 	}
 
-
-	SELECT_LEX  lex=(((THD*) ha_thd())->lex)->select_lex;
+   	SELECT_LEX*  lex=   (((THD*) ha_thd())->lex)->select_lex.parent_lex->current_select;
 	ORDER *order;
 
-	for (order = (ORDER *) lex.order_list.first; order;  order = order->next)
+	for (order = (ORDER *) lex->order_list.first; order;  order = order->next)
     {	
 		bool found=false;
 		Item* item=*order->item;
@@ -6372,6 +6372,56 @@ int ha_scaledb::addOrderByToList(char* buf, int& pos,  SelectAnalyticsHeader* sa
 			
 
 				}
+				else if (sum->sum_func() == Item_sum::MAX_FUNC)
+				{
+					function=FT_MAX;
+					Field *field =((Item_field *)item->next)->field;
+
+					field_name=field->field_name;
+					type=field->type();
+					flag=field->flags;
+					if(type==MYSQL_TYPE_NEWDECIMAL)
+					{			
+						Field_new_decimal* fnd=(Field_new_decimal*)field;
+						precision=fnd->precision;
+						result_precision =item->decimal_precision();
+						scale=fnd->decimals();
+						result_scale = item->decimals;
+					}
+					if(item->name!=NULL)
+					{
+						//if an alias  column, so MUST be in orderby so no need to add
+						alias_name=item->name;
+						found=true;
+					}
+			
+
+				}
+				else if (sum->sum_func() == Item_sum::MIN_FUNC)
+				{
+					function=FT_MIN;
+					Field *field =((Item_field *)item->next)->field;
+
+					field_name=field->field_name;
+					type=field->type();
+					flag=field->flags;
+					if(type==MYSQL_TYPE_NEWDECIMAL)
+					{			
+						Field_new_decimal* fnd=(Field_new_decimal*)field;
+						precision=fnd->precision;
+						result_precision =item->decimal_precision();
+						scale=fnd->decimals();
+						result_scale = item->decimals;
+					}
+					if(item->name!=NULL)
+					{
+						//if an alias  column, so MUST be in orderby so no need to add
+						alias_name=item->name;
+						found=true;
+					}
+			
+
+				}
 
 				break;
 			}
@@ -6439,11 +6489,11 @@ int ha_scaledb::getOrderByPosition(const char* col_name, const char* col_alias, 
 {	
 	if(col_name==NULL) {return 0;}
 	int pos=0;
-	SELECT_LEX  lex=(((THD*) ha_thd())->lex)->select_lex;
+	SELECT_LEX*  lex=   (((THD*) ha_thd())->lex)->select_lex.parent_lex->current_select;
 	ORDER *order;
 	const char* field_name=NULL;
 	const char* alias_name=NULL;
-	for (order = (ORDER *) lex.order_list.first; order;  order = order->next)
+	for (order = (ORDER *) lex->order_list.first; order;  order = order->next)
     {
         pos++;
 		
@@ -6462,16 +6512,14 @@ int ha_scaledb::getOrderByPosition(const char* col_name, const char* col_alias, 
 			case Item::SUM_FUNC_ITEM:
 			{			
 					Field *field =((Item_field *)item->next)->field;
-					if(ft==FT_SUM)
-					{
-						field_name=field->field_name;
-						alias_name= item->name;
-					}
+				
+					field_name=field->field_name;
+					alias_name= item->name;
 					break;
 			}
 			default:
 				{
-
+					//all fields and aggregates would have already been caught, so can't really be here
 					return 0;
 				}
            
@@ -6506,8 +6554,8 @@ int ha_scaledb::generateGroupConditionString(int cardinality, int thread_count, 
 
 	int pos=0;
 	int select_limit=0;
-	SELECT_LEX  lex=(((THD*) ha_thd())->lex)->select_lex;
-	Item* limit= lex.select_limit;
+	SELECT_LEX*  lex=   (((THD*) ha_thd())->lex)->select_lex.parent_lex->current_select;
+	Item* limit= lex->select_limit;
 	if(limit!=NULL)
 	{
 		if(limit->type()==Item::INT_ITEM)
@@ -6516,10 +6564,10 @@ int ha_scaledb::generateGroupConditionString(int cardinality, int thread_count, 
 		}
 	}
 	int info=0;
-	if(lex.order_list.elements>0)
+	if(lex->order_list.elements>0)
 	{
 		info |= GH_ORDER_BY;   
-		if(lex.order_list.first->asc) {info |= ANALYTIC_FLAG_ASCENDING;}
+		if(lex->order_list.first->asc) {info |= ANALYTIC_FLAG_ASCENDING;}
 	}
 
 
