@@ -7100,16 +7100,28 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 				else if (sum->sum_func() == Item_sum::COUNT_FUNC)
 				{
 					function=FT_COUNT;
-					Field *field =((Item_field *)item->next)->field;
-
-					col_name= field->field_name;
-					type= field->type();
-					flag=field->flags;		
-	if(strcmp("?",col_name)==0)
-					{			
-					   alias_name= item->name;
+					Item::Type ft=item->next->type();
+					if(ft==Item::FIELD_ITEM)
+					{
+					
+						Field *field =((Item_field *)item->next)->field;
+				
+						col_name= field->field_name;
+						type= field->type();
+						flag=field->flags;		
+						if(strcmp("?",col_name)==0)
+						{			
+							alias_name= item->name;
+						}
 					}
-		
+					else
+					{
+						//this is a count(*)
+						col_name="?";
+						type=MYSQL_TYPE_LONG;
+
+					}
+				
 				}
 #ifdef  PROCESS_COUNT_DISTINCT
 				else if (sum->sum_func() == Item_sum::COUNT_DISTINCT_FUNC)
