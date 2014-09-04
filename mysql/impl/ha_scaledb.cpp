@@ -2056,7 +2056,7 @@ int ha_scaledb::external_lock(THD* thd, /* handle to the user thread */
 	}
 
 
-	if(lock_type == F_RDLCK && sdbCommandType_ == SDB_COMMAND_SELECT)
+	if(lock_type == F_RDLCK && sdbCommandType_ == SDB_COMMAND_SELECT && is_streaming_table==true)
 	{
 		char* s_force_analytics=SDBUtilFindComment(thd->query(), "force_sdb_analytics") ;
 		if(s_force_analytics!=NULL){forceAnalytics_=true;}
@@ -7293,26 +7293,26 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 	
 
 
-		if(no_fields>0)
-		{
-			sab1->numberFields=no_fields;
-		
-		}
-		else
-		{
-			sab1->numberFields=1;
-			sab1->function=function;
-			switch ( function )
+			if(no_fields>0)
 			{
+				sab1->numberFields=no_fields;
+
+			}
+			else
+			{
+				sab1->numberFields=1;
+				sab1->function=function;
+				switch ( function )
+				{
 				case FT_NONE:
 				case FT_UNSUPPORTED:
 					break;
 				default:
 					contains_analytics_function	= true;
+				}
+				bool ret=addSelectField(buf,  pos, dbid, tabid, type, function, col_name ,contains_analytics_function,precision,scale,flag,result_precision,result_scale, alias_name);
+				if (ret==false) {return 0;}
 			}
-			bool ret=addSelectField(buf,  pos, dbid, tabid, type, function, col_name ,contains_analytics_function,precision,scale,flag,result_precision,result_scale, alias_name);
-			if (ret==false) {return 0;}
-		}
 		
     }
 	sah->numberColumns=n;
