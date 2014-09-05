@@ -5273,6 +5273,7 @@ bool ha_scaledb::conditionFieldToString( unsigned char** pCondString, unsigned i
 
 				Item_field*			pField			= ( Item_field* ) pFieldItem;
 				my_decimal*			pValue			= ( my_decimal* )( ( Item_decimal* ) pComperandItem )->val_decimal( &dValue );
+				unsigned char*		pType			= ( unsigned char* )( pComperandData + USER_DATA_OFFSET_DATA_TYPE );
 				unsigned char*		pBinary			= ( unsigned char* )( pComperandData + USER_DATA_OFFSET_USER_DATA );
 				int					iPrecision		= pField->decimal_precision();
 				int					iScale			= pField->decimals;
@@ -5293,6 +5294,8 @@ bool ha_scaledb::conditionFieldToString( unsigned char** pCondString, unsigned i
 				{
 					return false;
 				}
+
+				*pType								= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_DECIMAL );
 			}
 			break;
 
@@ -5626,6 +5629,40 @@ bool ha_scaledb::conditionConstantToString( unsigned char** pCondString, unsigne
 					*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_SIZE )									= ( unsigned char )( 8 );		// size in bytes of int
 					*pItemOffset																				   += USER_DATA_OFFSET_USER_DATA + 8;
 					break;
+
+				case MYSQL_TYPE_NEWDECIMAL:
+				{
+					*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_TYPE )									=  ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_DECIMAL );
+
+					my_decimal		dValue;
+
+					Item_field*		pField		= ( Item_field* ) pComperandItem;
+					my_decimal*		pValue		= ( my_decimal* )( ( Item_decimal* ) pConstItem )->val_decimal( &dValue );
+					unsigned char*	pBinary		= ( unsigned char* )( *pCondString + *pItemOffset + USER_DATA_OFFSET_USER_DATA );
+					int				iPrecision	= pField->decimal_precision();
+					int				iScale		= pField->decimals;
+					int				iLength		= *( unsigned short* )( pComperandData + ROW_DATA_OFFSET_COLUMN_SIZE );
+
+					if ( iLength				> sizeof( long long ) )
+					{
+						// Decimal values longer than 8 bytes are not yet supported
+						return false;
+					}
+
+					memset( pBinary, '\0', sizeof( long long ) );
+
+					int				retValue	= my_decimal2binary( E_DEC_FATAL_ERROR & ~E_DEC_OVERFLOW,
+																	 pValue, pBinary, iPrecision, iScale );
+
+					if ( retValue )
+					{
+						return false;
+					}
+					
+					*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_SIZE )									=  ( unsigned char )( 8 );		// max size in bytes of decimal
+					( *pItemOffset )																			   += USER_DATA_OFFSET_USER_DATA + 8;
+					break;
+				}
 
 				default:
 					if ( isUnsignedField	   || isUnsignedComperand )

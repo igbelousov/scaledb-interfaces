@@ -324,7 +324,7 @@ public:
 			// to skip MIN/MAX  optimization we remove the order from streaming tables 
 			// As a result we also remove loose-index-scans but since on streaming tables we apply exact keys only - it does not matter at this point
 			// we keep the range reads and the point reads
-			flags = (HA_READ_NEXT | HA_READ_PREV |               HA_READ_RANGE | HA_KEYREAD_ONLY);
+			flags = (HA_READ_NEXT |  HA_READ_RANGE | HA_KEYREAD_ONLY);
 		}
 		else
 		{
