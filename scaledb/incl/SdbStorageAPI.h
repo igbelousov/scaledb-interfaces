@@ -95,7 +95,7 @@ typedef unsigned long long uint64;
 
 // Memory Management calls for the interface have different names from those defined in environment.h to avoid redefinitions and confusion
 //	These #defines are necessary because some of the interface functions call our own memory management functions in the DataUtil class.
-#if defined(SDB_DEBUG) || defined(SDB_DEBUG_MALLOC)
+#ifdef SDB_DEBUG
 #define ALLOCATE_MEMORY(a,b,c) SDBTestedMalloc(a,b,c)
 #define FREE_MEMORY SDBTestedFree	
 #define REALLOCATE_MEMORY SDBTestedRealloc
@@ -171,7 +171,7 @@ unsigned short SDBValidateInitDatabaseTable(const char *dbName, const char *tabl
 
 // Create new user table. Return newly created table id
 unsigned short SDBCreateTable(unsigned int userId, unsigned short dbId, char* tableName, unsigned long long autoIncrBaseValue,
-							  char *tableFsName=0, char *tableCsName=0, bool virtualTable = false, bool hasOverflow = false, bool streamTable =false, bool dimensionTable =false,unsigned long long dimensionSize=0,
+							  char *tableFsName=0, char *tableCsName=0, bool virtualTable = false, bool hasOverflow = false, bool streamTable =false, bool dimensionTable =false,
 							  unsigned short tableCharSet=0, unsigned short ddlFlag=0);
 
 //Add partition info into meta tables
@@ -184,7 +184,7 @@ unsigned short SDBGetPartitionId(unsigned short userId, unsigned short dbId, cha
 unsigned short SDBDeleteTable(unsigned int userId, unsigned short dbId, 
 							  char* tableName, char* partitionName, unsigned short partitionId, unsigned short ddlFlag=0);
 
-unsigned short SDBRemoveLocalTableInfo(unsigned int userId, unsigned short dbId, unsigned short tableId, bool removeFromMemory); 
+unsigned short SDBRemoveLocalTableInfo(unsigned int userId, unsigned short dbId, unsigned short tableId); 
 
 //Rename a partition
 unsigned short SDBRenamePartition(unsigned int userId, unsigned short sdbDbId_, char* pTableName, char* fromPartitionName, char* toPartitionName,
@@ -210,10 +210,9 @@ unsigned short SDBOpenTable(unsigned short userId, unsigned short dbId, char *pT
 
 // close an open table based on table name (not its file-system-safe name)
 // the calling method needs to decide if we need to lock table before closing it.
-unsigned short SDBCloseTable(unsigned short userId, unsigned short dbId, char *pTableName, unsigned short partitionId, bool bLockTable, bool bNeedToCommits, bool isTableFlush,bool removeLocal);
+unsigned short SDBCloseTable(unsigned short userId, unsigned short dbId, char *pTableName, unsigned short partitionId, bool bLockTable, bool bNeedToCommits, bool isTableFlush=false);
 unsigned short SDBCloseParentTables(unsigned short userId, unsigned short dbId, char* pTableFsName);
 
-int SDBNumberShards(unsigned short dbId, unsigned short tableNumber);
 unsigned short SDBGetTableNumberByName(unsigned short userId, unsigned short dbId, const char *tableName);
 unsigned char SDBGetColumnTypeByNumber(unsigned short dbId, unsigned short tableNumber, unsigned short columnNumber);
 unsigned short SDBGetTableNumberByFileSystemName(unsigned short userId, unsigned short dbId, const char *tableName);
@@ -381,14 +380,8 @@ char *SDBGetLastUserErrorMessageDetail(unsigned short userId);
 unsigned short SDBGetErrorMessage(unsigned short userId, char *buff, unsigned short buffLength) ;
 unsigned short SDBGetLastIndexError(unsigned short userId);
 unsigned short SDBGetLastIndexPositionInTable(unsigned short dbId, unsigned int indexId);
-unsigned short SDBIsStreamingTable(unsigned short dbId, unsigned short tableNumber);
-unsigned short SDBIsDimensionTable(unsigned short dbId, unsigned short tableNumber);
-unsigned short SDBIsNonUniqueIndex(unsigned short dbId, unsigned int indexId);
-unsigned short SDBStreamingDelete(unsigned short userId, unsigned short dbId, unsigned short tableNumber, unsigned short partitionId,unsigned long long key, unsigned short column, bool delete_all, unsigned long long queryId);
-unsigned short SDBSetErrorMessage(unsigned short userId,  unsigned short sdb_error_code, char *buff);
+
 unsigned short SDBGetSystemLevelIndexType();
-unsigned long  SDBGetRangeKeyFieldID(unsigned short dbId, unsigned short tableId);
-unsigned long  SDBGetRangeKey(unsigned short dbId, unsigned short tableId);
 
 /*
 //////////////////////////////////////////////////////////////////////////////
@@ -402,12 +395,12 @@ unsigned long  SDBGetRangeKey(unsigned short dbId, unsigned short tableId);
 unsigned short SDBCreateField(unsigned int userId, unsigned short dbId, unsigned short tableId, 
 							  char *fieldName, unsigned char fieldType, unsigned short fieldSize, 
 							  unsigned int maxDataLength, char *defaultValue, bool autoIncr, 
-							  unsigned short ddlFlag, unsigned short fieldFlag, bool isRangeKey, bool isMapped, bool isInsertCascade, bool isStreamingKey);
+							  unsigned short ddlFlag, unsigned short fieldFlag, bool isRangeKey);
 
 bool SDBIsFieldAutoIncrement(unsigned short dbId, unsigned short tableId, unsigned short fieldId);
 char* SDBGetFileDataField(unsigned short userId, unsigned short tableId, unsigned short fieldId);
-unsigned long long  SDBGetAutoIncrValue(unsigned short dbId, unsigned short tableId);
-unsigned long long  SDBGetActualAutoIncrValue(unsigned short userId,unsigned short dbId, unsigned short tableId);
+void SDBSetAutoIncrBaseValue(unsigned short dbId, unsigned short tableId, unsigned long long value);
+unsigned long long  SDBGetAutoIncrBaseValue(unsigned short dbId, unsigned short tableId);
 void SDBSetOverflowFlag(unsigned short dbId, unsigned short tableId, bool ovfFlag);
 
 /*
@@ -434,8 +427,6 @@ void SDBSetStmtId(unsigned int userId);
 unsigned long long  SDBGetStmtId(unsigned int userId);
 
 void SDBSetIsolationLevel(unsigned int userId, unsigned short isolationLevel);
-void SDBCreateTableEndInSuccess(unsigned short userId, unsigned short dbId, unsigned short tableId);
-
 
 /*
 //////////////////////////////////////////////////////////////////////////////
@@ -553,7 +544,6 @@ typedef struct SDBKeyTemplate {
 #define GET_DESIGNATOR_LEVEL(index_id) ((unsigned short)(index_id >> DESIGNATOR_LEVEL_OFFSET))
 
 
-bool SDBEqualDataTypes(unsigned char internalType, SDBFieldType externalType) ;
 
 unsigned short SDBGetQueryManagerId(unsigned int userId);
 
@@ -568,21 +558,13 @@ void SDBFreeQueryManagerBuffers(unsigned int queryManagerId);
 unsigned short SDBPrepareRowByTemplate(unsigned short userId, unsigned char * rowBuf, SDBRowTemplate &rowTemplate,unsigned short dbmsId,unsigned short groupType);
 unsigned short SDBPrepareRowByTemplateEnterExit(unsigned short userId, unsigned char * rowBuf, SDBRowTemplate &rowTemplate,unsigned short dbmsId,unsigned short groupType);
 
-unsigned short SDBPrepareSequentialScan( unsigned int userId, unsigned short queryMgrId, unsigned short dbId, unsigned short partitionId, char *tableName, unsigned long long queryId,
-										 bool releaseLocksAfterRead, SDBRowTemplate& rowTemplate,
-										 const unsigned char* pConditionString = NULL, unsigned int conditionStringLength = 0,
-										 const unsigned char* pAnalyticsString = NULL, unsigned int analyticsStringLength = 0 );
-
-unsigned short SDBEndSequentialScan( unsigned int userId, unsigned short queryMgrId, unsigned short dbId, unsigned short partitionId, char *tableName, unsigned long long queryId );
-
-unsigned short SDBEndIndexedQuery( unsigned int userId, unsigned short queryMgrId, unsigned short dbId, unsigned short partitionId, char *tableName, unsigned long long queryId );
+unsigned short SDBPrepareSequentialScan(unsigned int userId, unsigned short queryMgrId, unsigned short dbId, unsigned short partitionId, char *tableName, 
+										unsigned long long queryId, bool releaseLocksAfterRead,SDBRowTemplate & rowTemplate, const unsigned char * conditionString = NULL, int conditionStringLength = 0);
 
 unsigned short SDBGetSeqRowByPosition(unsigned int userId, unsigned short queryMgrId, unsigned long long rowId);
 
-unsigned short SDBPrepareQuery( unsigned int userId, unsigned short queryMgrId, unsigned short partitionId, unsigned long long queryId,
-								bool releaseLocksAfterRead, unsigned short sdbCommandType, bool isPointQuery, SDBRowTemplate& rowTemplate, bool prefetch,
-								const unsigned char* pConditionString, unsigned int lengthConditionString,
-								const unsigned char* pAnalyticsString, unsigned int lengthAnalyticsString );
+unsigned short SDBPrepareQuery(unsigned int userId, unsigned short queryMgrId, unsigned short partitionId, 
+							   unsigned long long queryId, bool releaseLocksAfterRead, unsigned short sdbCommandType,bool isPointQuery,SDBRowTemplate & rowTemplate, bool prefetch) ;
 
 long long SDBGetRowsCount(unsigned short queryMgrId);
 
@@ -603,8 +585,8 @@ void SDBSetActiveQueryManager(unsigned short queryMgrId);
 
 unsigned short SDBDefineQueryPrefix(unsigned short queryMgrId, unsigned short dbId, unsigned int indexId, char *fieldName, 
 									char* key, bool useStarForPrefixEnd, int keyPrefixSize, bool usePoundSign);
-unsigned short SDBQueryCursorNextSequential(unsigned int userId, unsigned short queryMgrId, unsigned char *outBuff, SDBRowTemplate *outTemplate, unsigned short sdbCommandType);
-unsigned short SDBQueryCursorNext(unsigned int userId, unsigned short queryMgrId, unsigned char *outBuff, SDBRowTemplate *outTemplate, unsigned short sdbCommandType);
+unsigned short SDBQueryCursorNextSequential(unsigned int userId, unsigned short queryMgrId, unsigned short sdbCommandType);
+unsigned short SDBQueryCursorNext(unsigned int userId, unsigned short queryMgrId, unsigned short sdbCommandType);
 bool SDBQueryCursorFieldIsNull(unsigned short queryMgrId, unsigned short fieldId);
 bool SDBQueryCursorFieldIsNullByIndex(unsigned short queryMgrId, unsigned int indexId, unsigned short fieldId);
 void SDBQueryCursorFreeBuffers(unsigned short queryMgrId);
@@ -620,7 +602,7 @@ char *SDBQueryCursorGetDataByIndex(unsigned short queryMgrId, unsigned int index
 char *SDBQueryCursorGetDataByIndexName(unsigned short queryMgrId, char* indexName);
 void SDBQueryCursorPrintStats(unsigned short queryMgrId );
 unsigned short SDBDefineQueryByTemplate(unsigned short queryMgrId, unsigned short dbId, unsigned int indexId, char *keyBuf,SDBKeyTemplate & keyTemplate);
-void SDBDefineQueryRangeKey( unsigned short queryMgrId, unsigned short dbId, unsigned int indexId,  SDBKeyTemplate& keyTemplate, unsigned char keyDirection );
+void SDBDefineQueryRangeKey(unsigned short queryMgrId, unsigned short dbId, unsigned int indexId,  SDBKeyTemplate & keyTemplate);
 
 
 unsigned short SDBQueryCursorDefineQueryAllValues(unsigned short queryMgrId, unsigned short dbId, unsigned int indexId, bool retrieveSubordinates);
@@ -686,13 +668,9 @@ char *SDBUtilDoubleSpecialCharInString(char* pName, char specialChar);
 char *SDBUtilGetStrInLower(char *ptr);
 bool SDBUtilCompareStrings(const char *str1, const char *str2, bool inLower, unsigned short length = 0);
 char* SDBUtilStrstrCaseInsensitive(char* s1, char* s2);
-char* SDBUtilStrstrCaseInsensitive(char* s1, char* s2);
-char* SDBUtilFindComment(char* s1, char* s2);
-int SDBUtilFindCommentIntValue(char* s1, char* s2); 
 // Search a substring (str) in SQL stmt - comments are ignored
 char* SDBUtilSqlSubStrIgnoreComments(char* sqlStmt, char* subStr, bool ignoreComments);
 int SDBUtilStringToInt(char *str);
-int SDBUtilStringToInt(char *str, int len);
 char *SDBUtilDecodeCharsInStrings(char *before);
 char* SDBUtilFindDesignatorName(char* pTblFsName, char* pKeyName, int externalKeyNum, bool useExternalKeyNum, char *nameBuff, int nameBuffLength);
 void SDBUtilIntToMemoryLocation(unsigned long long number, unsigned char* destination, unsigned short bytesToCopy);
@@ -744,7 +722,7 @@ bool SDBConditionStackPush(SdbConditionStack * stack,SimpleCondition  & item);
 void SDBConditionStackClearAll(SdbConditionStack * stack);
 bool SDBConditionStackIsEmpty(SdbConditionStack * stack);
 bool SDBConditionStackIsFull(SdbConditionStack * stack);
-void printMYSQLConditionBuffer( unsigned char * sqlBuffer, unsigned int sqlBufferLength );
+void printMYSQLConditionBuffer(unsigned char * sqlBuffer, unsigned short sqlBufferLength);
 /*
 //////////////////////////////////////////////////////////////////////////////
 //
@@ -862,8 +840,6 @@ void dummyEnterMethod(unsigned short uId);
 #define API_COPY_ROW_B						70
 #define API_GET_TABLE_LOCK_LEVEL			71
 #define API_GET_TABLE_STATS_2				72
-#define API_END_SEQUENTIAL_SCAN				73
-#define API_END_INDEXED_QUERY				74
 
 
 #endif //_SDB_STORAGE_API_H

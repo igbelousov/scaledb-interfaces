@@ -30,10 +30,6 @@
 
 #define SDB_PUSH_DOWN
 
-// We define if to test the size of malloced data 
-// the define is in this file so it will be used by both the engine and the interface modules  
-//#define SDB_DEBUG_MALLOC
-
 // types of users
 #define SDB_USER_TYPE_SYSTEM 1
 #define SDB_USER_TYPE_NODE   2
@@ -210,16 +206,10 @@ typedef enum SdbKeySearchDirection {
 #define DATA_TRANSFER_NOT_COMPLETED 37
 #define DATA_EXISTS_FATAL_ERROR 40
 #define SDB_ROLLBACK_COMPONENT_FAILURE	51	// Storage engine rolled back all transactions because of a component failure (such as SLM)
-#define SDB_NO_DISK_SPACE			52
-#define SDB_FILE_DELETION_FAILED	53
-#define SDB_ROW_NOT_IN_DYNAMIC_HASH 54
-#define UPDATE_REJECTED 55
-#define WRONG_AUTO_INCR_VALUE 56
-#define BLOCK_DOES_NOT_EXIST 57
-#define INVALID_STREAMING_OPERATION 58
-#define BLOCK_REQUESTED_OUTSIDE_FILE_RANGE 59	// This list is copied to scaledb_error.h
-#define TABLE_IN_USE_ON_ANOTHER_NODE 60
-#define QUERY_ABORTED				61
+#define SDB_ROW_NOT_IN_DYNAMIC_HASH 52
+#define UPDATE_REJECTED 53
+#define WRONG_AUTO_INCR_VALUE 54
+
 #define CAS_FILE_IN_USE		 100
 
 #define ENGINE_INDEX_ERROR 201
@@ -264,89 +254,28 @@ typedef enum SdbKeySearchDirection {
 #define METAINFO_MISSING_FOREIGN_TABLE  1036
 #define METAINFO_ROW_SIZE_TOO_LARGE	1037
 
-// Condition pushdown operators and data types
-enum SdbConditionPushdownType:unsigned char
-{
-	SDB_PUSHDOWN_UNKNOWN,																					// PLACEHOLDER
 
-	// Operators
-	SDB_PUSHDOWN_OPERATOR_AND,																				// AND
-	SDB_PUSHDOWN_OPERATOR_BITWISE_AND,																		// bitwise AND
-	SDB_PUSHDOWN_OPERATOR_OR,																				// OR
-	SDB_PUSHDOWN_OPERATOR_BITWISE_OR,																		// bitwise OR
-	SDB_PUSHDOWN_OPERATOR_XOR,																				// XOR
-	SDB_PUSHDOWN_OPERATOR_BITWISE_XOR,																		// bitwise XOR
-	SDB_PUSHDOWN_OPERATOR_EQ,																				// EQ
-	SDB_PUSHDOWN_OPERATOR_LE,																				// LE
-	SDB_PUSHDOWN_OPERATOR_GE,																				// GE
-	SDB_PUSHDOWN_OPERATOR_LT,																				// LT
-	SDB_PUSHDOWN_OPERATOR_GT,																				// GT
-	SDB_PUSHDOWN_OPERATOR_NE,																				// NE
-	SDB_PUSHDOWN_OPERATOR_BETWEEN,																			// BETWEEN
-	SDB_PUSHDOWN_OPERATOR_IN,																				// IN
-	SDB_PUSHDOWN_OPERATOR_COND_RESULT,																		// Condition Result
-																											// ^^^^^^^^^^^^^^^^^^^^^^^ ADD NEW OPERATORS HERE
 
-	// Data Types
-	SDB_PUSHDOWN_COLUMN_DATA_TYPE_UNSIGNED_INTEGER,															// unsigned int		(row)
-	SDB_PUSHDOWN_COLUMN_DATA_TYPE_SIGNED_INTEGER,															// signed   int		(row)
-	SDB_PUSHDOWN_COLUMN_DATA_TYPE_BIT,																		// bit				(row)
-	SDB_PUSHDOWN_COLUMN_DATA_TYPE_FLOAT,																	// float			(row)
-	SDB_PUSHDOWN_COLUMN_DATA_TYPE_DECIMAL,																	// binary decimal	(row)
-	SDB_PUSHDOWN_COLUMN_DATA_TYPE_DATE,																		// date				(row)
-	SDB_PUSHDOWN_COLUMN_DATA_TYPE_TIME,																		// time				(row)
-	SDB_PUSHDOWN_COLUMN_DATA_TYPE_DATETIME,																	// datetime			(row)
-	SDB_PUSHDOWN_COLUMN_DATA_TYPE_YEAR,																		// year				(row)
-	SDB_PUSHDOWN_COLUMN_DATA_TYPE_TIMESTAMP,																// timestamp		(row)
-	SDB_PUSHDOWN_COLUMN_DATA_TYPE_CHAR,																		// char				(row)
-	SDB_PUSHDOWN_COLUMN_DATA_TYPE_VARCHAR,																	// varchar			(row)
-	SDB_PUSHDOWN_LITERAL_DATA_TYPE_UNSIGNED_INTEGER,														// unsigned int		(user)
-	SDB_PUSHDOWN_LITERAL_DATA_TYPE_SIGNED_INTEGER,															// signed   int		(user)
-	SDB_PUSHDOWN_LITERAL_DATA_TYPE_BIT,																		// bit				(user)
-	SDB_PUSHDOWN_LITERAL_DATA_TYPE_FLOAT,																	// float			(user)
-	SDB_PUSHDOWN_LITERAL_DATA_TYPE_DECIMAL,																	// binary decimal	(user)
-	SDB_PUSHDOWN_LITERAL_DATA_TYPE_DATETIME,																// datetime			(user)
-	SDB_PUSHDOWN_LITERAL_DATA_TYPE_TIMESTAMP,																// timestamp		(user)
-	SDB_PUSHDOWN_LITERAL_DATA_TYPE_CHAR,																	// char				(user)
-	SDB_PUSHDOWN_LITERAL_DATA_TYPE_VARCHAR,																	// varchar			(user)
-																											// ^^^^^^^^^^^^^^^^^^^^^^^ ADD NEW DATA TYPES HERE
+#endif //_SDB_COMMON_H
 
-	// Synonyms need to be at the end
-	SDB_PUSHDOWN_LITERAL_DATA_TYPE_DATE				=	SDB_PUSHDOWN_LITERAL_DATA_TYPE_UNSIGNED_INTEGER,	// date				(user)
-	SDB_PUSHDOWN_LITERAL_DATA_TYPE_TIME				=	SDB_PUSHDOWN_LITERAL_DATA_TYPE_SIGNED_INTEGER,		// time				(user)
-	SDB_PUSHDOWN_LITERAL_DATA_TYPE_YEAR				=	SDB_PUSHDOWN_LITERAL_DATA_TYPE_UNSIGNED_INTEGER,	// year				(user)
-																											// ^^^^^^^^^^^^^^^^^^^^^^^ ADD NEW SYONONYMS HERE
-};
+//Condition string offsets
+#define LOGIC_OP_OFFSET_CHILDCOUNT 0
+#define LOGIC_OP_OFFSET_OPERATION (LOGIC_OP_OFFSET_CHILDCOUNT + 1)
+#define LOGIC_OP_NODE_LENGTH (LOGIC_OP_OFFSET_OPERATION + 1)
 
-// Pushdown condition string offsets
-#define LOGIC_OP_OFFSET_CHILDCOUNT	0
-#define LOGIC_OP_OFFSET_OPERATION	(LOGIC_OP_OFFSET_CHILDCOUNT + 2)
-#define LOGIC_OP_OFFSET_IS_NEGATED	(LOGIC_OP_OFFSET_OPERATION + 1)
-#define LOGIC_OP_NODE_LENGTH		(LOGIC_OP_OFFSET_IS_NEGATED + 1)
+#define COMP_OP_OFFSET_CHILDCOUNT 0
+#define COMP_OP_OFFSET_OPERATION (COMP_OP_OFFSET_CHILDCOUNT + 1)
+#define COMP_OP_NODE_LENGTH (COMP_OP_OFFSET_OPERATION + 1)
 
-#define COMP_OP_OFFSET_CHILDCOUNT	0
-#define COMP_OP_OFFSET_OPERATION	(COMP_OP_OFFSET_CHILDCOUNT + 2)
-#define COMP_OP_OFFSET_IS_NEGATED	(COMP_OP_OFFSET_OPERATION + 1)
-#define COMP_OP_NODE_LENGTH			(COMP_OP_OFFSET_IS_NEGATED + 1)
-
-#define ROW_DATA_OFFSET_CHILDCOUNT	0
-#define ROW_DATA_OFFSET_ROW_TYPE	(ROW_DATA_OFFSET_CHILDCOUNT + 2)
+#define ROW_DATA_OFFSET_CHILDCOUNT 0
+#define ROW_DATA_OFFSET_ROW_TYPE (ROW_DATA_OFFSET_CHILDCOUNT + 1)
 #define ROW_DATA_OFFSET_DATABASE_NUMBER (ROW_DATA_OFFSET_ROW_TYPE + 1)
 #define ROW_DATA_OFFSET_TABLE_NUMBER (ROW_DATA_OFFSET_DATABASE_NUMBER + 2)
-#define ROW_DATA_OFFSET_COLUMN_NUMBER (ROW_DATA_OFFSET_TABLE_NUMBER + 2)
-#define ROW_DATA_OFFSET_COLUMN_OFFSET (ROW_DATA_OFFSET_COLUMN_NUMBER + 2)
+#define ROW_DATA_OFFSET_COLUMN_OFFSET (ROW_DATA_OFFSET_TABLE_NUMBER + 2)
 #define ROW_DATA_OFFSET_COLUMN_SIZE (ROW_DATA_OFFSET_COLUMN_OFFSET + 2)
 #define ROW_DATA_NODE_LENGTH (ROW_DATA_OFFSET_COLUMN_SIZE + 2)
 
 #define USER_DATA_OFFSET_CHILDCOUNT 0
-#define USER_DATA_OFFSET_DATA_TYPE	(USER_DATA_OFFSET_CHILDCOUNT + 2)
-#define USER_DATA_OFFSET_DATA_SIZE	(USER_DATA_OFFSET_DATA_TYPE + 1)
-#define USER_DATA_OFFSET_USER_DATA	(USER_DATA_OFFSET_DATA_SIZE + 1)
-
-#define COND_RESULT_OFFSET_VALUE	0																	// Same offset as child count in other node types
-#define COND_RESULT_OFFSET_TYPE		(COND_RESULT_OFFSET_VALUE + 2)
-#define COND_RESULT_NODE_LENGTH		(COND_RESULT_OFFSET_TYPE + 1)
-
-enum condBool	{ CONDFALSE, CONDTRUE, CONDMAYBE };
-
-#endif //_SDB_COMMON_H
+#define USER_DATA_OFFSET_DATA_TYPE (USER_DATA_OFFSET_CHILDCOUNT + 1)
+#define USER_DATA_OFFSET_DATA_SIZE (USER_DATA_OFFSET_DATA_TYPE + 1)
+#define USER_DATA_OFFSET_USER_DATA (USER_DATA_OFFSET_DATA_SIZE + 1)

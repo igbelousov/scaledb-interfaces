@@ -36,11 +36,9 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 #ifdef _MARIA_DB
 #include <mysql_version.h>
 #include "mysql_foreign_key.h"
-#include "sql_time.h"
 #if MYSQL_VERSION_ID>=50515
 #include "sql_class.h"
 #include "sql_array.h"
-#include "sql_select.h"
 #elif MYSQL_VERSION_ID>50100
 #include "mysql_priv.h"
 #include <mysql/plugin.h>
@@ -54,10 +52,9 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 #include "mysql_txn.h"
 #include "mysql_priv.h"           // this must come second
 #include "mysql/plugin.h"         // this must come third
+
 #endif //_MARIA_DB
-
 #define _ENABLE_READ_RANGE
-
 #define DEFAULT_CHAIN_LENGTH 512
 #define ERRORNUM_INTERFACE_MYSQL 10000
 #define MYSQL_INDEX_NUMBER_SIZE 4
@@ -77,34 +74,14 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 #define MYSQL_TEMP_TABLE_PREFIX2 "#sql2"	// the second temp table used in ALTER TABLE statement
 #define MYSQL_ENGINE_EQUAL_SCALEDB " engine=scaledb "	// 16 bytes
 #define SDB_MAX_CONDITION_EXPRESSIONS_TO_PARSE 10
-#define SCALEDB_DB_TYPE 39
 /*
 Version for file format.
 1 - Initial Version. That is, the version when the metafile was introduced.
 */
-#if MYSQL_VERSION_ID >= 100011  //only enable for montys branch
-#define USE_GROUP_BY_HANDLER
-#define SDB_USE_MDB_MRR			// Use MariaDB multi-range-read functionality to determine whether the WHERE clause includes conditions on indexed columns
-								// Disable this to instead parse the WHERE condition string to try and determine this
-#endif
-
-
-/* bits in group by header info_flags */
-#define GH_ORDER_BY             1       /* query contain an order by*/
-#define ANALYTIC_FLAG_ASCENDING 2
-//#define GH_ANOTHER_FLAG                 2       /* add as required */
-
 
 #define SCALEDB_VERSION 1
-#if defined(MARIADB_BASE_VERSION) && MYSQL_VERSION_ID >= 100000
-#define _MARIA_SDB_10
-#define _USE_NEW_MARIADB_DISCOVERY
-int store_create_info(THD *thd, TABLE_LIST *table_list, String *packet,
-                      HA_CREATE_INFO *create_info_arg, bool show_database,
-                      bool create_or_replace);
-bool parse_sql(THD *thd, Parser_state *parser_state,
-               Object_creation_ctx *creation_ctx, bool do_pfs_digest=false);
-#endif
+
+//#define ENABLE_RANGE_COUNT		// TODO: Ron, a temporary test 
 
 #ifdef USE_PRAGMA_INTERFACE
 #pragma interface			/* gcc class implementation */
@@ -131,122 +108,11 @@ typedef struct SimpleCondContext{
 #define SDB_EXTRA_DUP_IGNORE	1   // ignore any duplicates
 #define SDB_EXTRA_DUP_REPLACE	2   // replace any duplicates
 
-#define _HIDDEN_DIMENSION_TABLE
-
-
-//added because we can't include pushdown_condition.h
-#pragma pack(1)  //prevent padding of struct
-struct GroupByAnalyticsHeader
-{
-	uint   cardinality;
-	char   thread_count;
-	uint   limit;
-	uint   info_flag;
-	ushort numberColumns;
-	ushort numberInOrderby;
-};
-struct GroupByAnalyticsBody
-{
-		ushort field_offset;		//the position in table row
-		ushort columnNumber;     //this is the column number
-		ushort length;			//the length of data 
-		ushort function;			//this is operation to perform
-		ushort function_length;  //the column type	
-		char  type;				//the column type
-		char orderByPosition;
-};
-
-
-struct SelectAnalyticsHeader
-{
-	ushort numberColumns;
-};
-
-struct SelectAnalyticsBody1
-{
-		ushort numberFields;		//the number of fields in column	
-		ushort function;	
-};
-
-	
-struct SelectAnalyticsBody2
-{
-		ushort field_offset;			//the position in table row
-		ushort columnNumber;                 //this is the column number
-		ushort length;			//the length of data 
-		ushort precision;
-		ushort scale;
-		ushort function;			//this is operation to perform
-		ushort result_precision;
-		ushort result_scale;
-		char type;				//the column type
-		char orderByPosition;
-};
-#pragma pack()
-#define PROCESS_COUNT_DISTINCT
-#ifdef  PROCESS_COUNT_DISTINCT
-enum function_type { FT_NONE=0, FT_MIN=1, FT_MAX=2, FT_SUM=3, FT_COUNT=4, FT_AVG=5, FT_COUNT_DISTINCT=6, FT_STREAM_COUNT=7, FT_DATE=8, FT_HOUR=9, FT_MAX_CONCAT=10, FT_CHAR=11, FT_UNSUPPORTED=12 };
-#else
-enum function_type { FT_NONE=0, FT_MIN=1, FT_MAX=2, FT_SUM=3, FT_COUNT=4, FT_AVG=5, FT_STREAM_COUNT=6, FT_DATE=7, FT_HOUR=8, FT_MAX_CONCAT=9, FT_CHAR=10, FT_UNSUPPORTED=11 };
-#endif
-
-struct rangebounds
-{
-	public:
-	void clear()
-	{
-		startRange=0;
-		endRange=0;
-		startSet=false;
-		endSet=false;
-		valid=false;
-	}
-	int startRange;
-	int endRange;
-	bool startSet;
-	bool endSet;
-	bool valid;
-	bool isValid()
-	{
-		if(valid ==true && startSet==true && endSet==true && endRange>0)
-		{
-			return true;
-		}
-		else
-		{
-			return false;
-		}
-	}
-};
-
 class ha_scaledb: public handler
 {
 public:
 	ha_scaledb(handlerton *hton, TABLE_SHARE *table_arg);
 	~ha_scaledb();
-
-
-	void setEndRange(key_range* end)
-	{
-
-		if(SDBIsStreamingTable(sdbDbId_, sdbTableNumber_))
-		{
-			 in_range_check_pushed_down = TRUE;
-		}
-		else
-		{
-			in_range_check_pushed_down = FALSE;
-		}
-
-		range_key_part= table->key_info[active_index].key_part;
-		eq_range=false;
-		if(end)
-		{
-			end_key_ = end;		
-			eq_range_ = eq_range;
-		}
-		  set_end_range(end);
-	}
 
 
 	// convert mysql many types of fields to SDB 4 types of fields: numeric, char, varchar, blob
@@ -271,11 +137,6 @@ public:
 	{
 		//get the ast erro for this user
 		lastSDBErrorLength=SDBGetErrorMessage(userid, lastSDBError, 1000);	
-	}
-	TABLE* temp_table;
-	void setTempTable(TABLE* t)
-	{
-		temp_table=t;
 	}
 	unsigned short getLastSDBError(char* buff,int buffLength)
 	{
@@ -309,30 +170,17 @@ public:
 			HA_CAN_GEOMETRY |
 			HA_TABLE_SCAN_ON_INDEX |
 			HA_FILE_BASED |
-//			HA_STATS_RECORDS_IS_EXACT |
-			HA_HAS_RECORDS 
-
+			HA_HAS_RECORDS |
+			HA_STATS_RECORDS_IS_EXACT
 			);
 	}
 
-	ulong index_flags(uint idx, uint part, bool all_parts) const
-	{
-		ulong flags;
-		
-		if(sdbDbId_!=0 && sdbTableNumber_ !=0 && SDBIsStreamingTable(sdbDbId_, sdbTableNumber_))
-		{
-			// to skip MIN/MAX  optimization we remove the order from streaming tables 
-			// As a result we also remove loose-index-scans but since on streaming tables we apply exact keys only - it does not matter at this point
-			// we keep the range reads and the point reads
-			flags = (HA_READ_NEXT |  HA_READ_RANGE | HA_KEYREAD_ONLY);
-		}
-		else
-		{
-			// for general case: support all operations 
-			flags = (HA_READ_NEXT | HA_READ_PREV | HA_READ_ORDER | HA_READ_RANGE | HA_KEYREAD_ONLY);
-		}
-		
-		return flags ;
+	ulong index_flags(uint idx, uint part, bool all_parts) const {
+		return (HA_READ_NEXT |
+			HA_READ_PREV |
+			HA_READ_ORDER |
+			HA_READ_RANGE |
+			HA_KEYREAD_ONLY);
 	}
 
 	void print_header_thread_info(const char *msg);
@@ -351,6 +199,13 @@ public:
 
 	int open(const char *name, int mode, uint test_if_locked); // required
 	int close(void); // required
+	
+        void get_auto_increment(
+        ulonglong	offset,              /*!< in: table autoinc offset */
+        ulonglong	increment,           /*!< in: table autoinc increment */
+        ulonglong	nb_desired_values,   /*!< in: number of values reqd */
+        ulonglong	*first_value,        /*!< out: the autoinc value */
+        ulonglong	*nb_reserved_values); /*!< out: count of reserved values */
 
 	// This method inserts a record with row data pointed by buf 
 	int write_row(unsigned char* buf);
@@ -358,12 +213,9 @@ public:
 	int update_row(const unsigned char* old_row, unsigned char* new_row);
 	// This method deletes a record with row data pointed by buf 
 	int delete_row(const unsigned char* buf);
-
-    int iSstreamingRangeDeleteSupported(unsigned long long* delete_key, unsigned short* columnNumber, bool* delete_all);
-
 	// This method deletes all records of a ScaleDB table.
 	int delete_all_rows();
-	bool getRangeKeys( unsigned char * string, unsigned int length, key_range* key_start, key_range* key_end );
+
 	// MySQL calls this method for every table it is going to use at the beginning of every statement.
 	// Thus, if a table is touched for the first time, it implicitly starts a transaction.
 	// Note that a table handler is used exclusively by a single user thread after the first ::external_lock call
@@ -407,18 +259,14 @@ public:
 	//This method reads the first key in the range - we use it to mark a preftech op
 	virtual int read_range_first(const key_range *start_key, const key_range *end_key,bool eq_range, bool sorted) {
 		// if valid then mark the range query op for prefetch 
-		if(SDBIsStreamingTable(sdbDbId_, sdbTableNumber_))
-		{
-			 in_range_check_pushed_down = TRUE;
-		}
-		else
-		{
-			in_range_check_pushed_down = FALSE;
-		}
-		// save the end_key for prefetch setting
-		if ( end_key ) {			
-			end_key_ = end_key;		
-			eq_range_ = eq_range;
+		if ( end_key ) {
+			// if not equal range on uniuqe index - i.e. result set is one 
+			// we assume index_init set active_index before read_range_first is called 
+			if ( active_index != 0 || !eq_range) 
+			{
+				use_prefetch_ =true;
+				end_key_ = end_key;			
+			}
 		}
 		// now call the original function which in its turn will call index_read 
 		// in index_read we will prepare the range query for prefetch  
@@ -443,16 +291,10 @@ public:
 	int index_read_idx(uchar* buf, uint keynr, const uchar* key, uint key_len, enum ha_rkey_function find_flag);
 	// The following functions works like index_read, but it find the last row with the current key value or prefix.
 	int index_read_last(uchar * buf, const uchar * key, uint key_len);
-	
 	// this is to compile for mariadb interface
-	double keyread_time(uint index, uint ranges, ha_rows rows) 
-	{
-		return read_time(index,ranges,rows);
-	}
+	double keyread_time(uint index, uint ranges, ha_rows rows);
 
-	void generateAnalyticsString();
-	int getOrderByPosition(const char* col_name, const char* col_alias, function_type ft);
-	int numberInOrderBy();
+
 	int index_init(uint index, bool sorted); // this method is optional
 	int index_end(); // this method is optional
 
@@ -465,9 +307,7 @@ public:
 	int rnd_pos(uchar* buf, uchar* pos); ///< required
 	// This method is called after each call to rnd_next() if the data needs to be ordered.
 	void position(const uchar *record); ///< required
-#ifdef _MARIA_SDB_10
-	static int scaledb_discover_table(handlerton *hton, THD* thd, TABLE_SHARE *share);
-#endif
+
 	int scaledb_discover(handlerton *hton, THD* thd, const char *db,
 		const char *name,
 		uchar **frmblob,
@@ -478,36 +318,9 @@ public:
 
 	int info(uint); ///< required
 
-	int addOrderByToList(char* buf, int& pos, SelectAnalyticsHeader* sah,unsigned short dbid, unsigned short tabid);
-	bool isInSelectList(SelectAnalyticsHeader* sah, char*  col_name, unsigned short dbid, unsigned short tabid, function_type ft);
-
 	// create a user table.
-	int parseTableOptions(HA_CREATE_INFO *create_info, bool& streamTable, bool& dimensionTable, unsigned long long&  dimensionSize, char** rangekey);
-
-	char getCASType(enum_field_types mysql_type, int flags);
-	int getSDBSize(enum_field_types fieldType, Field* field) ;
-	int generateGroupConditionString(int cardinality, int thread_count, char* buf, int max_buf, unsigned short dbid, unsigned short tabid, char* select_buf);
-	int generateSelectConditionString(char* buf, int max_buf, unsigned short dbid, unsigned short tabid);
-	int generateOrderByConditionString(char* buf, int max_buf, unsigned short dbid, unsigned short tabid, char* select_buf);
-	bool checkFunc(char* name, char* my_function);
-	bool checkNestedFunc(char* name, char* my_func1, char* my_func2);
-	Item* NestedFunc(enum_field_types& type, function_type& function, int& no_fields, char* name, Item::Type ft, Item *item, Item_sum* sum, char* buf, int& pos, SelectAnalyticsBody1* sab1,unsigned short dbid, unsigned short tabid, bool& contains_analytics_function );
-#ifdef  PROCESS_COUNT_DISTINCT
-	Item* multiArgumentFunction(function_type funct, enum_field_types& type, function_type& function, int& no_fields, char* name, Item::Type ft, Item *item, Item_sum* sum, char* buf, int& pos, SelectAnalyticsBody1* sab1,unsigned short dbid, unsigned short tabid, bool& contains_analytics_function );
-#endif // PROCESS_COUNT_DISTINCT
-	bool addSelectField(char* buf, int& pos, unsigned short dbid, unsigned short tabid, enum_field_types type, short function,  const char* col_name, bool& contains_analytics, short precison, short scale, int flag, short result_precision, short result_scale , char* alias_name);
-#ifdef _HIDDEN_DIMENSION_TABLE // UTIL FUNC DECLERATION  
-	char * getDimensionTableName(char* table_name, char* col_name, char* dimension_table_name);
-	char * getDimensionTablePKName(char* table_name, char* col_name, char* dimension_pk_name);
-
-	int create_dimension_table(TABLE *fact_table_arg, char * col_name, unsigned char col_type, unsigned short col_size, unsigned long long  hash_size,  unsigned short ddlFlag, unsigned short tableCharSet, SdbDynamicArray * fkInfoArray );
-	int create_multi_dimension_table(TABLE *fact_table_arg, char* index_name, KEY_PART_INFO* hash_key, int key_parts, unsigned long long  hash_size,  unsigned short ddlFlag, unsigned short tableCharSet, SdbDynamicArray * fkInfoArray );
-	int getSDBType(Field* pField, enum_field_types fieldType,  unsigned char& sdbFieldType, unsigned short& sdbMaxDataLength,  unsigned short& sdbFieldSize, unsigned short&  dataLength) ;
-
-#endif // _HIDDEN_DIMENSION_TABLE 
-	int init_from_sql_statement_string(TABLE *table_arg, THD *thd, bool write, const char *sql, size_t sql_length);
 	int create(const char* name, TABLE *form, HA_CREATE_INFO *create_info); ///< required
-	int add_columns_to_table(THD* thd, TABLE *table_arg, unsigned short ddlFlag,unsigned short tableCharSet, char* rangekey, int& number_streaming_keys, int& number_streaming_attributes,bool dimensionTable,SdbDynamicArray * fkInfoArray);
+	int add_columns_to_table(THD* thd, TABLE *table_arg, unsigned short ddlFlag,unsigned short tableCharSet, char* rangekey);
 	int add_indexes_to_table(THD* thd, TABLE *table_arg, char* tblName, unsigned short ddlFlag,
 		SdbDynamicArray* fkInfoArray, char* pCreateTableStmt);
 	int create_fks(THD* thd, TABLE *table_arg, char* tblName, SdbDynamicArray* fkInfoArray, char* pCreateTableStmt,
@@ -558,10 +371,14 @@ public:
 
 	// copy scaledb row data to mysql row buffers in an efficient way using pre build template 
 	static void initMysqlTypes();
-	void buildRowTemplate(TABLE* tab, unsigned char * buff,bool checkAutoIncField=true);
+	void buildRowTemplate(unsigned char * buff,bool checkAutoIncField=true);
 
 	// create keyTemplate - return false if no key is found 
 	bool  buildKeyTemplate(SDBKeyTemplate & t,unsigned char* key, unsigned int key_len,unsigned int index,bool & isFullKey, bool & allNulls);
+
+
+	// Get the latest auto_increment value from the engine
+	uint64 get_scaledb_autoincrement_value();
 
 	// Update HA_CREATE_INFO object.  Used in SHOW CREATE TABLE
 	void update_create_info(HA_CREATE_INFO* create_info);
@@ -580,65 +397,21 @@ public:
 
 	// disable keys -- only myisam supports this.  Other storage engines do NOT support it.
 	// need to comment out this method as it does not work well with foreign key constraint
-//	int disable_indexes(uint mode);
+	//int disable_indexes(uint mode);
 
 	// enable keys -- only myisam supports this.  Other storage engines do NOT support it.
 	// need to comment out this method as it does not work well with foreign key constraint
 	//int enable_indexes(uint mode);
-
-#ifdef	SDB_PUSH_DOWN
-	// Engine condition pushdown
-	const COND* cond_push(const COND *cond);
-	void cond_pop();
-	void saveConditionToString(const COND *cond);
-	bool conditionTreeToString(const COND *cond, unsigned char **start, unsigned int *place, unsigned short* DBID, unsigned short* TABID );
-	bool conditionMultEqToString( unsigned char** pCondString, unsigned int* pCondOffset, const COND* pCondMultEq );
-	bool conditionFieldToString( unsigned char** pCondString, unsigned int* pItemOffset, Item* pFieldItem,
-								 Item* pComperandItem, unsigned int* pComperandDataOffset,
-								 unsigned short countArgs, int typeFunc, unsigned short* pDbId, unsigned short* pTableId );
-	bool conditionConstantToString( unsigned char** pCondString, unsigned int* pItemOffset, Item* pConstItem, Item* pComperandItem, unsigned int* pComperandDataOffset );
-
-	inline int checkConditionStringSize( unsigned char** pCondString, unsigned int* pStringLength, unsigned int additionalLength )
-	{
-		//	Check whether the condition string buffer needs to be extended
-		unsigned int	allocatedLength	= condStringAllocatedLength_;
-
-		if ( allocatedLength			< ( *pStringLength + additionalLength ) )
-		{
-			// Condition string buffer needs to be extended
-			allocatedLength			   += condStringExtensionLength_;
-
-			if ( allocatedLength		> condStringMaxLength_ )
-			{
-				// Cannot extend further
-				return -1;
-			}
-
-			unsigned char*	temp		= ( unsigned char* ) realloc( *pCondString, allocatedLength );
-
-			if ( !temp )
-			{
-				// realloc failed
-				return -1;
-			}
-
-			*pCondString				= temp;
-			condStringAllocatedLength_	= allocatedLength;
-
-			// Extension succeeded
-			return 1;
-		}
-
-		// Extension was unnecessary
-		return 0;
-	}
-#endif
+#ifdef SDB_PUSH_DOWN
+   const COND* cond_push(const COND *cond); 
+   void cond_pop();
+   void saveConditionToString(const COND *cond);
+   bool conditionTreeToString(const COND *cond, unsigned char **start, unsigned short *place, unsigned short * allocatedLength);
+#endif 
 
 	// gives number of rows which are about to be inserted 
 	// 0 rows means a lot 
 	void start_bulk_insert(ha_rows rows);
-	virtual void start_bulk_insert(ha_rows rows, uint flags);
-
 
 	// This method is used both inside and outside of a user transaction.  
 	// inside - It opens a user database and saves value in sdbDbId_.
@@ -677,228 +450,7 @@ public:
 		return retVal;
 	}
 
-	inline bool	isIndexedQuery()
-	{
-		return isIndexedQuery_;
-	}
-	inline void setIsIndexedQuery()
-	{
-		 isIndexedQuery_=true;
-	}
-	inline void	setQueryEvaluation()
-	{
-		isQueryEvaluation_			= true;
-	}
-
-	inline void	setRangeKeyEvaluation()
-	{
-		setQueryEvaluation();
-		isRangeKeyEvaluation_		= true;
-	}
-
-	inline void	clearQueryEvaluation()
-	{
-		ha_index_or_rnd_end();
-
-		isQueryEvaluation_			=
-		isRangeKeyEvaluation_		= false;
-	}
-
-	inline void	clearRangeKeyEvaluation()
-	{
-		clearQueryEvaluation();
-	}
-
-	inline bool	isQueryEvaluation()
-	{
-		return isQueryEvaluation_;
-	}
-
-	inline bool isRangeKeyEvaluation()
-	{
-		return ( ( isQueryEvaluation_ && isRangeKeyEvaluation_ ) ? true : false );
-	}
-
-	inline bool isRangeDesignator()
-	{
-		if ( sdbDbId() && sdbTableNumber() && sdbDesignatorId() )
-		{
-			return ( ( sdbDesignatorId() == ( unsigned short ) SDBGetRangeKey( sdbDbId(), sdbTableNumber() ) ) ? true : false );
-		}
-
-		return false;
-	}
-
-	inline bool hasRangeDesignator()
-	{
-		if ( sdbDbId() && sdbTableNumber() )
-		{
-			return ( SDBGetRangeKey( sdbDbId(), sdbTableNumber() ) ? true : false );
-		}
-
-		return false;
-	}
-
-	inline bool isRangeRead( TABLE_LIST* pTableList )
-	{
-		// Evaluate the indexes referenced in the WHERE clause to determine whether the query can be executed as a streaming range read
-		JOIN_TAB*		pJoinTab;
-		TABLE*			pTable;
-		char*			pszDbName;
-		unsigned short	dbId;
-		unsigned short	tableId;
-
-		if ( !pTableList )
-		{
-			return false;
-		}
-
-		if ( !( pTable				= pTableList->table ) )
-		{
-			return false;
-		}
-
-		pszDbName					= SDBUtilDuplicateString( pTable->s->db.str );
-		dbId						= SDBGetDatabaseNumberByName( sdbUserId_, pszDbName );
-
-		FREE_MEMORY( pszDbName );
-
-		tableId						= SDBGetTableNumberByName( sdbUserId_, dbId, pTable->s->table_name.str );
-
-		if ( !tableId )
-		{
-			return false;
-		}
-
-		if ( !( SDBIsStreamingTable( dbId, tableId ) ) )
-		{
-			return false;
-		}
-
-		if ( !( pJoinTab				= pTable->reginfo.join_tab ) )
-		{
-			return false;
-		}
-
-		if ( !( pJoinTab->read_first_record ) )
-		{
-			return false;
-		}
-
-		setRangeKeyEvaluation();
-
-		int				rc				= ( *pJoinTab->read_first_record )( pJoinTab );
-		bool			isOk			= ( rc ? false : true );
-
-		clearRangeKeyEvaluation();
-
-		return isOk;
-	}
-
-	inline void clearIndexKeyRanges()
-	{
-		clearIndexKeyRangeStart();
-		clearIndexKeyRangeEnd();
-	}
-
-	inline void clearIndexKeyRange( key_range* pKeyRange )
-	{
-		pKeyRange->key					= NULL;
-		pKeyRange->flag					= ( ha_rkey_function ) 0;
-		pKeyRange->length				= 0;
-		pKeyRange->keypart_map			= 0;
-	}
-
-	inline void clearIndexKeyRangeStart()
-	{
-		indexKeyRangeStart_.key			= NULL;
-		indexKeyRangeStart_.flag		= ( ha_rkey_function ) 0;
-		indexKeyRangeStart_.length		= 0;
-		indexKeyRangeStart_.keypart_map	= 0;
-	}
-
-	inline void clearIndexKeyRangeEnd()
-	{
-		indexKeyRangeEnd_.key			= NULL;
-		indexKeyRangeEnd_.flag			= ( ha_rkey_function ) 0;
-		indexKeyRangeEnd_.length		= 0;
-		indexKeyRangeEnd_.keypart_map	= 0;
-	}
-
-	inline void copyIndexKeyRangeStart( const uchar* key, uint key_len, ha_rkey_function flag, key_part_map keypart_map )
-	{
-		if ( key_len )
-		{
-			indexKeyRangeStart_.key		= indexKeyRangeStartData_;
-			memcpy( ( char* )( indexKeyRangeStart_.key ), ( char* ) key, key_len );
-		}
-		else
-		{
-			indexKeyRangeStart_.key		= NULL;
-		}
-		indexKeyRangeStart_.flag		= flag;
-		indexKeyRangeStart_.length		= key_len;
-		indexKeyRangeStart_.keypart_map	= keypart_map;
-	}
-
-	inline void copyIndexKeyRangeStart( const key_range* pKeyRange )
-	{
-		indexKeyRangeStart_.key			= indexKeyRangeStartData_;
-		memcpy( ( char* )( indexKeyRangeStart_.key ), ( char* )( pKeyRange->key ), pKeyRange->length );
-		indexKeyRangeStart_.flag		= pKeyRange->flag;
-		indexKeyRangeStart_.length		= pKeyRange->length;
-		indexKeyRangeStart_.keypart_map	= pKeyRange->keypart_map;
-	}
-
-	inline void copyIndexKeyRangeEnd( const uchar* key, uint key_len, ha_rkey_function flag, key_part_map keypart_map )
-	{
-		if ( key_len )
-		{
-			indexKeyRangeEnd_.key		= indexKeyRangeEndData_;
-			memcpy( ( char* )( indexKeyRangeEnd_.key ), ( char* ) key, key_len );
-		}
-		else
-		{
-			indexKeyRangeEnd_.key		= NULL;
-		}
-		indexKeyRangeEnd_.flag			= ( ha_rkey_function ) flag;
-		indexKeyRangeEnd_.length		= key_len;
-		indexKeyRangeEnd_.keypart_map	= keypart_map;
-	}
-
-	inline void copyIndexKeyRangeEnd( const key_range* pKeyRange )
-	{
-		indexKeyRangeEnd_.key			= indexKeyRangeEndData_;
-		memcpy( ( char* )( indexKeyRangeEnd_.key ), ( char* )( pKeyRange->key ), pKeyRange->length );
-		indexKeyRangeEnd_.flag			= pKeyRange->flag;
-		indexKeyRangeEnd_.length		= pKeyRange->length;
-		indexKeyRangeEnd_.keypart_map	= pKeyRange->keypart_map;
-	}
-
-	unsigned short analyticsStringLength() {return analyticsStringLength_;}
-	unsigned short analyticsSelectLength() {return analyticsSelectLength_;}
-	void resetAnalyticsString()
-	{
-		analyticsSelectLength_=0;
-		analyticsStringLength_=0;
-	}
-	unsigned char* conditionString() {return conditionString_;}
-	unsigned int   conditionStringLength() {return conditionStringLength_;}
-
-	unsigned short sdbDbId() {return sdbDbId_; }
-	unsigned short sdbUserId() {return sdbUserId_; }
-	unsigned short sdbTableNumber() {return sdbTableNumber_;}
-	unsigned short sdbDesignatorId()	{ return ( unsigned short )( sdbDesignatorId_ & DESIGNATOR_NUMBER_MASK ); }
-
-	unsigned char	indexKeyRangeStartData_[ 8 ];
-	unsigned char	indexKeyRangeEndData_[ 8 ];
-	key_range		indexKeyRangeStart_;
-	key_range		indexKeyRangeEnd_;
-	bool forceAnalytics_;
-	rangebounds rangeBounds;
-	void setConditionStringLength(unsigned int len) { conditionStringLength_=len;}
 private:
-
 	THR_LOCK_DATA lock; ///< MySQL lock
 
 	SCALEDB_SHARE *share; ///< Shared lock info
@@ -919,19 +471,12 @@ private:
 	bool readJustKey_; // extra information if to read keys only ( index traversal is enough )
 	unsigned int readDebugCounter_; // counter for debugging
 	unsigned int deleteRowCount_;
-	bool isStreamingDelete_;
 	int sqlCommand_; // MySQL command defined in ::external_lock.  Use this variable to avoid repetitively calling
 	// thd_sql_command() function.  Example: DATA LOAD command
 	unsigned short sdbCommandType_; // ScaleDB command type which specifies command to be passed to ScaleDB engine
 	bool starLookupTraversal_; // if true our traversal includes the where clauses and we need to set it only once 
 	bool releaseLocksAfterRead_; // flag to indicate whether we hold the locks after reading data
 	bool virtualTableFlag_; // flag to show if it is a virtual table
-
-	// True if the current query is executed using an index traversal
-	bool	isIndexedQuery_;
-	bool	isQueryEvaluation_;
-	bool	isRangeKeyEvaluation_;
-
 	static const int SdbKeySearchDirectionTranslation[13][2];
 	static const enum ha_rkey_function SdbKeySearchDirectionFirstLastTranslation[13];
 	// store info about how to convert SDB row internal info to MySQL or other packed row foramt  
@@ -943,22 +488,10 @@ private:
 	SdbConditionStack  * conditions_;
 	
 	// Condition Push Variables
-	unsigned char* conditionString_;
-	unsigned int   conditionStringLength_;
-	unsigned int   condStringAllocatedLength_;
-	unsigned int   condStringExtensionLength_;
-	unsigned int   condStringMaxLength_;
-	bool           pushCondition_;
-
-
-
-	// Analytics Push Variables
-	unsigned char* analyticsString_;
-	unsigned short analyticsStringLength_;
-	unsigned short analyticsSelectLength_;
-	unsigned short analyticsStringAllocatedLength_;
-	unsigned short analyticsStringExtensionLength_;
-	unsigned short analyticsStringMaxLength_;
+	unsigned char * conditionString_;
+	unsigned short conditionStringLength_;
+	unsigned short condStringAllocatedLength_;
+	bool pushCondition;
 
 	// number of rows in bulk insert 
 	ha_rows numOfBulkInsertRows_;
@@ -966,8 +499,8 @@ private:
 
 	SdbDynamicArray * sortedVarcharsFieldsForInsert_; // temp buffer to sort 
 
-	const key_range *end_key_; // end of range prefetch op 
-	bool  eq_range_;            // if the rage is equal    
+	bool  use_prefetch_; // mark a range prefetch op 
+	const key_range *end_key_; //  // end of range prefetch op 
 
 	unsigned short getOffsetByDesignator(unsigned short designator);
 	// This method packs a MySQL row into ScaleDB engine row buffer 
@@ -975,7 +508,7 @@ private:
 	// rowBuf1 points to old MySQL row buffer and rowBuf2 points to new MySQL row buffer.
 	// For all other cases, these 2 row buffers point to same row buffer
 	unsigned short placeMysqlRowInEngineBuffer(unsigned char* rowBuf1, unsigned char* rowBuf2, unsigned short groupType, bool updateBlobContent,
-		bool checkAutoIncField);
+		bool checkAutoIncField, bool &needToUpdateAutoIncrement);
 
 	// This method unpacks a single ScaleDB column and saves it into MySQL buffer
 	void placeEngineFieldInMysqlBuffer(unsigned char *destBuff, char *ptrToField, Field* pField);
@@ -996,12 +529,6 @@ private:
 	void debugHaSdb(char *funcName, const char* name1, const char* name2, TABLE *table_arg);
 #endif
 
-	// evaluate table scan - used for analytic queries
-	int evaluateTableScan();
-
-	// evaluate index key - used for analytic queries
-	int evaluateIndexKey( const uchar* key, uint key_len, enum ha_rkey_function find_flag );
-
 	// prepare index query
 	int prepareIndexKeyQuery(const uchar* key, uint key_len, enum ha_rkey_function find_flag);
 
@@ -1010,6 +537,9 @@ private:
 
 	// prepare query manager using any avaiable key
 	void prepareFirstKeyQueryManager();
+
+	// prepare query manager 
+	void prepareIndexOrSequentialQueryManager();
 
 	// output handle and MySQL user thread id
 	void outputHandleAndThd();
@@ -1024,6 +554,10 @@ private:
 	// out of date and must be refreshed (using discover)
 	int checkFrmCurrent(const char *path, uint userId, uint dbId, uint tableId );
 
+
+
+
+
 	static unsigned short tableCharSet(HA_CREATE_INFO *create_info) 
 	{
 		unsigned short tableCharSet = SDB_CHARSET_UNDEFINED;
@@ -1037,658 +571,6 @@ private:
 		}
 		return tableCharSet;
 	}
-
-	inline static void convertTimeStringToTimeConstant( THD* pMysqlThd, Item* pItem, const char* pString, unsigned int stringSize,
-														int temporalDataType, unsigned char* pDataType, unsigned char* pDataValue )
-	{
-		MYSQL_TIME		myTime;
-		long long		timestamp;
-		ulonglong		datetime;
-		unsigned int	uiError;
-
-		// Convert the time string to a time value and then to a timestamp
-		if ( convertStringToTime( pMysqlThd, pString, stringSize, temporalDataType, &myTime ) )
-		{
-			switch ( temporalDataType )
-			{
-				case MYSQL_TYPE_TIMESTAMP:
-				{
-					// Convert the time value  to a timestamp
-					timestamp		= TIME_to_timestamp( pMysqlThd, &myTime, &uiError );
-
-					if ( uiError )
-					{
-						// Timestamp conversion error
-						timestamp	= 0;
-					}
-
-					*pDataType		= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_TIMESTAMP );
-					*( ( long long* ) pDataValue ) = timestamp;
-					break;
-				}
-
-				case MYSQL_TYPE_TIME:
-				{
-					// Convert the time value to its stored format
-					timestamp		= convertTimeStructToTimeType( &myTime );
-
-					*pDataType		= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_TIME );
-					*( ( long long* ) pDataValue ) = timestamp;
-					break;
-				}
-
-				case MYSQL_TYPE_DATETIME:
-				{
-					datetime		= TIME_to_ulonglong_datetime( &myTime );
-
-					*pDataType		= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_DATETIME );
-					*( ( ulonglong* ) pDataValue ) = datetime;
-					break;
-				}
-
-				case MYSQL_TYPE_DATE:
-				case MYSQL_TYPE_NEWDATE:
-				{
-					datetime		= convertTimeStructToNewdateType( &myTime );
-
-					*pDataType		= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_DATE );
-					*( ( ulonglong* ) pDataValue ) = datetime;
-					break;
-				}
-
-				case MYSQL_TYPE_YEAR:
-				{
-					datetime		= convertYearToStoredFormat( ( ( Item_int* ) pItem )->val_int() );
-
-					*pDataType		= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_YEAR );
-					*( ( ulonglong* ) pDataValue ) = datetime;
-					break;
-				}
-			}
-		}
-		else
-		{
-			// Time conversion error
-			switch ( temporalDataType )
-			{
-				case MYSQL_TYPE_TIMESTAMP:
-					*pDataType		= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_TIMESTAMP );
-					*( ( long long* ) pDataValue ) = 0;
-					break;
-				case MYSQL_TYPE_TIME:
-					*pDataType		= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_TIME );
-					*( ( long long* ) pDataValue ) = 0;
-					break;
-				case MYSQL_TYPE_DATETIME:
-					*pDataType		= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_DATETIME );
-					*( ( ulonglong* ) pDataValue ) = 0;
-					break;
-				default:
-					*pDataType		= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_UNSIGNED_INTEGER );
-					*( ( ulonglong* ) pDataValue ) = 0;
-					break;
-			}
-		}
-	}
-
-	inline static bool convertStringToTime( THD* pMysqlThd, const char* pString, unsigned int stringSize, int temporalDataType, MYSQL_TIME* pMyTime )
-	{
-#ifdef	SDB_INTERNAL_CONVERT_STRING_TO_DATETIME
-		if ( pMysqlThd->charset()->state		& MY_CS_NONASCII )
-		{
-			// Only Ascii is supported for now
-			return false;
-		}
-
-		char*				pChar				= ( char* ) pString;
-		unsigned int*		pTime				= &( pMyTime->year );
-		unsigned int*		pHour				= &( pMyTime->hour );
-		int					unit				= 0;
-		unsigned int		place				= 0;
-		bool				hasAmPm				= false;
-
-		memset( pMyTime, 0, sizeof( MYSQL_TIME ) );
-
-		// Skip leading whitespace
-		while ( ( *pChar == ' ' )			   || ( *pChar == '\t' ) )
-		{
-			pChar++;
-		}
-
-		while ( place							< stringSize )
-		{
-			if ( ( *pChar >= '0' ) && ( *pChar <= '9' ) )
-			{
-				*pTime						   *= 10;
-				*pTime						   += ( *pChar - '0' );
-				pChar++;
-				place++;
-			}
-			else 
-			{
-				// Not a digit: a delimiter
-				if ( ( unit == 0 )			   && ( place == 2 ) )
-				{
-					if ( *pTime				   >= 70 )
-					{
-						*pTime				   += 1900;
-					}
-					else
-					{
-						*pTime				   += 2000;
-					}
-				}
-
-				if ( ( unit >= 3 )			   && ( unit <= 5 ) )
-				{
-					// Skip whitespace
-					do
-					{
-						pChar++;
-						place++;
-					}
-					while ( ( *pChar == ' ' )  || ( *pChar == '\t' ) );
-
-					// Check for AM/PM
-					if ( ( *( pChar + 1 )	   == 'M' ) || ( *( pChar + 1 ) == 'm' ) )
-					{
-						switch ( *pChar )
-						{
-							case 'A':
-							case 'a':
-								if ( *pHour	   >= 12 )
-								{
-									( *pHour ) -= 12;
-								}
-								hasAmPm			= true;
-								break;
-							case 'P':
-							case 'p':
-								if ( *pHour		< 12 )
-								{
-									( *pHour ) += 12;
-								}
-								hasAmPm			= true;
-						}
-					}
-
-					pChar--;
-					place--;
-				}
-
-				if ( hasAmPm )
-				{
-					break;
-				}
-
-				if ( unit					   >= 5 )
-				{
-					// Disregard fractional seconds
-					break;
-				}
-
-				// Move to the next time unit
-				switch ( unit )
-				{
-					case 0:
-						pTime					= &( pMyTime->month );
-						break;
-					case 1:
-						pTime					= &( pMyTime->day );
-						break;
-					case 2:
-						pTime					= &( pMyTime->hour );
-						break;
-					case 3:
-						pTime					= &( pMyTime->minute );
-						break;
-					case 4:
-						pTime					= &( pMyTime->second );
-						break;
-				}
-
-				unit++;
-
-				pChar++;
-				place++;
-
-				// Skip whitespace
-				while ( ( *pChar == ' ' )	   || ( *pChar == '\t' ) )
-				{
-					pChar++;
-					place++;
-				}
-			}
-		}
-
-		if ( pMyTime->year						< 1900 )
-		{
-			return false;
-		}
-
-		if ( !( pMyTime->month ) )
-		{
-			pMyTime->month						= 1;
-		}
-		
-		if ( !( pMyTime->day ) )
-		{
-			pMyTime->day						= 1;
-		}
-
-		pMyTime->time_type						= MYSQL_TIMESTAMP_DATETIME;
-#else
-		unsigned long long	flags;
-#ifdef	_MARIA_SDB_10
-		bool				returnValue;
-		MYSQL_TIME_STATUS	timeStatus;
-#else	// MARIADB 5
-		timestamp_type		returnValue;
-		int					timeStatus;
-#endif	// MARIADB 5
-
-		switch ( temporalDataType )
-		{
-			case MYSQL_TYPE_YEAR:
-				// No conversion necessary: MySQL has already converted the string year value to an int year value
-				return true;
-			case MYSQL_TYPE_TIME:
-				flags							= pMysqlThd->variables.sql_mode & ( MODE_NO_ZERO_DATE | MODE_NO_ZERO_IN_DATE | MODE_INVALID_DATES );
-				break;
-			case MYSQL_TYPE_DATE:
-			case MYSQL_TYPE_NEWDATE:
-#ifdef	_MARIA_SDB_10
-				flags							= sql_mode_for_dates( pMysqlThd );
-#else	// MARIADB 5
-				flags							= TIME_FUZZY_DATE | ( pMysqlThd->variables.sql_mode & ( MODE_NO_ZERO_DATE | MODE_INVALID_DATES ) ) | MODE_NO_ZERO_IN_DATE;
-#endif	// MARIADB 5
-				break;
-			default:
-				flags							= ( pMysqlThd->variables.sql_mode & MODE_NO_ZERO_DATE ) | MODE_NO_ZERO_IN_DATE;
-		}
-
-		// Convert the time string to a time value
-		switch ( temporalDataType )
-		{
-			case MYSQL_TYPE_YEAR:
-				memset( pMyTime, 0, sizeof( MYSQL_TIME ) );
-				pMyTime->time_type				= MYSQL_TIMESTAMP_NONE;
-				break;
-			case MYSQL_TYPE_TIME:
-				returnValue						= str_to_time    ( pMysqlThd->charset(), pString, stringSize, pMyTime, flags, &timeStatus );
-				break;
-			default:
-				returnValue						= str_to_datetime( pMysqlThd->charset(), pString, stringSize, pMyTime, flags, &timeStatus );
-		}
-
-#ifdef	_MARIA_SDB_10
-		if ( returnValue )
-#else	// MARIADB 5
-		if ( timeStatus )
-#endif	// MARIADB 5
-		{
-			// Time conversion error
-			return false;
-		}
-#endif
-
-		return true;
-	}
-	
-#ifdef	_MARIA_SDB_10
-	inline static bool getTimeCachedResult( THD* pMysqlThd, Item* pItem, int temporalDataType, MYSQL_TIME* pMyTime )
-	{
-		return ( ( Item_cache_temporal* ) pItem )->get_date_result( pMyTime, sql_mode_for_dates( pMysqlThd ) );
-	}
-#endif	// MARIADB 10
-
-	inline static void convertTimeToType( THD* pMysqlThd, Item* pItem, int temporalDataType, MYSQL_TIME* pMyTime, unsigned char* pDataType, unsigned char* pDataValue )
-	{
-		long long			timestamp;
-		ulonglong			datetime;
-		unsigned int		uiError;
-
-		switch ( temporalDataType )
-		{
-			case MYSQL_TYPE_TIMESTAMP:
-			{
-				// Convert the time value  to a timestamp
-				timestamp						= TIME_to_timestamp( pMysqlThd, pMyTime, &uiError );
-				if ( uiError )
-				{
-					// Timestamp conversion error
-					timestamp					= 0;
-				}
-
-				*pDataType						= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_TIMESTAMP );
-				*( ( long long* ) pDataValue )	= timestamp;
-				break;
-			}
-			case MYSQL_TYPE_TIME:
-			{
-				// Convert the time value to its stored format
-				timestamp						= convertTimeStructToTimeType( pMyTime );
-
-				*pDataType						= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_TIME );
-				*( ( long long* ) pDataValue )	= timestamp;
-				break;
-			}
-
-			case MYSQL_TYPE_DATETIME:
-			{
-				datetime						= TIME_to_ulonglong_datetime( pMyTime );
-
-				*pDataType						= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_DATETIME );
-				*( ( ulonglong* ) pDataValue )	= datetime;
-				break;
-			}
-
-			case MYSQL_TYPE_DATE:
-			case MYSQL_TYPE_NEWDATE:
-			{
-				datetime						= convertTimeStructToNewdateType( pMyTime );
-
-				*pDataType						= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_DATE );
-				*( ( ulonglong* ) pDataValue )	= datetime;
-				break;
-			}
-
-			case MYSQL_TYPE_YEAR:
-			{
-				datetime						= convertYearToStoredFormat( ( ( Item_int* ) pItem )->val_int() );
-
-				*pDataType						= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_YEAR );
-				*( ( ulonglong* ) pDataValue )	= datetime;
-				break;
-			}
-		}
-	}
-
-	inline static unsigned int convertTimeStructToDateType( MYSQL_TIME* pMyTime )
-	{
-		// Store the date value in 4 bytes
-		unsigned int		dateValue			= ( pMyTime->year * 10000L ) + ( pMyTime->month * 100 ) + pMyTime->day;
-
-		return dateValue;
-	}
-
-	inline static unsigned int convertTimeStructToNewdateType( MYSQL_TIME* pMyTime )
-	{
-		// Store the date value in 3 bytes
-		unsigned int		dateValue			= ( pMyTime->year * 16 * 32 ) + ( pMyTime->month * 32 ) + pMyTime->day;
-
-		return dateValue;
-	}
-
-	inline static unsigned char convertYearToStoredFormat( long long year )
-	{
-		// Store number of years since 1900
-		return ( unsigned char )( year - 1900 );
-	}
-
-	inline static int convertTimeStructToTimeType( MYSQL_TIME* pMyTime )
-	{
-		// Store the time value in 3 bytes
-		int					timeValue			= ( ( ( pMyTime->day *24L ) + pMyTime->hour ) * 10000L ) + ( ( pMyTime->minute * 100 ) + pMyTime->second );
-
-		if ( pMyTime->neg )
-		{
-			timeValue							= -( timeValue );
-		}
-
-		return timeValue;
-	}
-
-	inline static void handleTimeConversionError( int temporalDataType, unsigned char* pDataType, unsigned char* pDataValue )
-	{
-		switch ( temporalDataType )
-		{
-			case MYSQL_TYPE_TIMESTAMP:
-				*pDataType						= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_TIMESTAMP );
-				*( ( long long* ) pDataValue )	= 0;
-				break;
-			case MYSQL_TYPE_TIME:
-				*pDataType						= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_TIME );
-				*( ( long long* ) pDataValue )	= 0;
-				break;
-			case MYSQL_TYPE_DATETIME:
-				*pDataType						= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_DATETIME );
-				*( ( ulonglong* ) pDataValue )	= 0;
-				break;
-			default:
-				*pDataType						= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_UNSIGNED_INTEGER );
-				*( ( ulonglong* ) pDataValue )	= 0;
-				break;
-		}
-	}
 };
-
-#ifdef USE_GROUP_BY_HANDLER
-//disable the following to enable index lookup
-//#define _USE_GROUPBY_SEQUENTIAL
-
-class ha_scaledb_groupby: public group_by_handler
-{
-private:
-	TABLE*					temp_table_;
-	TABLE_LIST*				my_table_list_;
-	JOIN_TAB*				pJoinTab_;
-	bool					first_;
-
-public:
-
-	ha_scaledb_groupby(THD *thd_arg,
-					   SELECT_LEX *select_lex_arg,
-					   List<Item> *fields_arg,
-					   TABLE_LIST *table_list_arg, ORDER *group_by_arg,
-					   ORDER *order_by_arg, Item *where_arg,
-					   Item *having_arg, handlerton *ht_arg)
-		: group_by_handler(thd_arg, select_lex_arg,  fields_arg, table_list_arg, group_by_arg,   order_by_arg, where_arg,having_arg,ht_arg)
-	{
-		first_			= true;
-		my_table_list_	= table_list_arg;
-
-		temp_table_		= NULL;
-
-		pJoinTab_		= my_table_list_->table->reginfo.join_tab;
-	}
-	
-	virtual ~ha_scaledb_groupby() {}
-
-	/*
-	  Store pointer to temporary table and objects modified to point to
-	  the temporary table.  This will happen during the optimize phase.
-
-	  We provide new 'having' and 'order_by' elements here. The differ from the
-	  original ones in that these are modified to point to fields in the
-	  temporary table 'table'.
-
-	  Return 1 if the storage handler cannot handle the GROUP BY after all,
-	  in which case we have to give an error to the end user for the query.
-	  This is becasue we can't revert back the old having and order_by elements.
-	  */
-
-	virtual bool init(TABLE *temporary_table, Item *having_arg,
-					  ORDER *order_by_arg)
-	{
-		group_by_handler::init(temporary_table,having_arg,order_by_arg);
-		temp_table_	= temporary_table;
-		return 0;
-	}
-
-	/*
-	  Functions to scan data. All these returns 0 if ok, error code in case
-	  of error
-	*/
-
-	/*
-	  Initialize group_by scan, prepare for next_row().
-	  If this is a sub query with group by, this can be called many times for
-	  a query.
-	*/
-	virtual int init_scan()
-	{
-#ifdef _USE_GROUPBY_SEQUENTIAL
-		ha_scaledb* scaledb= (ha_scaledb*) (my_table_list_->table->file);
-		int rc=scaledb->rnd_init(true);
-		return rc;
-#else
-		ha_scaledb* scaledb= (ha_scaledb*) (my_table_list_->table->file);
-	
-
-		if ( scaledb->isIndexedQuery() )
-		{
-
-			int range_index=SDBGetRangeKey(scaledb->sdbDbId(), scaledb->sdbTableNumber()) ;
-			int index_id=SDBGetIndexExternalId(scaledb->sdbDbId(), range_index);
-			int rc=scaledb->ha_index_init(index_id, 1);  //need to patch in the range key
-			return rc;
-		}
-		else
-		{
-			int rc=scaledb->rnd_init(true);
-			return rc;
-		}
-
-
-#endif
-	}
-
-	/*
-	  Return next group by result in table->record[0].
-	  Return 0 if row found, HA_ERR_END_OF_FILE if last row and other error
-	  number in case of fatal error.
-	*/
-	virtual int next_row()
-	{
-		ha_scaledb* scaledb= (ha_scaledb*) (my_table_list_->table->file);
-
-#ifdef _USE_GROUPBY_SEQUENTIAL
-		scaledb->setTempTable( temp_table_ );
-		int rc			= scaledb->rnd_next( temp_table_->record[ 0 ]);
-		return rc;
-#else
-		scaledb->setTempTable( temp_table_ );
-		int rc	= 0;
-	
-#ifdef	SDB_USE_MDB_MRR
-		if ( scaledb->isIndexedQuery() )
-		{
-			if ( first_ )
-			{
-				if ( scaledb->indexKeyRangeEnd_.key )
-				{
-					scaledb->setEndRange( &( scaledb->indexKeyRangeEnd_ ) );
-				}
-			
-				rc		= scaledb->index_read( temp_table_->record[ 0 ],
-											   ( const uchar* ) scaledb->indexKeyRangeStart_.key, scaledb->indexKeyRangeStart_.length, scaledb->indexKeyRangeStart_.flag );
-				first_	= false;
-			}
-			else
-			{
-				rc		= scaledb->index_next( temp_table_->record[ 0 ] );
-			}
-		}
-		else
-		{
-			if ( first_ )
-			{
-				first_	= false;
-			}
-
-			rc			= scaledb->rnd_next( temp_table_->record[ 0 ] );
-		}
-#else
-		if ( scaledb->isIndexedQuery() )
-		{
-			if ( first_ )
-			{
-				if ( scaledb->indexKeyRangeEnd_.key )
-				{
-					scaledb->setEndRange( &( scaledb->indexKeyRangeEnd_ ) );
-				}
-
-				rc			= scaledb->index_read( temp_table_->record[ 0 ],
-					( const uchar* ) scaledb->indexKeyRangeStart_.key, scaledb->indexKeyRangeStart_.length, scaledb->indexKeyRangeStart_.flag );
-				first_		= false;
-			}
-			else
-			{
-				rc			= scaledb->index_next( temp_table_->record[ 0 ] );
-			}
-		}
-		else
-		{
-			if ( first_ )
-			{
-				first_	= false;
-			}
-
-			rc			= scaledb->rnd_next( temp_table_->record[ 0 ] );
-		}
-
-#endif
-	
-		return rc;
-#endif
-	}
-
-	/* End scanning */
-	virtual int end_scan()
-	{
-		ha_scaledb* scaledb= (ha_scaledb*) (my_table_list_->table->file);
-
-#ifdef _USE_GROUPBY_SEQUENTIAL
-		int rc=scaledb->rnd_end();
-#else
-		int rc=0;
-		if (scaledb->isIndexedQuery() )
-		{
-			rc=scaledb->index_end();
-		}
-		else
-		{
-			rc=scaledb->rnd_end();
-		}
-#endif
-		
-		scaledb->setTempTable(NULL);
-		return rc;
-	}
-
-	/* Information for optimizer (used by EXPLAIN) */
-	virtual int info(uint flag, ha_statistics *stats)
-	{
-	 return 0;
-	}
-
-
-	void print_error(int error, myf errflag)
-	{
-
-		ha_scaledb* scaledb= (ha_scaledb*) (my_table_list_->table->file);
-
-		if(error==HA_ERR_GENERIC)
-		{
-			scaledb->lastSDBErrorLength=0; //make sure only latest error gets returned
-
-			String str;
-			bool temporary= scaledb->get_error_message(error, &str);
-			if (!str.is_empty())
-			{
-				const char* engine= scaledb->table_type();
-				my_error(ER_GET_ERRMSG, errflag, error, str.c_ptr(),engine);
-				return;
-			}
-		}
-		//fall through to defautlt handler
-
-		my_error(ER_GET_ERRNO, MYF(0), error, hton_name(ht)->str);
-	}
-	};
-
-
-#endif //USE_GROUP_BY_HANDLER
 
 #endif	// SDB_MYSQL
