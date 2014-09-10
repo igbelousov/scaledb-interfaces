@@ -56,28 +56,35 @@
 #else
 	#define stricmp	strcasecmp
 #endif
+
 #include <sys/stat.h>
 #include <ctype.h>
 #include "create_options.h"
 #define SOURCE_HA_SCALEDB 63
-
+#define _STREAMING_RANGE_DELETE
 #define SDB_DEBUG_LITE
 #define _MICHAELS_NEW_DDL_DISCOVERY
 //#define _MICHAELS_NEW_DDL_DISCOVERY2
+//#define SDB_SUPPORT_HANDLER_SOCKET_WRITE 
+#define HANDLER_SOCKET_WRITE_BULK 0x4000
+#define HANDLER_SOCKET_WRITE_MASK (HANDLER_SOCKET_WRITE_BULK -1)
+#define HANDLER_SOCKET_WRITE_INSERTS_COUNT(globalInsertsCounter) (globalInsertsCounter & HANDLER_SOCKET_WRITE_MASK)
+#define IS_HANDLER_SOCKET_WRITE_THREAD(thd) ( strcmp(thd->db,"handlersocket") == 0 )
 
+handlerton *scaledb_hton=NULL;
 unsigned char ha_scaledb::mysqlInterfaceDebugLevel_ = 0; // defines the debug level for Interface component
 SDBFieldType  ha_scaledb::mysqlToSdbType_[MYSQL_TYPE_GEOMETRY+1] = {NO_TYPE, };
 
-
+extern int unsigned statisticsLevel_;
 const char* mysql_key_flag_strings[] = { "HA_READ_KEY_EXACT", "HA_READ_KEY_OR_NEXT",
         "HA_READ_KEY_OR_PREV", "HA_READ_AFTER_KEY", "HA_READ_BEFORE_KEY", "HA_READ_PREFIX",
         "HA_READ_PREFIX_LAST", "HA_READ_PREFIX_LAST_OR_PREV" };
 
 
-// Translate MySQL direction to SDB direction X match_prefix 
-// SDB direction - controls the direction od the search 
-// Match_prefix  - marks if we limmit the search to the give key prefix - 
-//     it goes with EQUAL and PREFIX modes. 
+// Translate MySQL direction to SDB direction X match_prefix
+// SDB direction - controls the direction of the search
+// Match_prefix  - marks if we limit the search to the given key prefix -
+//     it goes with EQUAL and PREFIX modes.
 const int ha_scaledb::SdbKeySearchDirectionTranslation[13][2] = {
   {SDB_KEY_SEARCH_DIRECTION_EQ,        1},  //HA_READ_KEY_EXACT,              /* Find first record else error */
   {SDB_KEY_SEARCH_DIRECTION_GE,        0},  //HA_READ_KEY_OR_NEXT,            /* Record or next record */
@@ -94,7 +101,7 @@ const int ha_scaledb::SdbKeySearchDirectionTranslation[13][2] = {
   {SDB_KEY_SEARCH_DIRECTION_NONE,      0}   //HA_READ_MBR_EQUAL
 };	
 
-// Translate MySQL direction to MySQL direction which SDB USE 
+// Translate MySQL direction to MySQL direction which SDB USES
 // needed when no key is given and we replace the search "> SMALLEST" to ">= EVERYTHING" and  "< BIGGEST" to "<= EVERYTHING" and 
 const enum ha_rkey_function ha_scaledb::SdbKeySearchDirectionFirstLastTranslation[13] =  {
 	HA_READ_KEY_EXACT,            
@@ -117,7 +124,6 @@ const enum ha_rkey_function ha_scaledb::SdbKeySearchDirectionFirstLastTranslatio
 #ifdef SDB_DEBUG
 	static int externalLockCounter_ = 0;
 #endif
-
 
 
 static char* scaledb_config_file = NULL;
@@ -150,6 +156,24 @@ static int scaledb_savepoint_release(handlerton *hton, THD* thd, void *sv);
 
 static void start_new_stmt_trx(THD *thd, handlerton *hton);
 static void rollback_last_stmt_trx(THD *thd, handlerton *hton);
+
+#ifdef _MARIA_SDB_10
+static int scaledb_discover_table(handlerton *hton, THD* thd, TABLE_SHARE *share);
+static int scaledb_discover_table_existence(handlerton *hton, const char *db, const char *table_name);
+static int scaledb_discover_table_names(handlerton *hton, LEX_STRING *db, MY_DIR *dirp, handlerton::discovered_list *result);
+
+
+#ifdef USE_GROUP_BY_HANDLER
+
+static group_by_handler *scaledb_create_group_by_handler(THD *thd,
+									   SELECT_LEX *select_lex,
+                                       List<Item> *fields,
+                                       TABLE_LIST *table_list, ORDER *group_by,
+                                       ORDER *order_by, Item *where,
+                                       Item *having );
+#endif //USE_GROUP_BY_HANDLER
+
+#endif
 static int scaledb_discover(handlerton *hton, THD* thd, const char *db,
 	                   const char *name,
 	                   uchar **frmblob,
@@ -267,8 +291,20 @@ int readpar(const char *name, uchar **frmdata, size_t *len)
   // Read whole frm file
   error= 3;
   read_data= 0;                                 // Nothing to free
+
+#ifdef  _MARIA_SDB_10
+   error= 3;
+  if (!(read_data= (uchar*)my_malloc(read_len, MYF(MY_WME))))
+    goto err;
+  if (mysql_file_read(file, read_data, read_len, MYF(MY_NABP)))
+  {
+    my_free(read_data);
+    goto err;
+  }
+#else
   if (read_string(file, &read_data, read_len))
     goto err;
+#endif
 
   // Setup return data
   *frmdata= (uchar*) read_data;
@@ -285,6 +321,107 @@ int readpar(const char *name, uchar **frmdata, size_t *len)
 ////////////////////////////////////////////////////////
 
 #define _REPLACE_METALOCK_WOTH_SESSION_LOCK
+
+/*
+Current session lock behaviour
+
+Close:
+has an exclusive lock on table (tid), releasing at end
+
+
+Open:
+has a shared metalock on table 0 [from a new user uid], then will take a shared lock on (tid), releasing table 0 shared lock [for uid]
+
+create:
+will have an exclusive lock on table 0, which will get released after create
+
+rename_table:
+delete_table:
+takes and exclusive table lock on table 0, then releases at end
+
+ 
+external_lock:
+has a shared lock on table (tid) 
+*/
+//this lock can be used to protect the opentable.
+//just take the lock then noone can mess with the metadata while you open the table
+//the lock will get released when function completes
+//which will be after you have taken your shared lock.
+class SessionSharedMetaLock
+{
+	unsigned int userIdforOpen;
+	unsigned int dbid;
+public:
+	SessionSharedMetaLock(unsigned short db)
+	{
+		userIdforOpen = SDBGetNewUserId();
+		dbid=db;
+	}
+	SessionSharedMetaLock()
+	{
+		userIdforOpen = SDBGetNewUserId();
+		dbid=0;
+	}
+
+	void set(unsigned short db)
+	{
+		dbid=db;
+	}
+	~SessionSharedMetaLock()
+	{
+		SDBCommit(userIdforOpen,true);
+		SDBRemoveUserById(userIdforOpen);
+	}
+
+	bool lock()
+	{
+				if (!ha_scaledb::lockDML(userIdforOpen, dbid, 0, 0))
+				{
+					return false;
+				}
+				else
+				{
+					return true;
+				}		
+	}
+
+};
+
+
+class SessionExclusiveMetaLock
+{
+	unsigned int userIdforOpen;
+	unsigned int dbid;
+public:
+	SessionExclusiveMetaLock(unsigned short db, unsigned int uid)
+	{
+		userIdforOpen = uid;
+		dbid=db;
+	}
+
+
+	~SessionExclusiveMetaLock()
+	{
+		SDBCommit(userIdforOpen,true);
+	}
+
+	bool lock()
+	{
+
+
+				if (!ha_scaledb::lockDDL(userIdforOpen, dbid, 0, 0))
+				{
+					return false;
+				}
+				else
+				{
+					return true;
+				}
+	
+	}
+
+};
+
 
 // convert ScaleDB error code to MySQL error code.
 // This method can be used as a centralized breakpoint to see what error code returned to MySQL.
@@ -375,7 +512,11 @@ static int convertToMysqlErrorCode(int scaledbErrorCode) {
 			mysqlErrorCode = HA_ERR_NO_SUCH_TABLE;
 			break;
 		}
-
+	case QUERY_ABORTED:
+		{
+			mysqlErrorCode = HA_ERR_GENERIC;
+			break;
+		}
 		
 	default:
 		mysqlErrorCode = HA_ERR_GENERIC;
@@ -387,7 +528,7 @@ static int convertToMysqlErrorCode(int scaledbErrorCode) {
 
 
 // -----------------------------------------------------------------------------------------
-//Start a large batch of insert rows
+//Start a large batch of insert rows - API FOR MARIA DB 5.5 and down 
 //SYNOPSIS
 //  start_bulk_insert()
 //  rows                  Number of rows to insert
@@ -398,8 +539,20 @@ static int convertToMysqlErrorCode(int scaledbErrorCode) {
 // -----------------------------------------------------------------------------------------
 void ha_scaledb::start_bulk_insert(ha_rows rows)
 {
-  numOfBulkInsertRows_ = rows;
-  numOfInsertedRows_ = 0;
+	numOfBulkInsertRows_ = rows;
+	numOfInsertedRows_ = 0;
+}
+
+// -----------------------------------------------------------------------------------------
+//Start a large batch of insert rows  - API FOR MARIA DB 10 and up
+//SYNOPSIS
+//  start_bulk_insert()
+//  rows                  Number of rows to insert
+//  flag                  mode of batch 
+// -----------------------------------------------------------------------------------------
+void ha_scaledb::start_bulk_insert(ha_rows rows, uint flags) 
+{
+	start_bulk_insert(rows);
 }
 
 // -----------------------------------------------------------------------------------------
@@ -567,7 +720,9 @@ ha_create_table_option scaledb_table_option_list[]=
   */
   HA_TOPTION_BOOL("STREAMING", boolparam, 1),
   HA_TOPTION_BOOL("DIMENSION", boolparam, 1),
+  HA_TOPTION_NUMBER("DIMENSION_SIZE", ullparam, UINT_MAX32, 0, UINT_MAX32, 1),
   HA_TOPTION_STRING("RANGEKEY", strparam),
+  HA_TOPTION_BOOL("STREAMINGDIMENSION", boolparam, 1),
   HA_TOPTION_END
 };
 
@@ -581,10 +736,25 @@ ha_create_table_option scaledb_field_option_list[]=
   */
   HA_TOPTION_BOOL("DUMMY", boolparam, 1),
   HA_TOPTION_BOOL("MAPPED", boolparam, 0),
+  HA_TOPTION_BOOL("INSERT_DIMENSION", boolparam, 0),
+  HA_TOPTION_BOOL("STREAMING_KEY", boolparam, 0),
+  HA_TOPTION_BOOL("HASHKEY", boolparam, 0),
+  HA_TOPTION_NUMBER("HASHSIZE", ullparam, UINT_MAX32, 0, UINT_MAX32, 1),
   HA_TOPTION_END
 };
 
+ha_create_table_option scaledb_index_option_list[]=
+{
 
+  /*
+    one boolean option, the valid values are YES/NO, ON/OFF, 1/0.
+    The default is 1, that is true, yes, on.
+  */
+
+  HA_TOPTION_BOOL("HASHKEY", boolparam, 0),
+  HA_TOPTION_NUMBER("HASHSIZE", ullparam, UINT_MAX32, 0, UINT_MAX32, 1),
+  HA_TOPTION_END
+};
 
 /* This function is executed only once when MySQL server process comes up.
  */
@@ -592,7 +762,6 @@ ha_create_table_option scaledb_field_option_list[]=
 static int scaledb_init_func(void *p) {
 	DBUG_ENTER("scaledb_init_func");
 
-	handlerton* scaledb_hton;
 
 	scaledb_hton = (handlerton *) p;
 	void(pthread_mutex_init(&scaledb_mutex, MY_MUTEX_INIT_FAST));
@@ -600,7 +769,7 @@ static int scaledb_init_func(void *p) {
 	        (hash_get_key) scaledb_get_key, 0, 0);
 
 	scaledb_hton->state = SHOW_OPTION_YES;
-	scaledb_hton->db_type = (enum legacy_db_type) ((int) (DB_TYPE_FIRST_DYNAMIC - 1));
+	scaledb_hton->db_type = (legacy_db_type)SCALEDB_DB_TYPE;
 
 	// The following are pointers to functions.
 	// Once we uncommet a pointer, then we need to implement the corresponding function.
@@ -613,11 +782,28 @@ static int scaledb_init_func(void *p) {
 
 	scaledb_hton->commit = scaledb_commit;
 	scaledb_hton->rollback = scaledb_rollback;
-	scaledb_hton->discover = scaledb_discover;
-	scaledb_hton->table_exists_in_engine=scaledb_table_exists;
+#ifdef  _MARIA_SDB_10
+#ifdef _USE_NEW_MARIADB_DISCOVERY
+	scaledb_hton->discover_table = scaledb_discover_table;
+#ifdef USE_GROUP_BY_HANDLER
+	scaledb_hton->create_group_by=scaledb_create_group_by_handler;
+#endif //USE_GROUP_BY_HANDLER
+// the discover_table_existence is disabled because it is redundant (and the current implmentation is unreliable). For scaledb really need to do a full discovery to be sure that
+// the tableexists or not. The table_existence is designed for a fast way of determining if a table exists, however i would have to map it to the
+// discover table function to be sure it wrks, because of this i will leave it disabled and force mariadb to do a full disscovery.
+//	scaledb_hton->discover_table_existence= scaledb_discover_table_existence;
 
+// this function is currently not enabled, and i need to enable to support accurate SHOW TABLES call. 
+//	scaledb_hton->discover_table_names= scaledb_discover_table_names;
+#endif
+	
+#else
+		scaledb_hton->discover = scaledb_discover;
+		scaledb_hton->table_exists_in_engine=scaledb_table_exists;
+#endif
 	scaledb_hton->table_options= scaledb_table_option_list;
-        scaledb_hton->field_options= scaledb_field_option_list;
+    scaledb_hton->field_options= scaledb_field_option_list;
+	scaledb_hton->index_options=scaledb_index_option_list;
 	scaledb_hton->create = scaledb_create_handler;
 	scaledb_hton->drop_database = scaledb_drop_database;
 
@@ -736,8 +922,143 @@ static int scaledb_table_exists(handlerton *hton, THD* thd, const char *db,
 	SDBRemoveUserById(userIdforOpen);
 	DBUG_RETURN(errorCode);
 }
+#ifdef  _MARIA_SDB_10
+#ifdef USE_GROUP_BY_HANDLER
+
+COND *make_cond_for_table( THD *thd, Item *cond, table_map table,
+						   table_map used_table,
+						   int join_tab_idx_arg,
+						   bool exclude_expensive_cond,
+						   bool retain_ref_cond );
+
+static group_by_handler *scaledb_create_group_by_handler(THD *thd,
+									   SELECT_LEX *select_lex,
+                                       List<Item> *fields,
+                                       TABLE_LIST *table_list, ORDER *group_by,
+                                       ORDER *order_by, Item *pWhere,
+                                       Item *having)
+{
+	char*		pszDisableSdbHandler	= SDBUtilFindComment( thd->query(), "disable_sdb_group_by_handler" );
+
+	if ( pszDisableSdbHandler )
+	{
+		// Do not create a ScaleDB group-by handler
+		return NULL;
+	}
+
+	ha_scaledb* scaledb					= (ha_scaledb*) (table_list->table->file);
+
+	scaledb->forceAnalytics_=false; //need to reset, because might have got set in the external lock
+
+	const COND* cond					= scaledb->cond_push( pWhere );
+
+#ifdef	SDB_USE_MDB_MRR
+	// Evaluate the indexes referenced in the WHERE clause to determine whether the query can be executed as a streaming range read
+	bool		isRangeReadQuery		= scaledb->isRangeRead( table_list );
+#else
+	// Parse the WHERE condition string to try and determine whether the query can be executed as a streaming range read
+	bool		isRangeReadQuery		= scaledb->getRangeKeys( scaledb->conditionString(), scaledb->conditionStringLength(),
+																 &scaledb->indexKeyRangeStart_, &scaledb->indexKeyRangeEnd_ );
+	if(isRangeReadQuery) {scaledb->setIsIndexedQuery();}
+#endif
+	scaledb->generateAnalyticsString();
+//if no where clause then still support streaming table because will do a sequential scan over implicit range index
+// so if cond==NULL, then use groupby handler
+
+	//if there is a where cluase but was not extracted then cant use analytics (because storage node wont be able to filter results)
+	bool condition_ok=true;
+	if(cond!=NULL && scaledb->conditionStringLength()==0) {condition_ok=false;}
 
 
+	bool		doCreateGroupByHandler	= ( (isRangeReadQuery || cond==NULL)  && (scaledb->analyticsStringLength() && scaledb->analyticsSelectLength() && condition_ok)  );
+
+	if ( !doCreateGroupByHandler )
+	{
+		scaledb->resetAnalyticsString();
+		// Do not create the group-by handler if the analytics string is empty, or there are no aggregate functions (analyticsSelectLength)
+		return NULL;
+	}
+	else
+	{
+		//disable the code for now.
+
+		if(scaledb->rangeBounds.isValid() && cond!=NULL)
+		{
+			//the condition tree contains a valid range key range and these range keys are going to get used, so replace the range key part
+			//of the where cluase. All i am going to do is move teh part of string after the range forward to fill the gap.
+			//note* also need to add  a boolean true
+			char bool_true_node[3];
+			*((short*)&bool_true_node[0])= CONDTRUE;
+			bool_true_node[2]=SDB_PUSHDOWN_OPERATOR_COND_RESULT;
+			int bool_node_length=sizeof(bool_true_node);
+
+			int len_to_remove= scaledb->rangeBounds.endRange - scaledb->rangeBounds.startRange;
+			unsigned char* start_pos = scaledb->rangeBounds.startRange + scaledb->conditionString();
+			unsigned char* end_pos   = scaledb->rangeBounds.endRange + scaledb->conditionString();
+			int move_len= scaledb->conditionStringLength()-scaledb->rangeBounds.endRange;
+
+			if( (scaledb->conditionStringLength() - len_to_remove) == 0 || (scaledb->conditionStringLength() - len_to_remove) == LOGIC_OP_NODE_LENGTH)
+			{
+				//if after removing the range tree the condition string is empty then dont add the bool node, just send an empty condition tree
+				scaledb->setConditionStringLength(0);
+			}
+			else
+			{
+				scaledb->setConditionStringLength(scaledb->conditionStringLength() - len_to_remove + bool_node_length );
+				//note to avoid array overflow the bool node length must be < the condition string pulled out (which is currently the case since the bool node is only 3 chars and
+				//the range will be much longer than that).
+				memcpy(start_pos+bool_node_length,end_pos,move_len); //move the remainder of condition first, leave space for bool node
+				*( unsigned short* )(start_pos+bool_node_length)=2; //set children to 2 (the boolean node and the other node )
+				memcpy(start_pos,bool_true_node,bool_node_length); //insert the boolean node	
+
+			}
+			
+		}
+
+		
+		scaledb->forceAnalytics_=false;
+		return new  ha_scaledb_groupby( thd, select_lex, fields, table_list, group_by, order_by, pWhere, having, scaledb_hton );
+	}
+}
+#endif // USE_GROUP_BY_HANDLER
+
+static int scaledb_discover_table_existence(handlerton *hton, const char *db,
+                                    const char *table_name)
+{
+  int ret= scaledb_table_exists(hton, NULL, db, table_name);
+  if(ret==HA_ERR_TABLE_EXIST) {return 1;}
+  else {return 0;}
+
+}
+
+static int scaledb_discover_table_names(handlerton *hton, LEX_STRING *db, MY_DIR *dirp, handlerton::discovered_list *result)
+{
+
+
+return 0;
+}
+static int scaledb_discover_table(handlerton *hton, THD* thd, TABLE_SHARE *share)
+{
+	DBUG_ENTER("scaledb_discover_table");
+
+	size_t frm_len=0;
+	uchar* frm_blob;
+
+
+	int rc=scaledb_discover(hton,  thd, share->db.str, share->table_name.str,&frm_blob,&frm_len);
+	if(rc==SUCCESS)
+	{
+		rc= share->init_from_binary_frm_image(thd, 1,frm_blob, frm_len);
+		my_errno=rc;
+		DBUG_RETURN(my_errno);
+	}
+	else
+	{
+		DBUG_RETURN(HA_ERR_NO_SUCH_TABLE);
+	}
+
+}
+#endif //_MARIA_SDB_10
 static int scaledb_discover(handlerton *hton, THD* thd, const char *db,
 	           const char *name,
 	           uchar **frmblob,
@@ -773,8 +1094,17 @@ static int scaledb_discover(handlerton *hton, THD* thd, const char *db,
 	userIdforOpen = SDBGetNewUserId();
 
 	retCode = ha_scaledb::openUserDatabase((char *)db,(char *) db, dbId,userIdforOpen,NULL);
+
+	SessionSharedMetaLock ot(dbId);
+	if(ot.lock()==false)
+        {
+         	SDBRemoveUserById(userIdforOpen);
+	        DBUG_RETURN(convertToMysqlErrorCode(LOCK_TABLE_FAILED));
+	}
+
 	if(!retCode) {		
 		tableId = SDBOpenTable(userIdforOpen, dbId, (char *)name, 0, true);
+		SDBCommit(userIdforOpen, false);
 		if(tableId)
 		{
 			if (ha_scaledb::lockDML(userIdforOpen, dbId, tableId, 0)) 
@@ -927,11 +1257,9 @@ static int scaledb_close_connection(handlerton *hton, THD* thd) {
 	if (pMysqlTxn != NULL) {
 		// we assume that we get the user ID that is related to the lost connection
 		unsigned short userId = pMysqlTxn->getScaleDbUserId();
-
-		SDBCommit(userId,true);  //release the session lock
-		SDBRollBack(userId, NULL, 0, false);
-
-
+		
+		// rollback if the connection was killed in a middle of a transaction 
+		// done inside SDBRemoveUserById 
 		SDBRemoveUserById(userId);
 
 		delete pMysqlTxn;
@@ -1146,6 +1474,18 @@ static int scaledb_commit(handlerton *hton, THD* thd, bool all) /* all=true if i
 	unsigned short mySqlRetCode = 0;
 
 	unsigned int sqlCommand = thd_sql_command(thd);
+
+#ifdef SDB_SUPPORT_HANDLER_SOCKET_WRITE
+	// on handler socket writes - 
+	if ( IS_HANDLER_SOCKET_WRITE_THREAD(thd)) {
+		// if not at the end of a bulk
+		if (HANDLER_SOCKET_WRITE_INSERTS_COUNT(userTxn->getGlobalInsertsCount())) {
+			// skip commits (make commit only after bulk - inside write_row)
+			DBUG_RETURN(0); // do nothing
+		}
+	}
+#endif
+
 	if (sqlCommand == SQLCOM_LOCK_TABLES)
 		DBUG_RETURN(0); // do nothing if it is a LOCK TABLES statement.
 
@@ -1351,8 +1691,9 @@ void ha_scaledb::setSdbQueryMgrId() {
 		sdbQueryMgrId_ = SDBGetQueryManagerId(sdbUserId_);
  	    sdbDesignatorId_ = 0;
 		sdbSequentialScan_ = false;
-		use_prefetch_ = false;
-		end_key_ = NULL;
+		eq_range_ = true; // unless stated otherwise the defualt is equal range/ point lookup 
+		end_key_ = NULL;  // the default is eq_range ==> no end key 
+		
 	} 
 
 	// assertion check on the validity of the current sdbQueryMgrId_ 
@@ -1427,9 +1768,17 @@ ha_scaledb::ha_scaledb(handlerton *hton, TABLE_SHARE *table_arg) :
 		print_header_thread_info("MySQL Interface: executing ha_scaledb::ha_scaledb(...) ");
 	}
 #endif
+	indexKeyRangeStart_.key	= indexKeyRangeStartData_;
+	indexKeyRangeEnd_.key	= &( indexKeyRangeEndData_[ 0 ] );
+	temp_table=NULL;
 	lastSDBErrorLength =0;
 	debugCounter_ = 0;
 	deleteRowCount_ = 0;
+	isStreamingDelete_ = false;
+
+	isIndexedQuery_			=
+	isQueryEvaluation_		=
+	isRangeKeyEvaluation_	= false;
 
 	sdbDbId_ = 0;
 	sdbTableNumber_ = 0;
@@ -1448,16 +1797,25 @@ ha_scaledb::ha_scaledb(handlerton *hton, TABLE_SHARE *table_arg) :
 	starLookupTraversal_ = false;
 	numOfBulkInsertRows_ = 1;
     numOfInsertedRows_ = 0;
-	conditionStringLength_ = 0;
-	condStringAllocatedLength_ = 256;
+	conditionStringLength_			= 0;
+	condStringExtensionLength_		=																// Must be a power of 2
+	condStringAllocatedLength_		= 8192;															// Must be a power of 2
+	condStringMaxLength_			= 2097152;
+	analyticsStringLength_			= 0;
+	analyticsSelectLength_          = 0;
+	analyticsStringExtensionLength_	=																// Must be a power of 2
+	analyticsStringAllocatedLength_	= 2048;															// Must be a power of 2
+	analyticsStringMaxLength_		= analyticsStringAllocatedLength_ * 8;
+	forceAnalytics_=false;
 	rowTemplate_.fieldArray_		= SDBArrayInit( 10, 5, sizeof( SDBFieldTemplate ),   true ); 
 	keyTemplate_[ 0 ].keyArray_		= SDBArrayInit( 10, 5, sizeof( SDBKeyPartTemplate ), true );
 	keyTemplate_[ 1 ].keyArray_		= SDBArrayInit( 10, 5, sizeof( SDBKeyPartTemplate ), true );
 	sortedVarcharsFieldsForInsert_	= SDBArrayInit( 10, 5, sizeof( unsigned long long ), false );
 	conditions_ = SDBConditionStackInit(10);
 
-	conditionString_ = (unsigned char*)malloc(256 * sizeof(unsigned char));
-	pushCondition = true;
+	conditionString_				= ( unsigned char* ) malloc( condStringAllocatedLength_			* sizeof( unsigned char ) );
+	analyticsString_				= ( unsigned char* ) malloc( analyticsStringAllocatedLength_	* sizeof( unsigned char ) );
+	pushCondition_					= false;
 
 	// init static array the first time we use the interface - float must have a length  
 	if (mysqlToSdbType_[MYSQL_TYPE_FLOAT] != SDB_NUM)
@@ -1637,18 +1995,20 @@ int ha_scaledb::external_lock(THD* thd, /* handle to the user thread */
 	//	mysqlInterfaceDebugLevel_  = 1;
 	//}
 #endif
-
+	
+	bool is_streaming_table=SDBIsStreamingTable(sdbDbId_, sdbTableNumber_);
+	
 
 	int retValue = 0;
 
 	placeSdbMysqlTxnInfo(thd);
 
+	this->isIndexedQuery_	= false;
+
+	this->pushCondition_	= true;
+
 	this->sqlCommand_ = thd_sql_command(thd);
 	
-	if (sqlCommand_ != SQLCOM_SELECT && sqlCommand_ != SQLCOM_HA_READ && sqlCommand_ != SQLCOM_INSERT_SELECT) {
-		conditionStringLength_ = 0;
-		pushCondition = false;
-	}
 	switch (sqlCommand_) {
 	case SQLCOM_SELECT:
 	case SQLCOM_HA_READ:
@@ -1692,7 +2052,22 @@ int ha_scaledb::external_lock(THD* thd, /* handle to the user thread */
 		break;
 	}
 
+	if(is_streaming_table == true &&
+		( sdbCommandType_ == SDB_COMMAND_UPDATE
+		|| sdbCommandType_ == SDB_COMMAND_LOAD
+		|| sdbCommandType_ == SDB_COMMAND_ALTER_TABLE
+		|| sdbCommandType_ == SDB_COMMAND_MULTI_DELETE))
+	{
+		DBUG_RETURN(HA_ERR_WRONG_COMMAND);
+	}
 
+
+	if(lock_type == F_RDLCK && sdbCommandType_ == SDB_COMMAND_SELECT && is_streaming_table==true)
+	{
+		char* s_force_analytics=SDBUtilFindComment(thd->query(), "force_sdb_analytics") ;
+		if(s_force_analytics!=NULL){forceAnalytics_=true;}
+		else {forceAnalytics_=false;}
+	}
 	// fetch sdbTableNumber_ if it is 0 (which means a new table handler).
 	if ((sdbTableNumber_ == 0) && (!virtualTableFlag_))
 		retValue = initializeDbTableId();
@@ -2037,7 +2412,7 @@ unsigned short ha_scaledb::openUserDatabase(char* pDbName, char *pDbFsName, unsi
 			if(!dbId) {		
 				retCode = TABLE_NAME_UNDEFINED;
 			}			
-		}
+		}		
 		// inside txn  
 		if (pSdbMysqlTxn) 
 		{
@@ -2103,8 +2478,11 @@ int ha_scaledb::checkFrmCurrent(const char *name, uint userIdforOpen, uint dbId,
 	strcat(frmFilePathName, "/" );
 	strcat(frmFilePathName, name);
 #endif
-
+#ifdef _MARIA_SDB_10
+	retCode = readfrm(frmFilePathName,(const uchar**) &frmData, &dataLen);
+#else
 	retCode = readfrm(frmFilePathName, &frmData, &dataLen);
+#endif 
 	if(retCode) {
 //		my_free(frmData, MYF(0));
 		return 0;
@@ -2160,7 +2538,7 @@ int ha_scaledb::open(const char *name, int mode, uint test_if_locked) {
 	SDBDebugPrintString(table->s->table_name.str);
 	SDBDebugEnd();
 #endif
-	int errorNum = 1; // init to general fail 
+	int errorNum = HA_ERR_NO_SUCH_TABLE; // init to general fail 
 	unsigned short retCode = 0;
 	char dbFsName[METAINFO_MAX_IDENTIFIER_SIZE] = { 0 }; // database name that is compliant with file system
 	char tblFsName[METAINFO_MAX_IDENTIFIER_SIZE] = { 0 }; // table name that is compliant with file system
@@ -2190,9 +2568,6 @@ int ha_scaledb::open(const char *name, int mode, uint test_if_locked) {
 			bIsAlterTableStmt = true;
 	}
 
-	
-
-
 	virtualTableFlag_ = SDBTableIsVirtual(pTblFsName);
 	if (virtualTableFlag_) {
 		pTblFsName = pTblFsName + SDB_VIRTUAL_VIEW_PREFIX_BYTES;
@@ -2203,7 +2578,7 @@ int ha_scaledb::open(const char *name, int mode, uint test_if_locked) {
 	// Because MySQL calls this method outside of a normal user transaction,
 	// hence we use a different user id to open database and table in order to avoid commit issue.
      unsigned int userIdforOpen = SDBGetNewUserId();
-
+	 SessionSharedMetaLock ot;
 	// First, we open the user database by retrieving the metadata information.
 	retCode = ha_scaledb::openUserDatabase(table->s->db.str, dbFsName, sdbDbId_,userIdforOpen,NULL);
 	if (retCode) {
@@ -2232,17 +2607,34 @@ int ha_scaledb::open(const char *name, int mode, uint test_if_locked) {
 #endif
 	strcat(fullName, tblFsName);
 
+	ot.set(sdbDbId_);
+	if(ot.lock()==false)
+        {
+       	SDBRemoveUserById(userIdforOpen);
+	    DBUG_RETURN(convertToMysqlErrorCode(LOCK_TABLE_FAILED));
+	}
+
 	//because another node might have change the tables meta data, need to check that the local
 	//node has the latest meta data. Cleanest way todo this is just flush meta cache and reopen.
 	tid = SDBGetTableNumberByFileSystemName(userIdforOpen, sdbDbId_, pTblFsName);	
 	if(tid!=0)
 	{
 		bool b=SDBGetTableStatus(userIdforOpen, sdbDbId_, tid);
-		SDBCommit(userIdforOpen, false);
+		
 		if(b==false)
-		{
-			SDBRemoveLocalTableInfo(userIdforOpen, sdbDbId_, tid);
-			SDBCloseTable(userIdforOpen, sdbDbId_, pTblFsName, sdbPartitionId_, false, true);
+		{		
+			SDBCommit(userIdforOpen, true);		// release previous session locks (so an exclusive can be taken).
+
+			if (!lockDDL(userIdforOpen, sdbDbId_, tid, 0)){
+				SDBRollBack(userIdforOpen, NULL, 0, true);
+				DBUG_RETURN(convertToMysqlErrorCode(LOCK_TABLE_FAILED));
+			}
+
+			SDBCloseTable(userIdforOpen, sdbDbId_, pTblFsName, sdbPartitionId_, false, true, false, true);
+
+			SDBCommit(userIdforOpen, true);	// release the exclusive lock
+
+
 		}
 	}
 	// this commit is needed to release the locks of a query done in SDBGetTableNumberByFileSystemName.
@@ -2252,9 +2644,14 @@ int ha_scaledb::open(const char *name, int mode, uint test_if_locked) {
 	// after getting the upated version - open the table
 	sdbTableNumber_ = SDBOpenTable(userIdforOpen, sdbDbId_, pTblFsName, sdbPartitionId_, false);
  
+//added for debugging
+//	int no_shards=SDBNumberShards(sdbDbId_,sdbTableNumber_);
+//
 	if ( !sdbTableNumber_ ) {
 		goto open_fail;
 	}
+
+	SDBCommit(userIdforOpen, true);  //
 
 	if (!ha_scaledb::lockDML(userIdforOpen, sdbDbId_, sdbTableNumber_, 0)) {
 		errorNum = convertToMysqlErrorCode(LOCK_TABLE_FAILED);
@@ -2279,8 +2676,11 @@ int ha_scaledb::open(const char *name, int mode, uint test_if_locked) {
 
 		uchar *data= NULL, *pack_data_local= NULL;
 		size_t length, pack_length_local;
-
+#ifdef _MARIA_SDB_10
+		if (readfrm(fullName, (const uchar**)&data, &length) ||
+#else
 		if (readfrm(fullName, &data, &length) ||
+#endif
 			packfrm(data, length, &pack_data_local, &pack_length_local))
 		{
 #ifdef _MARIA_DB
@@ -2317,6 +2717,9 @@ int ha_scaledb::open(const char *name, int mode, uint test_if_locked) {
 
 	//open_sucess:
 	errorNum = 0;
+	SDBCommit(userIdforOpen, false);
+	SDBRemoveUserById(userIdforOpen);
+	DBUG_RETURN(errorNum);	//leave shared session lock on table
 
 open_fail:
 	// We can commit without problem for this new user
@@ -2413,7 +2816,16 @@ int ha_scaledb::close(void) {
 	// or this method is called from a system thread (such as mysqladmin shutdown command).
 	if (needToRemoveFromScaledbCache) 
 	{
-		errorCode = SDBCloseTable(sdbUserId_, sdbDbId_, table->s->table_name.str, sdbPartitionId_, true,needToCommit, flushTables);
+
+		SDBCommit(sdbUserId_,true); // release previous locks - in partiular older session lock on this table
+
+		// exclusive lock of the table (before the lock)
+		if (!lockDDL(sdbUserId_, sdbDbId_, sdbTableNumber_, 0)) {	
+			SDBRollBack(sdbUserId_, NULL, 0, true);
+			DBUG_RETURN(convertToMysqlErrorCode(LOCK_TABLE_FAILED));
+		}
+
+		errorCode = SDBCloseTable(sdbUserId_, sdbDbId_, table->s->table_name.str, sdbPartitionId_, true,needToCommit, flushTables, true);
 
 		if (errorCode){
 			if (bGetNewUserId){
@@ -2422,7 +2834,7 @@ int ha_scaledb::close(void) {
 			DBUG_RETURN(convertToMysqlErrorCode(errorCode));
 		}
 
-		SDBRemoveLocalTableInfo(sdbUserId_, sdbDbId_, sdbTableNumber_);
+		
 		SDBCommit(sdbUserId_,true); //table closed, so release session lock
 	}
 
@@ -2505,6 +2917,7 @@ MysqlTxn* ha_scaledb::placeSdbMysqlTxnInfo(THD* thd) {
 		pMysqlTxn->setMysqlThreadId(thd->thread_id);
 		unsigned int scaleDbUserId = SDBGetNewUserId();
 		pMysqlTxn->setScaleDbUserId(scaleDbUserId);
+		pMysqlTxn->initGlobalInsertsCount();
 
 		// save the new pointer into the per-connection place
 		*thd_ha_data(thd, ht) = pMysqlTxn;
@@ -2518,22 +2931,15 @@ MysqlTxn* ha_scaledb::placeSdbMysqlTxnInfo(THD* thd) {
 
 	return pMysqlTxn;
 }
-#define SDB_NEW_PLACE_MYSQL_ROW
-#ifdef SDB_NEW_PLACE_MYSQL_ROW
+
 unsigned short ha_scaledb::placeMysqlRowInEngineBuffer(unsigned char* rowBuf1,	unsigned char* rowBuf2, unsigned short groupType, 
-	bool checkAutoIncField, bool updateBlobContent, bool &needToUpdateAutoIncrement) {
+	bool checkAutoIncField, bool updateBlobContent) {
 	
-	// on first insert in the bulk or on cases where auto in  
-	if ( numOfInsertedRows_ == 0 ) {		
-		// reset SDB row buffers
-		SDBResetRow(sdbUserId_, sdbDbId_, sdbPartitionId_, sdbTableNumber_, groupType);
-	}
-
+	// reset SDB row buffers 
+	SDBResetRow(sdbUserId_, sdbDbId_, sdbPartitionId_, sdbTableNumber_, groupType);
+	
 	// build template at the begin of scan 
-	buildRowTemplate(rowBuf1,checkAutoIncField );
-
-	// update auto increment value if using the current value
-	needToUpdateAutoIncrement = (rowTemplate_.autoIncfieldNum_ > 0);
+	buildRowTemplate(table, rowBuf1, checkAutoIncField );
 
 	// prepare row - in case of overflow blocks (blob + varchar) might be  getting from cache we need to enter + exit engine 
 	if ( rowTemplate_.numOfOvf_ )  {
@@ -2544,220 +2950,6 @@ unsigned short ha_scaledb::placeMysqlRowInEngineBuffer(unsigned char* rowBuf1,	u
 	}
 }
 	
-#else
-// This method packs a MySQL row into ScaleDB engine row buffer 
-// When we prepare the old row value for update operation, 
-// rowBuf1 points to old MySQL row buffer and rowBuf2 points to new MySQL row buffer.
-// For all other cases, these 2 row buffers point to same row buffer
-unsigned short ha_scaledb::placeMysqlRowInEngineBuffer(unsigned char* rowBuf1,
-	unsigned char* rowBuf2, unsigned short groupType, bool checkAutoIncField, bool updateBlobContent,
-	bool &needToUpdateAutoIncrement) {
-
-		unsigned short retCode = 0;
-		if ((sdbTableNumber_ == 0) && (!virtualTableFlag_))
-			retCode = initializeDbTableId();
-
-		if ((sdbTableNumber_ == 0) && (!virtualTableFlag_))
-			SDBTerminate(IDENTIFIER_INTERFACE + ERRORNUM_INTERFACE_MYSQL + 4, // ERROR - 16010004
-			"Table definition is out of sync between MySQL and ScaleDB engine.\0" );
-
-		needToUpdateAutoIncrement = false;
-		enum_field_types fieldType;
-		unsigned short fieldId;
-
-#ifdef SDB_SORT_VARCHAR		
-		SDBArrayReset(sortedVarcharsFieldsForInsert_);
-#endif		
-#ifdef OPEN_CLOSE_TABLE_DEBUG_
-		if ( SDBGetTableNumberByName(sdbUserId_,sdbDbId_,table->s->table_name.str)  != sdbTableNumber_) {
-			SDBDebugStart(); // synchronize threads printout
-			SDBDebugPrintHeader("\nFailed to open table=");
-			SDBDebugPrintString(table->s->table_name.str);
-			SDBDebugEnd(); // synchronize threads printout
-			SDBTerminate(0, "table is used but not identified");
-		}
-#endif
-
-		SDBResetRow(sdbUserId_, sdbDbId_,sdbPartitionId_, sdbTableNumber_, groupType);
-
-		Field* pField;
-		unsigned char* pFieldValue;
-		unsigned long long realVarLength;
-		unsigned char mysqlVarLengthBytes;
-		unsigned char* pBlobFieldValue; // point to BLOB or TEXT value
-		Field* pAutoIncrField = table->found_next_number_field; // points to auto_increment field
-		unsigned short *sdbFieldMap = SDBGetFieldsMap(sdbDbId_, sdbTableNumber_);			// get mappint between the app field ids and scaledb field ids.
-
-		for (unsigned short i = 0; i < table->s->fields; ++i) {			
-			bool useNextAutoIncrValue = false;
-			bool setNull = false;
-
-			pField = table->field[i];
-
-			fieldId = sdbFieldMap[i]; // field ID should start with 1 in ScaleDB engine; it starts with 0 in MySQL
-
-			pFieldValue = rowBuf1 + (pField->ptr - rowBuf2);
-			// note that table->field[i]->ptr points to the column in the rowBuf2 (or new_row) 
-
-			if (pField->null_bit) { // This field is nullable
-				unsigned int nullByteOffset = (unsigned int) ((char *) pField->null_ptr
-					- (char *) table->record[0]);
-				if (rowBuf1[nullByteOffset] & pField->null_bit) {
-					pFieldValue = NULL;
-					setNull = true;
-				}
-			}
-
-			fieldType = pField->type();
-
-			switch (fieldType) {
-				// the case statement should be listed based on the decending use frequency
-			case MYSQL_TYPE_LONG:
-			case MYSQL_TYPE_SHORT:
-			case MYSQL_TYPE_TINY:
-			case MYSQL_TYPE_LONGLONG:
-			case MYSQL_TYPE_INT24:
-			case MYSQL_TYPE_FLOAT:
-			case MYSQL_TYPE_DOUBLE:
-				if (checkAutoIncField && pAutoIncrField && !setNull) { // check to see if this table has an auto_increment column
-					if (pAutoIncrField->field_index == i) {	// current field is an auto increment field
-
-						// default rule: When auto_incrment column has value NULL or 0, we let engine set the next sequence value.
-						if (pFieldValue == NULL) {
-							useNextAutoIncrValue = true;
-						} else if ( SDBUtilAreAllBytesZero(pFieldValue, pField->pack_length()) ) {
-							// Bug 606: When sql_mode='NO_AUTO_VALUE_ON_ZERO', we keep value 0 without assigning next sequence value.
-							THD* thd = ha_thd();
-							if ( (thd->variables.sql_mode & MODE_NO_AUTO_VALUE_ON_ZERO) == 0)
-								useNextAutoIncrValue = true;	// set to true when NO_AUTO_VALUE_ON_ZERO is not specified.
-						}
-
-						needToUpdateAutoIncrement = true;
-					}
-				}
-
-				if (useNextAutoIncrValue == false)
-					SDBPrepareNumberField(sdbUserId_, sdbDbId_, sdbTableNumber_, fieldId, pFieldValue, groupType);
-				break;
-
-			case MYSQL_TYPE_STRING:
-				SDBPrepareStrField(sdbUserId_, sdbDbId_, sdbTableNumber_, fieldId, (char*) pFieldValue, pField->pack_length(), groupType);
-				break;
-
-			case MYSQL_TYPE_DATE:
-			case MYSQL_TYPE_DATETIME:
-			case MYSQL_TYPE_TIME:
-			case MYSQL_TYPE_TIMESTAMP:
-			case MYSQL_TYPE_YEAR:
-			case MYSQL_TYPE_ENUM:
-			case MYSQL_TYPE_BIT:
-			case MYSQL_TYPE_SET:
-				SDBPrepareNumberField(sdbUserId_, sdbDbId_, sdbTableNumber_, fieldId, pFieldValue,
-					groupType);
-				break;
-
-			case MYSQL_TYPE_NEWDECIMAL:
-				SDBPrepareStrField(sdbUserId_, sdbDbId_, sdbTableNumber_, fieldId, (char*) pFieldValue,
-					((Field_new_decimal*) pField)->bin_size, groupType);
-				break;
-
-			case MYSQL_TYPE_VARCHAR:
-			case MYSQL_TYPE_VAR_STRING:
-				if (setNull) {
-					retCode = SDBPrepareVarField(sdbUserId_, sdbDbId_, sdbTableNumber_, fieldId,
-						(char*) NULL, 0, groupType, true);
-				} else {
-
-					if (((Field_varstring*) pField)->length_bytes == 1) {
-						mysqlVarLengthBytes = 1;
-						realVarLength = (unsigned int) *pFieldValue;
-					} else {
-						mysqlVarLengthBytes = 2;
-						realVarLength = (unsigned int) *((unsigned short*) pFieldValue);
-					}
-#ifdef SDB_SORT_VARCHAR					
-					unsigned long long svalToSort = (realVarLength << 32) | ((unsigned long long)fieldId & 0xFFFF) | (((unsigned long long)0x10000) * mysqlVarLengthBytes) ;
-					SDBArrayPut(sortedVarcharsFieldsForInsert_,svalToSort);
-#else
-					retCode = SDBPrepareVarField( sdbUserId_, sdbDbId_, sdbTableNumber_, fieldId,
-												  ( char* ) pFieldValue + mysqlVarLengthBytes, ( uint ) realVarLength, groupType, false );
-#endif	
-				}
-				break;
-
-			case MYSQL_TYPE_BLOB:
-
-				if (updateBlobContent){
-					// on delete we don't need to update the blob content
-					if (setNull) {
-						retCode = SDBPrepareVarField(sdbUserId_, sdbDbId_, sdbTableNumber_, fieldId,
-							(char*) NULL, 0, groupType, true);
-					} else {
-						mysqlVarLengthBytes = ((Field_blob*) pField)->pack_length_no_ptr(); // number of bytes to save length
-						realVarLength = (unsigned int) SDBGetNumberFromField((char*) pFieldValue, 0, mysqlVarLengthBytes);
-						pBlobFieldValue = * (unsigned char **)(pFieldValue + mysqlVarLengthBytes);
-						retCode = SDBPrepareVarField( sdbUserId_, sdbDbId_, sdbTableNumber_, fieldId, ( char* ) pBlobFieldValue, ( unsigned int ) realVarLength, groupType, false );
-					}
-
-				}
-				break;
-
-
-			case MYSQL_TYPE_GEOMETRY:
-
-				if (!setNull){
-
-					mysqlVarLengthBytes = ( ( Field_geom* ) pField )->pack_length_no_ptr(); // number of bytes to save length
-
-					realVarLength = ( unsigned int ) SDBGetNumberFromField( ( char* ) pFieldValue, 0, mysqlVarLengthBytes );
-
-					pBlobFieldValue = * (unsigned char **)(pFieldValue + mysqlVarLengthBytes);
-
-					retCode = SDBPrepareStrField( sdbUserId_, sdbDbId_, sdbTableNumber_, fieldId, ( char* ) pBlobFieldValue, ( short ) realVarLength, groupType );
-				}else{
-					// set null field
-					retCode = SDBPrepareStrField(sdbUserId_, sdbDbId_, sdbTableNumber_, fieldId, NULL, 0, groupType);
-				}
-
-				break;
-
-			default:
-
-#ifdef SDB_DEBUG_LIGHT
-				SDBDebugPrintHeader("These data types are not supported yet.");
-#endif
-				retCode = METAINFO_WRONG_FIELD_TYPE;
-				break;
-			} // switch (fieldType)
-
-			if (retCode > 0)
-				break;
-		}// for (unsigned short i=0; i < table->s->fields; ++i)
-
-#ifdef SDB_SORT_VARCHAR	
-		// The interface sorts the the varachar fields from smaller to bigger 
-		// Because they sll share the same auxilary container which is spilted between the ROW and OVF . 
-		// WE want to maximize the number of varchar fields entered in the ROW part of the auxilery container 
-		// To minimize fetching of OVF  part of rows 
-		SDBArraySort(sortedVarcharsFieldsForInsert_);
-		for ( unsigned int i = 1; i <= SDBArrayGetNumberOfNetElements( sortedVarcharsFieldsForInsert_ ); i++ )
-		{
-			unsigned long long sortedVal = SDBArrayGet(sortedVarcharsFieldsForInsert_,i);
-			fieldId = sortedVal & 0xFFFF; 
-			realVarLength = (sortedVal >> 32); 
-			mysqlVarLengthBytes = ( unsigned char )( ( sortedVal & 0xF0000 ) >> 16 );
-			pField = table->field[fieldId-1];
-			pFieldValue = rowBuf1 + (pField->ptr - rowBuf2);
-			retCode = SDBPrepareVarField( sdbUserId_, sdbDbId_, sdbTableNumber_, fieldId,
-										  ( char* )( pFieldValue + mysqlVarLengthBytes ), ( unsigned int ) realVarLength, groupType, false );
-			if (retCode > 0)
-				break;
-		}
-#endif		
-		return retCode;
-}
-
-#endif
 
 /* 
  write_row() inserts a row.
@@ -2766,6 +2958,8 @@ unsigned short ha_scaledb::placeMysqlRowInEngineBuffer(unsigned char* rowBuf1,
  table->s->fields: gives the number of column in the current open table.
  */
 int ha_scaledb::write_row(unsigned char* buf) {
+	unsigned short retValue;
+
 	DBUG_ENTER("ha_scaledb::write_row");
 
 #ifdef SDB_DEBUG_LIGHT
@@ -2787,30 +2981,46 @@ int ha_scaledb::write_row(unsigned char* buf) {
 	//SDBDebugEnd(); // synchronize threads printout
 #endif
 
+	
+#ifdef SDB_SUPPORT_HANDLER_SOCKET_WRITE
+	// on handler socket writes - fake  bulk insert 
+	if ( IS_HANDLER_SOCKET_WRITE_THREAD(ha_thd())) {
+		// maintain global counter + set the bulk variables 
+		numOfBulkInsertRows_ = HANDLER_SOCKET_WRITE_BULK;
+		numOfInsertedRows_ =  HANDLER_SOCKET_WRITE_INSERTS_COUNT(pSdbMysqlTxn_->incGlobalInsertsCount());
+	}
+#endif
+	
+	if (!ha_scaledb::lockDML(sdbUserId_, sdbDbId_, sdbTableNumber_, 0)) {
+		DBUG_RETURN(convertToMysqlErrorCode(LOCK_TABLE_FAILED));
+	}
+
 	int errorNum = 0;
 	ha_statistic_increment(&SSV::ha_write_count);
-
+#ifdef _MARIA_SDB_10
+#else
 	/* If we have a timestamp column, update it to the current time */
 	if (table->timestamp_field_type & TIMESTAMP_AUTO_SET_ON_INSERT)
 		table->timestamp_field->set_time();
-
+#endif //_MARIA_SDB_10
 	my_bitmap_map* org_bitmap = dbug_tmp_use_all_columns(table, table->read_set);
 
-	// this variable is modified in the placeMysqlRowInEngineBuffer function
-	bool needToUpdateAutoIncrement = false;
-
-	unsigned short retValue = placeMysqlRowInEngineBuffer((unsigned char *) buf,
-	        (unsigned char *) buf, 0, true, true, needToUpdateAutoIncrement);
+	retValue = placeMysqlRowInEngineBuffer((unsigned char *) buf, (unsigned char *) buf, 0, true, true);
 
 	if (retValue == 0) {
 		retValue = SDBInsertRowAPI(sdbUserId_, sdbDbId_, sdbTableNumber_, sdbPartitionId_,numOfBulkInsertRows_,numOfInsertedRows_++,
 		        ((THD*) ha_thd())->query_id, sdbCommandType_);
 	}
 
-	if (retValue == 0 && needToUpdateAutoIncrement) {	
-		((THD*) ha_thd())->first_successful_insert_id_in_cur_stmt
-		        = get_scaledb_autoincrement_value();
-			update_auto_increment();
+	// if insert row with auto increment  
+	if (table->found_next_number_field) { 
+		// update stats 
+		stats.auto_increment_value = SDBGetAutoIncrValue(sdbDbId_, sdbTableNumber_);
+		// update for the use of: "select from last_insert_id()" 
+		((THD*) ha_thd())->first_successful_insert_id_in_cur_stmt= stats.auto_increment_value;
+		// mysql_insert() uses this for protocol return value 
+		// binary log use this value to replicate the inserted rows with Autoinc values 
+		table->next_number_field->store(SDBGetActualAutoIncrValue(sdbUserId_,sdbDbId_, sdbTableNumber_), 1);
 	}
 
 #ifdef __DEBUG_CLASS_CALLS  // can enable it to check memory leak
@@ -2839,45 +3049,6 @@ int ha_scaledb::write_row(unsigned char* buf) {
 	DBUG_RETURN(errorNum);
 }
 
-void ha_scaledb::get_auto_increment(
-/*============================*/
-        ulonglong	offset,              /*!< in: table autoinc offset */
-        ulonglong	increment,           /*!< in: table autoinc increment */
-        ulonglong	nb_desired_values,   /*!< in: number of values reqd */
-        ulonglong	*first_value,        /*!< out: the autoinc value */
-        ulonglong	*nb_reserved_values) /*!< out: count of reserved values */
-{
-
-      *nb_reserved_values= ULONGLONG_MAX;
-      *first_value= ((THD*) ha_thd())->first_successful_insert_id_in_cur_stmt;
-}
-// this function should be called when the latest auto increment value has changed so that
-// it can be returned in calls to last_insert_id() function
-uint64 ha_scaledb::get_scaledb_autoincrement_value() {
-
-	//unsigned short tableId = SDBGetTableNumberByName(sdbUserId_, sdbDbId_, table->s->table_name.str);
-
-	// find the auto increment field number
-	unsigned short totalNumberOfFields =
-	        SDBGetNumberOfFieldsInTableByTableNumber(sdbDbId_, sdbTableNumber_);
-	unsigned short fieldNumber;
-
-	for (fieldNumber = 1; fieldNumber <= totalNumberOfFields; ++fieldNumber) {
-		if (SDBIsFieldAutoIncrement(sdbDbId_, sdbTableNumber_, fieldNumber))
-			break;
-	}
-
-	if (SDBGetUserRowTableId(sdbUserId_) != sdbTableNumber_) {
-		return 0;
-	}
-
-	char* buffer = SDBGetUserRowColumn(sdbUserId_, fieldNumber);
-	unsigned short length = SDBGetUserRowColumnLength(sdbUserId_, fieldNumber);
-
-	uint64 number = SDBGetNumberFromField(buffer, 0, length);
-
-	return number;
-}
 
 int ha_scaledb::check( THD* thd, HA_CHECK_OPT* check_opt )
 {
@@ -2890,7 +3061,10 @@ int ha_scaledb::check( THD* thd, HA_CHECK_OPT* check_opt )
 
 // Update HA_CREATE_INFO object.  Used in SHOW CREATE TABLE and ALTER TABLE ... enable keys
 void ha_scaledb::update_create_info(HA_CREATE_INFO* create_info) {
-
+	if(table==NULL) 
+	{
+		return;
+	}
 	print_header_thread_info("MySQL Interface: executing ha_scaledb::update_create_info(...)");
 
 	THD* thd = ha_thd();
@@ -2968,19 +3142,19 @@ int ha_scaledb::update_row(const unsigned char* old_row, unsigned char* new_row)
 	ha_statistic_increment(&SSV::ha_update_count);
 
 	/* If we have a timestamp column, update it to the current time */
+#ifdef _MARIA_SDB_10
+#else
 	if (table->timestamp_field_type & TIMESTAMP_AUTO_SET_ON_UPDATE)
 		table->timestamp_field->set_time();
-
+#endif //_MARIA_SDB_10
 	my_bitmap_map* org_bitmap = dbug_tmp_use_all_columns(table, table->read_set);
 
 	unsigned int retValue = 0;
-	bool funcRetValue = false;
-
 	// place old row into ScaleDB buffer 1 for comparison
-	retValue = placeMysqlRowInEngineBuffer((unsigned char*) old_row, new_row, 2, false, true, funcRetValue);
+	retValue = placeMysqlRowInEngineBuffer((unsigned char*) old_row, new_row, 2, false, true);
 
 	if (retValue == 0) // place new row into ScaleDB buffer 2 for comparison
-		retValue = placeMysqlRowInEngineBuffer(new_row, new_row, 1, false, true, funcRetValue);
+		retValue = placeMysqlRowInEngineBuffer(new_row, new_row, 1, false, true);
 
 	if (retValue > 0) {
 		dbug_tmp_restore_column_map(table->read_set, org_bitmap);
@@ -3030,6 +3204,93 @@ int ha_scaledb::update_row(const unsigned char* old_row, unsigned char* new_row)
 	DBUG_RETURN(errorNum);
 }
 
+
+int ha_scaledb::iSstreamingRangeDeleteSupported(unsigned long long* delete_key, unsigned short* columnNumber, bool* delete_all)
+{
+		unsigned int retValue = 0;
+		// this function passes through the key information (value and traversal direction) and expects the delete to complete.
+		//	the query and delete will terminate after the first row is fetched.
+		//  the parse tree is analysed to find the key and to only allow  ctime <9 type queries
+		
+		LEX* parse_tree=((THD*) ha_thd())->lex;
+		Item* item= parse_tree->select_lex.where;
+		*delete_all=true;
+
+		if(item!=NULL)
+		{
+			*delete_all=false;
+			//contains a where clause
+			if( ((Item_func*) item)->functype()== Item_func::LT_FUNC)
+			{
+				//less than delete whare clause
+
+				//must be a simple where clause , 3 nodes, with < 'column_name' and 'literal value'
+
+				//			  <
+				//			  /\
+				//			9	ctime
+				char* col_name=NULL;
+
+
+				int node=0;
+				Item* NEXT=item;
+				bool ok=true;
+				while(NEXT=NEXT->next)
+				{
+					if(NEXT->max_length==0) {continue;}
+					node++;
+					if(node==1)
+					{
+						switch(end_key_->length)
+						{
+						case 1: {	*delete_key=*(char*)end_key_->key; break;}
+						case 2: {	*delete_key=*(short*)end_key_->key; break;}
+						case 4: {	*delete_key=*(int*)end_key_->key; break;}
+						case 8: {	*delete_key=*(long long*)end_key_->key; break;}
+						default:
+							{
+								//something is wrong.
+								ok=false;
+								break;
+							}
+						}
+	
+					}
+					else if(node==2)
+					{
+						col_name=NEXT->name;
+						*columnNumber = SDBGetColumnNumberByName(sdbDbId_, sdbTableNumber_, col_name);
+					}
+					else
+					{
+						//should only be 2 branch nodes
+						ok=false;
+						break;
+					}
+
+
+				}
+				if(ok==false)
+				{
+					SDBSetErrorMessage( sdbUserId_, INVALID_STREAMING_OPERATION, "- Unsupported WHERE clause type for a streaming delete." );
+					retValue = HA_ERR_GENERIC;
+					return retValue;
+				}
+
+
+			}
+			else
+			{
+				//only col < literal are supported
+				SDBSetErrorMessage( sdbUserId_, INVALID_STREAMING_OPERATION, "- Unsupported WHERE clause type for a streaming delete." );
+				retValue = HA_ERR_GENERIC;
+				return retValue;
+			}
+
+		}
+		return retValue;
+}
+
 // This method deletes a record with row data pointed by buf 
 int ha_scaledb::delete_row(const unsigned char* buf) {
 	DBUG_ENTER("ha_scaledb::delete_row");
@@ -3049,8 +3310,36 @@ int ha_scaledb::delete_row(const unsigned char* buf) {
 	my_bitmap_map* org_bitmap = dbug_tmp_use_all_columns(table, table->read_set);
 
 	unsigned int retValue = 0;
-	bool funcRetValue = false;
-	retValue = placeMysqlRowInEngineBuffer((unsigned char*) buf, (unsigned char*) buf, 0, false, true, funcRetValue);
+	retValue = placeMysqlRowInEngineBuffer((unsigned char*) buf, (unsigned char*) buf, 0, false, true);
+
+#ifdef _STREAMING_RANGE_DELETE
+	if(SDBIsStreamingTable(sdbDbId_, sdbTableNumber_) && SDBIsDimensionTable(sdbDbId_, sdbTableNumber_)==false)
+	{
+	
+		unsigned short columnNumber =0;
+		bool delete_all=false;;
+		unsigned long long delete_key=0;
+		retValue=iSstreamingRangeDeleteSupported(&delete_key,&columnNumber,&delete_all);
+		if(retValue==SUCCESS) 
+		{
+			retValue = SDBStreamingDelete(sdbUserId_, sdbDbId_, sdbTableNumber_, sdbPartitionId_, delete_key, columnNumber, delete_all,((THD*) ha_thd())->query_id);
+
+			isStreamingDelete_ = true; //used to cause the delete to bail next loop
+			dbug_tmp_restore_column_map(table->read_set, org_bitmap);
+			if ( retValue  != SUCCESS )
+			{
+				// Map to generic error plus a detailed error message
+				retValue	= HA_ERR_GENERIC;
+			}
+			errorNum = convertToMysqlErrorCode( retValue );
+			DBUG_RETURN(errorNum);
+		}
+		else
+		{
+			goto end;
+		}
+	}
+#endif
 
 	if (retValue == 0) {
 		retValue = SDBDeleteRowAPI(sdbUserId_, sdbDbId_, sdbTableNumber_, sdbPartitionId_, sdbRowIdInScan_, ((THD*) ha_thd())->query_id);
@@ -3077,7 +3366,7 @@ int ha_scaledb::delete_row(const unsigned char* buf) {
 		}
 	}
 #endif
-
+end:
 	dbug_tmp_restore_column_map(table->read_set, org_bitmap);
 	errorNum = convertToMysqlErrorCode(retValue);
 	DBUG_RETURN(errorNum);
@@ -3197,19 +3486,41 @@ int ha_scaledb::fetchSingleRow(unsigned char* buf) {
 	retryFetch: int retValue = 0;
 
 	if (active_index == MAX_KEY)
-		retValue = SDBQueryCursorNextSequential(sdbUserId_, sdbQueryMgrId_, sdbCommandType_);
+		retValue = SDBQueryCursorNextSequential(sdbUserId_, sdbQueryMgrId_, buf, &rowTemplate_, sdbCommandType_);
 	else
+	{
+#ifdef _STREAMING_RANGE_DELETE
+		if ( isStreamingDelete_ && SDBIsStreamingTable(sdbDbId_, sdbTableNumber_) )
+		{
+			//have already deleted all rows in range so bail.
+			isStreamingDelete_ = false;
+			retValue =QUERY_END;
+		}
+		else
+		{
+			retValue = SDBQueryCursorNext(sdbUserId_, sdbQueryMgrId_, buf, &rowTemplate_,sdbCommandType_);
+		}
+#else
 		retValue = SDBQueryCursorNext(sdbUserId_, sdbQueryMgrId_, sdbCommandType_);
-
+#endif
+	}
 	if (retValue != SUCCESS ) {
 		// no row
+		in_range_check_pushed_down = FALSE; //reset
 		table->status = STATUS_NOT_FOUND;
+		if(retValue==QUERY_ABORTED)
+		{
+			SDBSetErrorMessage( sdbUserId_, QUERY_ABORTED, " - Insufficient resources to complete the query." );
+		}
 		DBUG_RETURN(convertToMysqlErrorCode(retValue));
 	}
 
-	
-	// has row, copy the row data
+	if (!temp_table){
+		// temp_table describes the projection list with analytics.
+		// with analytics, buff is set with the projected data inside SDBQueryCursorNextSequential
+		// Without analytics - we map scaledb structure to mysql structure.
 	retValue = copyRowToRowBuffer(buf);
+	}
 
 	
 	if (retValue == ROW_RETRY_FETCH) {
@@ -3318,26 +3629,29 @@ void ha_scaledb::initMysqlTypes(){
 //		4a. where to copy real SDB  data size - NULL if no copy is needed 	int n_copied_fields =0;
 //		4b. how many bytes the SDB data size is composed of  	Field*		field;
 //		5. weather to copy ptr only or whole data 	SDBFieldTemplate ft; 
-void ha_scaledb::buildRowTemplate(unsigned char * buff,bool checkAutoIncField) {
-	int n_fields = (int)table->s->fields; /* number of columns */
+void ha_scaledb::buildRowTemplate(TABLE* tab, unsigned char * buff,bool checkAutoIncField) {
+
+//if we are using the groupby handler the temp table will be used
+	
+	int n_fields = (int)tab->s->fields; /* number of columns */
 	int n_copied_fields =0;
 	Field*		field;
 	SDBFieldTemplate ft; 
 	rowTemplate_.numOfblobs_ = 0;
 	rowTemplate_.numOfOvf_ =0;
 	rowTemplate_.autoIncfieldNum_ = 0;
-	Field* pAutoIncrField = table->found_next_number_field; // points to auto_increment field
+	Field* pAutoIncrField = tab->found_next_number_field; // points to auto_increment field
 		
 	for (int i = 0; i < n_fields; i++) {
-		field = table->field[i];
+		field = tab->field[i];
 		if (sdbCommandType_ !=  SDB_COMMAND_SELECT  || // On update+delete+insert+load:	copy ALL fields
-			bitmap_is_set(table->read_set, i)		|| // On select:					fields needed for select 
-			bitmap_is_set(table->write_set, i))		   // On select:					fields needed for insert-select  
+			bitmap_is_set(tab->read_set, i)		|| // On select:					fields needed for select 
+			bitmap_is_set(tab->write_set, i))		   // On select:					fields needed for insert-select  
 		{
 			ft.fieldNum_ = i + 1; // field ID should start with 1 in ScaleDB engine; it starts with 0 in MySQL
 			ft.nullByte_ = field->null_ptr;
 			ft.nullBit_  = field->null_bit;
-			ft.offset_   = field->offset(table->record[0]);
+			ft.offset_   = field->offset(tab->record[0]);
 			ft.length_   = field->pack_length();
 			ft.type_     = mysqlToSdbType_[field->type()];
 			if ( ft.type_ <= SDB_NUM) {
@@ -3424,6 +3738,11 @@ void ha_scaledb::buildRowTemplate(unsigned char * buff,bool checkAutoIncField) {
 //
 bool ha_scaledb::buildKeyTemplate(SDBKeyTemplate & t,unsigned char * key, unsigned int key_len,unsigned int index,bool & isFullKey, bool & allNulls) {
 
+	// fail if no index exists
+	if ( index == MAX_KEY ) {
+		return false;
+	}
+
 	// now we prepare query by assigning key values to the corresponding key fields
 	unsigned int keyOffset = 0; // points to key value (may include additional bytes for NULL or variable string.
 	KEY* pKey = table->s->key_info + index; // find out which index to use
@@ -3440,8 +3759,11 @@ bool ha_scaledb::buildKeyTemplate(SDBKeyTemplate & t,unsigned char * key, unsign
 
 	// reset the lookup travsersal flag 
 	starLookupTraversal_ = false;
-
+#ifdef _MARIA_SDB_10
+	for ( unsigned int i = 0; i < pKey->user_defined_key_parts; i++, pKeyPart++ )
+#else
 	for ( unsigned int i = 0; i < pKey->key_parts; i++, pKeyPart++ )
+#endif //_MARIA_SDB_10
 	{
 		kpt.type_     = mysqlToSdbType_[pKeyPart->field->type()];
 		kpt.allValues_ = false;
@@ -3683,7 +4005,7 @@ int ha_scaledb::fetchVirtualRow(unsigned char* buf) {
 	print_header_thread_info("MySQL Interface: executing ha_scaledb::fetchVirtualRow(...) ");
 
 	int errorNum = 0;
-	errorNum = SDBQueryCursorNext(sdbUserId_, sdbQueryMgrId_, sdbCommandType_); // always use the Multi-Table Index to fetch record
+	errorNum = SDBQueryCursorNext(sdbUserId_, sdbQueryMgrId_,NULL,NULL, sdbCommandType_); // always use the Multi-Table Index to fetch record
 
 	if (errorNum != SUCCESS) {
 		// no row
@@ -3755,22 +4077,6 @@ unsigned short ha_scaledb::getOffsetByDesignator(unsigned short designator) {
 	return offset;
 }
 
-// prepare query manager
-void ha_scaledb::prepareIndexOrSequentialQueryManager() {
-	unsigned short retValue = 0;
-
-	if ((sdbTableNumber_ == 0) && (!virtualTableFlag_))
-		retValue = initializeDbTableId();
-
-	if (SDBIsTableWithIndexes(sdbDbId_, sdbTableNumber_)) {
-		prepareFirstKeyQueryManager();
-	} else {
-		// prepare for sequential scan
-		char* pTableFsName = SDBGetTableFileSystemNameByTableNumber(sdbDbId_, sdbTableNumber_);		
-		retValue = SDBPrepareSequentialScan(sdbUserId_, sdbQueryMgrId_, sdbDbId_, sdbPartitionId_,
-		        table->s->table_name.str, ((THD*) ha_thd())->query_id, releaseLocksAfterRead_,rowTemplate_, conditionString_, conditionStringLength_);
-	}
-}
 
 // prepare primary or first-key query manager
 void ha_scaledb::prepareFirstKeyQueryManager() {
@@ -3854,28 +4160,140 @@ void ha_scaledb::prepareIndexQueryManager(unsigned int indexNum) {
 #endif
 }
 
-// Prepare query by assinging key values to the corresponding key fields
+// Evaluate table definition for a subsequent table scan
+int ha_scaledb::evaluateTableScan()
+{
+	// Clear the start key and end key values that apply only to an indexed query
+	clearIndexKeyRanges();
+
+	if ( !( hasRangeDesignator() ) )
+	{
+		// Not a streaming table with a range key
+		return HA_ERR_END_OF_FILE;
+	}
+
+	// This query will not use an index
+	isIndexedQuery_									= false;
+
+	return 0;
+}
+
+// Evaluate and assign key values for a subsequent indexed query
+int ha_scaledb::evaluateIndexKey( const uchar* key, uint key_len, enum ha_rkey_function find_flag )
+{
+	// Initialize the start key and end key values
+	clearIndexKeyRanges();
+
+	if ( !( hasRangeDesignator() ) )
+	{
+		// Not a streaming table with a range key
+		return HA_ERR_END_OF_FILE;
+	}
+
+	int		retValue								= 0;
+	bool	isFullKey;
+	bool	allNulls;
+	bool	isFullKeyEnd;
+	bool	buildKeySucceed;
+	enum	ha_rkey_function sdb_find_flag			= find_flag;
+	bool	isRangeKey;
+	
+	isIndexedQuery_									= false;
+
+	isRangeKey										= isRangeDesignator();
+
+	if ( isRangeKeyEvaluation()					   && ( !isRangeKey ) )
+	{
+		return HA_ERR_END_OF_FILE;
+	}
+
+	// Try to build the start key template
+	if ( !( buildKeySucceed							= buildKeyTemplate( this->keyTemplate_[ 0 ], ( unsigned char* ) key, key_len, active_index, isFullKey, allNulls ) ) )
+	{
+		// Sequential scan
+		return retValue;
+	}
+
+	// This query will use an index
+	isIndexedQuery_									= true;
+
+	// Copy the start key value
+	copyIndexKeyRangeStart( key, key_len, find_flag, 1 );
+
+	// Handle the end key
+	if ( releaseLocksAfterRead_ )
+	{
+		if ( SDBIsNonUniqueIndex( sdbDbId_, sdbDesignatorId_ )  || !eq_range_ )
+		{
+			// Try to build the end key template
+			if ( !eq_range_ )
+			{
+				buildKeySucceed						= buildKeyTemplate( this->keyTemplate_[ 1 ], ( unsigned char* ) end_key_->key, end_key_->length,
+																		active_index, isFullKeyEnd, allNulls );
+			}
+			else
+			{
+				buildKeySucceed						= false;
+			}
+
+			if ( buildKeySucceed				   && !allNulls )
+			{
+				// define the range
+				if ( end_key_ )
+				{
+					// Copy the end key value
+					copyIndexKeyRangeEnd( end_key_ );
+				}
+			}
+		}
+	}
+
+	return retValue;
+}
+
+// Prepare query by assigning key values to the corresponding key fields
 int ha_scaledb::prepareIndexKeyQuery(const uchar* key, uint key_len, enum ha_rkey_function find_flag) 
 {
-
 	int retValue = 0;
 	bool isDistinct = true; // The MysQL query  mode is distinct	
 	bool isFullKey;
 	bool allNulls;
 	bool isFullKeyEnd;
-	bool allNullsEnd;
-	bool buildEndKeySucceed;
+	bool buildKeySucceed;
 	enum ha_rkey_function  sdb_find_flag = find_flag;
+	bool use_prefetch = false;
+
+	isIndexedQuery_	= false;
 
 	// 1. build the key template 
-	if ( ! buildKeyTemplate(this->keyTemplate_[0],(unsigned char *)key,key_len,active_index,isFullKey,allNulls) )
+	if ( ! (buildKeySucceed = buildKeyTemplate(this->keyTemplate_[0],(unsigned char *)key,key_len,active_index,isFullKey,allNulls)) )
 	{
 		// prepare for sequential scan
-		active_index = MAX_KEY;
-		char* pTableName		= SDBGetTableNameByNumber               ( sdbUserId_, sdbDbId_, sdbTableNumber_ );
-		char* pTableFsName		= SDBGetTableFileSystemNameByTableNumber( sdbDbId_, sdbTableNumber_ );
-		return ( int ) SDBPrepareSequentialScan( sdbUserId_, sdbQueryMgrId_, sdbDbId_, sdbPartitionId_, pTableName, ( ( THD* ) ha_thd() )->query_id, releaseLocksAfterRead_,rowTemplate_, conditionString_, conditionStringLength_);
+		active_index				= MAX_KEY;
+
+		char* pTableName			= SDBGetTableNameByNumber               ( sdbUserId_, sdbDbId_, sdbTableNumber_ );
+		char* pTableFsName			= SDBGetTableFileSystemNameByTableNumber( sdbDbId_, sdbTableNumber_ );
+
+		retValue					= ( int ) SDBPrepareSequentialScan( sdbUserId_, sdbQueryMgrId_, sdbDbId_, sdbPartitionId_, pTableName, ( ( THD* ) ha_thd() )->query_id,
+																		releaseLocksAfterRead_, rowTemplate_,
+																		conditionString_, conditionStringLength_, analyticsString_, analyticsStringLength_ );
+
+		if ( conditionStringLength_ )
+		{
+			conditionStringLength_	= 0;
+		}
+
+		if ( analyticsStringLength_ )
+		{
+			analyticsStringLength_	= 0;
+		}
+
+		forceAnalytics_				= false;
+		return retValue;
 	}
+
+	// This query will use an index
+	isIndexedQuery_					= true;
 
 
 	// 2a. null key is a special case - replace > NULL with >= *   
@@ -3897,28 +4315,108 @@ int ha_scaledb::prepareIndexKeyQuery(const uchar* key, uint key_len, enum ha_rke
 	else { // on starLookupTraversal_ we use EXACT MATCH without prefix match 
 		SDBQueryCursorSetFlags(sdbQueryMgrId_, sdbDesignatorId_, isDistinct , SDB_KEY_SEARCH_DIRECTION_EQ, false, true, readJustKey_);
 	}
-	// 4a. set the range for prefetch if needed 
-	if ( use_prefetch_ ) {
-		if (!releaseLocksAfterRead_){
-			use_prefetch_ = false;			// a select for update does not use prefetch
-		}else{
-		
+
+	// 4a. set the prefetch 
+	if (releaseLocksAfterRead_)
+	{
+		// if not equal range on unique index, i.e. a result set with one row,
+		//	we assume index_init set active_index before read_range_first is called 
+		if ( SDBIsNonUniqueIndex(sdbDbId_, sdbDesignatorId_)  || !eq_range_ )
+		{
+			unsigned char direction = ( unsigned char ) SdbKeySearchDirectionTranslation[ find_flag ][ 0 ];
+			unsigned char keyIndex  = 0;
+
 			// build end_key template 
-			buildEndKeySucceed =  buildKeyTemplate(this->keyTemplate_[1],(unsigned char *)end_key_->key,end_key_->length,active_index,isFullKeyEnd,allNullsEnd);
+			if ( ! eq_range_) {
+				buildKeySucceed =  buildKeyTemplate(this->keyTemplate_[1],(unsigned char *)end_key_->key,end_key_->length,active_index,isFullKeyEnd,allNulls);
+				direction = ( unsigned char ) SdbKeySearchDirectionTranslation[ end_key_->flag ][ 0 ];
+				keyIndex = 1;
+			}
+
 			// if search for nulls range (i.e != NULL) ignore the prefetch - for now - speical case - add later 
-			if ( buildEndKeySucceed  && !allNullsEnd )
+			if ( buildKeySucceed  && !allNulls )
 			{
 				// define the range 
-				SDBDefineQueryRangeKey(sdbQueryMgrId_, sdbDbId_, sdbDesignatorId_,this->keyTemplate_[1]);
-			}
-			else
-			{
-				use_prefetch_ = false;
+				SDBDefineQueryRangeKey( sdbQueryMgrId_, sdbDbId_, sdbDesignatorId_, this->keyTemplate_[ keyIndex ], ( end_key_ ? direction : 0 ) );	// direction is meaningful here
+				//	only if there is an end key
+				use_prefetch  = true;
 			}
 		}
 	}
-	// 4b. set the query cursor 
-	retValue = SDBPrepareQuery(sdbUserId_, sdbQueryMgrId_, sdbPartitionId_, ((THD*) ha_thd())->query_id, releaseLocksAfterRead_, sdbCommandType_,find_flag == HA_READ_KEY_EXACT && isFullKey && !use_prefetch_, rowTemplate_,use_prefetch_);
+
+	// 4b. streaming table corrections
+	if ( SDBIsStreamingTable(sdbDbId_, sdbTableNumber_) )
+	{
+		// streaming table indices do not use prefetch - only trie indices do
+		use_prefetch  = false;
+
+		if (active_index == table->s->primary_key ) {
+			// on streaming table the streaming_key is the single key_part that is indexed 
+			// therefore the  key is always full 
+			isFullKey = true;
+		}
+	}
+
+
+#ifdef _STREAMING_RANGE_DELETE
+	if(sdbCommandType_ == SDB_COMMAND_DELETE &&  SDBIsStreamingTable(sdbDbId_, sdbTableNumber_) && SDBIsDimensionTable(sdbDbId_, sdbTableNumber_)==false)
+	{
+		unsigned long long delete_key;
+		unsigned short columnNumber =0;
+		bool delete_all=false;
+
+		isIndexedQuery_			= false;
+
+		retValue				= iSstreamingRangeDeleteSupported(&delete_key,&columnNumber,&delete_all);
+
+		if (retValue!=SUCCESS)
+		{
+			//this type of delete not supported so fail
+			return retValue;
+		}
+	}
+#endif
+	
+	// 4c. set the query cursor 
+	retValue					= SDBPrepareQuery( sdbUserId_, sdbQueryMgrId_, sdbPartitionId_, ( ( THD* ) ha_thd() )->query_id,
+												   releaseLocksAfterRead_, sdbCommandType_,
+												   find_flag == HA_READ_KEY_EXACT && isFullKey && !use_prefetch,
+												   rowTemplate_, use_prefetch, conditionString_, conditionStringLength_, analyticsString_, analyticsStringLength_ );
+
+
+	if (temp_table){
+		// build template representing the result set - if the result set is defined by a tmp table
+		// i.e. with the group by handler.
+		buildRowTemplate(temp_table, temp_table->record[0]);
+	}
+
+	if (forceAnalytics_==true && analyticsStringLength_==0)
+	{
+		conditionStringLength_	= 0;
+		analyticsStringLength_	= 0;
+		forceAnalytics_			= false;
+		isIndexedQuery_			= false;
+		SDBSetErrorMessage( sdbUserId_, INVALID_STREAMING_OPERATION, "- force_sdb_analytics was set but not used." );
+		retValue = HA_ERR_GENERIC;
+		return retValue;
+	}
+
+	if ( conditionStringLength_ )
+	{
+		conditionStringLength_	= 0;
+	}
+
+	if ( analyticsStringLength_ )
+	{
+		analyticsStringLength_	= 0;
+	}
+
+	forceAnalytics_				= false;
+
+	if ( retValue )
+	{
+		isIndexedQuery_			= false;
+	}
 
 	return retValue;
 }
@@ -3961,11 +4459,18 @@ int ha_scaledb::index_read(uchar* buf, const uchar* key, uint key_len,
 	ha_statistic_increment(&SSV::ha_read_key_count);
 
 	// build template at the begin of scan 
-	buildRowTemplate(buf);
+	buildRowTemplate(table, buf);
+
+	if ( isQueryEvaluation() )
+	{
+		retValue	= evaluateIndexKey( key, key_len, find_flag );
+
+		DBUG_RETURN( retValue );
+	}
 
 	retValue = prepareIndexKeyQuery(key, key_len, find_flag);
 
-	if (retValue == 0) {
+	if (retValue == 0) {	
 		retValue = fetchRow(buf);
 	} else {
 		retValue = convertToMysqlErrorCode(retValue);
@@ -4114,14 +4619,16 @@ bool parse_cond_for_sdb_index(COND *cond, SimpleCondition & context )
 }
 
 
-
-
 //--------------------------------------------------------------------------------------------------
-//		Recursively postorder traverse condition tree, writing condition to string
+//	Recursively postorder traverse condition tree, writing condition to string
 //--------------------------------------------------------------------------------------------------
-bool ha_scaledb::conditionTreeToString(const COND *cond, unsigned char **buffer, unsigned short *nodeOffset, unsigned short * allocatedLength)
+bool ha_scaledb::conditionTreeToString( const COND* cond, unsigned char** buffer, unsigned int* nodeOffset, unsigned short* DBID, unsigned short* TABID )
 {
-	int tableNum = 0;
+	int				tableNum					= 0;
+	Item*			pComperandItem;
+	unsigned char*	pComperandData;
+	unsigned int	offsetComperandData;
+	int				resultExtension;
 
 	switch (cond->type())		//check what kind of node this is. Options: logical operator, comparison operator...
 	{
@@ -4129,309 +4636,3130 @@ bool ha_scaledb::conditionTreeToString(const COND *cond, unsigned char **buffer,
 		{
 			List_iterator<Item> li(*((Item_cond*) cond)->argument_list());
 			Item *item;
-			int childCount=0;
-			while ((item = li++))		//iterate through children
+			unsigned int			childCount	= 0;
+
+			while ( ( item						= li++ ) )
 			{
-				if (++childCount > 0xff){
-					return false;		// up to 255 children
+				// iterate through children
+				if ( ++childCount				> 0xffff )
+				{
+					// up to 65535 children
+					return false;
 				}
-				if (!conditionTreeToString(item, buffer, nodeOffset, allocatedLength)) {
-					return false;		// stop process
+
+				if ( !( conditionTreeToString( item, buffer, nodeOffset, DBID, TABID ) ) )
+				{
+					// stop process
+					return false;
 				}
+			}
+
+			// Extend the condition string if necessary
+			resultExtension						= checkConditionStringSize( buffer, nodeOffset, LOGIC_OP_NODE_LENGTH );
+
+			if ( resultExtension				< 0 )
+			{
+				// Extension failed
+				return false;
 			}
 
 			// All children visited. Write current node info to buffer
-			*(*buffer + *nodeOffset +  LOGIC_OP_OFFSET_CHILDCOUNT) =  (unsigned char)(childCount);	// # of children
+			*( unsigned short* )( *buffer + *nodeOffset + LOGIC_OP_OFFSET_CHILDCOUNT )	= ( unsigned short )( childCount );	// # of children
+			bool and_cond=false;
+			switch ( ( ( Item_cond* ) cond )->functype() )
+			{
+				case Item_func::COND_AND_FUNC:
+					{
+						*( *buffer + *nodeOffset + LOGIC_OP_OFFSET_OPERATION )	= SDB_PUSHDOWN_OPERATOR_AND;	// & for AND
+						and_cond=true;
+						if(rangeBounds.endSet==true && rangeBounds.endRange==0)
+						{
+							rangeBounds.endRange=*nodeOffset;
+						}
 
-			if (((Item_cond*) cond)->functype() == Item_func::COND_AND_FUNC) {
-				*(*buffer + *nodeOffset + LOGIC_OP_OFFSET_OPERATION) =  '&';	// & for AND
+						break;
+					}
+				case Item_func::COND_OR_FUNC:
+					*( *buffer + *nodeOffset + LOGIC_OP_OFFSET_OPERATION )	= SDB_PUSHDOWN_OPERATOR_OR;		// | for OR
+					break;
+				case Item_func::XOR_FUNC:
+					*( *buffer + *nodeOffset + LOGIC_OP_OFFSET_OPERATION )	= SDB_PUSHDOWN_OPERATOR_XOR;	// X for XOR
+					break;
+				default:
+					return false;		// Only parse AND and OR logical operators
 			}
-			else if (((Item_cond*) cond)->functype() == Item_func::COND_OR_FUNC) {
-				*(*buffer + *nodeOffset + LOGIC_OP_OFFSET_OPERATION) =  '|'; // | for OR
-			}
-			else if (((Item_cond*) cond)->functype() == Item_func::XOR_FUNC) {
-				*(*buffer + *nodeOffset + LOGIC_OP_OFFSET_OPERATION) =  'X';	// X for XOR
-			}
-			else {
-				return false;		// Only parse AND or OR logical operators
-			}
-			*nodeOffset += LOGIC_OP_NODE_LENGTH;
+
+			*( bool* )( *buffer + *nodeOffset + LOGIC_OP_OFFSET_IS_NEGATED )	= false;						// Operator result should not be negated
+
+			*nodeOffset						   += LOGIC_OP_NODE_LENGTH;
+
+
+
 			break;
 		}
 
 		case Item::FUNC_ITEM:		//	This node is a comparison operator such as =, >, etc.
 		{
-			if (((Item_func*) cond)->argument_count() != 2) {
-				return false;		// only parse binary "=" operators	//create maybe node
+			Field*			pField					= NULL;
+			int				countArgs				= ( ( Item_func* ) cond )->argument_count();
+			int				typeFunc				= ( ( Item_func* ) cond )->functype();
+#ifdef SDB_DEBUG
+			bool			isBetween;
+#endif
+			bool			isIn;
+			bool			isNegated;
+			bool			isSupportedOperator;
+
+			switch ( typeFunc )
+			{
+				case Item_func::BETWEEN:
+					if ( countArgs				   == 3 )
+					{
+#ifdef SDB_DEBUG
+						isBetween					= true;
+#endif
+						isNegated					= ( ( Item_func_opt_neg* ) cond )->negated;			// Meaningful only for BETWEEN and IN
+						isSupportedOperator			= true;
+					}
+					else
+					{
+#ifdef SDB_DEBUG
+						isBetween					=
+#endif
+						isNegated					=
+						isSupportedOperator			= false;
+					}
+					isIn							= false;
+					break;
+
+				case Item_func::IN_FUNC:
+					isIn							= true;
+					isNegated						= ( ( Item_func_opt_neg* ) cond )->negated;			// Meaningful only for BETWEEN and IN
+					isSupportedOperator				= true;
+#ifdef SDB_DEBUG
+					isBetween						= false;
+#endif
+					break;
+
+				case Item_func::MULT_EQUAL_FUNC:
+					return conditionMultEqToString( buffer, nodeOffset, cond );
+
+				default:
+#ifdef SDB_DEBUG
+					isBetween						=
+#endif
+					isIn							=
+					isNegated						= false;
+					isSupportedOperator				= ( ( countArgs == 2 ) ? true : false );
 			}
 
-			for (int i=0; i < 2; i++) 
+			if ( !isSupportedOperator )
+			{
+				return false;
+			}
+
+			pComperandItem							= NULL;
+			pComperandData							= NULL;
+			offsetComperandData						= 0;
+
+			for ( int i = 0; i < countArgs; i++ )
 			{
 				Item *subItem = ((Item_func*) cond)->arguments()[i];
-			
-				if ( subItem->type() == Item::FIELD_ITEM ) // only expression of type "FIELD = X" where X is a constant are parsed 
+
+				if ( !i )
 				{
-					
-					//visit field item
-					*(*buffer + *nodeOffset + ROW_DATA_OFFSET_CHILDCOUNT) =  (unsigned char)(0);	// # of children
-					
-					if ((((Item_field*)subItem)->field)->flags & 256) {
+					offsetComperandData				= *nodeOffset;
+					pComperandData					= *buffer + offsetComperandData;
+				}
+			
+				if ( subItem->type() == Item::FIELD_ITEM )
+				{
+					// Visit field item
+					pField							= ( ( Item_field* ) subItem )->field;
+
+					if ( pField->flags				& 256 )
+					{
 						return false;			//enum type--our check for satisfiability doesn't work for enums
 					}
-					switch ((((Item_field*)subItem)->field)->type())
+
+#ifdef SDB_DEBUG
+					if ( isBetween				   || isIn )
 					{
-					case MYSQL_TYPE_TINY:
-					case MYSQL_TYPE_SHORT:
-					case MYSQL_TYPE_LONG:
-					case MYSQL_TYPE_LONGLONG:
-						*(*buffer + *nodeOffset + ROW_DATA_OFFSET_ROW_TYPE) =  'I';	// I for Int (row)
-						break;
-					case MYSQL_TYPE_STRING:
-						*(*buffer + *nodeOffset + ROW_DATA_OFFSET_ROW_TYPE) =  'C';	// C for Char string (row)
-						break;
-					case MYSQL_TYPE_DOUBLE:
-					case MYSQL_TYPE_DECIMAL:
-					case MYSQL_TYPE_FLOAT:
-						*(*buffer + *nodeOffset + ROW_DATA_OFFSET_ROW_TYPE) =  'F';	// F for Float (row)
-						break;
+						if ( i )
+						{
+							// Field operand should be first
+							SDBTerminateEngine( -1, "Unexpected ordering of operands", __FILE__, __LINE__ );
+						}
+					}
+#endif
 
-					case MYSQL_TYPE_DATE:
-						*(*buffer + *nodeOffset + ROW_DATA_OFFSET_ROW_TYPE) =  'D';	// D for Date (row)
-						break;
-					case MYSQL_TYPE_TIME:
-						*(*buffer + *nodeOffset + ROW_DATA_OFFSET_ROW_TYPE) =  'T';	// T for Time (row)
-						break;
-					case MYSQL_TYPE_DATETIME:
-						*(*buffer + *nodeOffset + ROW_DATA_OFFSET_ROW_TYPE) =  'A';	// A for DateTime (row)
-						break;
-					case MYSQL_TYPE_YEAR:
-						*(*buffer + *nodeOffset + ROW_DATA_OFFSET_ROW_TYPE) =  'Y';	// Y for Year (row)
-						break;
-					case MYSQL_TYPE_TIMESTAMP:
-						*(*buffer + *nodeOffset + ROW_DATA_OFFSET_ROW_TYPE) =  'S';	// S for timeStamp (row)
-						break;
-						
-					case MYSQL_TYPE_VARCHAR:
-					case MYSQL_TYPE_VAR_STRING:
-					default:
-						*(*buffer + *nodeOffset + ROW_DATA_OFFSET_ROW_TYPE) =  'U';	// U for unknown (row)
-						break;
+					if ( typeFunc				   == Item_func::UNKNOWN_FUNC )
+					{
+						// Determine the function type from the function name
+						switch ( *( ( Item_func_bit* ) cond )->func_name() )
+						{
+							case '&':
+								typeFunc			= Item_func::COND_AND_FUNC;
+								break;
+							case '|':
+								typeFunc			= Item_func::COND_OR_FUNC;
+								break;
+							case '^':
+								typeFunc			= Item_func::XOR_FUNC;
+								break;
+							default:
+								return false;
+						}
 					}
 
-					char* databaseName = SDBUtilDuplicateString((char *)((Item_ident *)subItem)->db_name);
-					unsigned short dbId = SDBGetDatabaseNumberByName(sdbUserId_, databaseName );
-					FREE_MEMORY(databaseName);
-					unsigned short tableNumber = SDBGetTableNumberByName(sdbUserId_, dbId, (((Item_ident *)subItem)->table_name) );
-					if (!tableNumber) {
-						return false;			//This seems to happen when the table is renamed
+					// Append the column item to the condition string
+					if ( !( conditionFieldToString( buffer, nodeOffset, subItem, pComperandItem, &offsetComperandData,
+													countArgs, typeFunc, DBID, TABID ) ) )
+					{
+						return false;
 					}
-					if (tableNum && tableNumber != tableNum) {
-						return false;			//This means we are attempting to compare data from two different tables--this can cause problems (e.g. if the tables are stored on different CAS's)
-					}
-					tableNum = tableNumber;
 
-					unsigned short columnNumber = SDBGetColumnNumberByName(dbId, tableNumber, (((Item_ident *)subItem)->field_name) );
-					//unsigned char CCCC = SDBGetColumnTypeByNumber(dbId, tableNumber, columnNumber); 
-
-					//Write row data info to string
-					*(unsigned short *)(*buffer + *nodeOffset + ROW_DATA_OFFSET_DATABASE_NUMBER) = dbId;
-					*(unsigned short *)(*buffer + *nodeOffset + ROW_DATA_OFFSET_TABLE_NUMBER) = tableNumber;
-					*(unsigned short *)(*buffer + *nodeOffset + ROW_DATA_OFFSET_COLUMN_OFFSET) = SDBGetColumnOffsetByNumber(dbId, tableNumber, columnNumber);
-					*(unsigned short *)(*buffer + *nodeOffset + ROW_DATA_OFFSET_COLUMN_SIZE) = SDBGetColumnSizeByNumber(dbId, tableNumber, columnNumber);
-					*nodeOffset += ROW_DATA_NODE_LENGTH;
 					//end visit field item
 				}
 
 				else 
 				{
-					//visit user data item
-					*(*buffer + *nodeOffset + USER_DATA_OFFSET_CHILDCOUNT) =  (unsigned char)(0); // # of children
-					switch (subItem->type()) 
+					// Visit user data item
+					//	Append the constant value item to the condition string
+					if ( !( conditionConstantToString( buffer, nodeOffset, subItem, pComperandItem, &offsetComperandData ) ) )
 					{
-						case Item::INT_ITEM:
-						{
-							*(*buffer + *nodeOffset + USER_DATA_OFFSET_DATA_TYPE) =  (unsigned char)('i'); //	i for int (user)
-							*(*buffer + *nodeOffset + USER_DATA_OFFSET_DATA_SIZE) =  (unsigned char)(8); //size in bytes of int
-							*((long long *)(*buffer + *nodeOffset + USER_DATA_OFFSET_USER_DATA)) = (long long)((Item_int *)subItem)->value;
-							*nodeOffset += USER_DATA_OFFSET_USER_DATA + 8;
-							break;
-						}
-						case Item::DECIMAL_ITEM:
-						case Item::REAL_ITEM:
-						{	
-
-							*(*buffer + *nodeOffset + USER_DATA_OFFSET_DATA_TYPE) =  (unsigned char)('f');		// f for float (user)
-							*(*buffer + *nodeOffset + USER_DATA_OFFSET_DATA_SIZE) =  (unsigned char)(8); // size in bytes of double
-							*((double *)(*buffer + *nodeOffset + USER_DATA_OFFSET_USER_DATA)) = (double)((Item_decimal *)subItem)->val_real();
-							(*nodeOffset) += USER_DATA_OFFSET_USER_DATA + 8;
-							break;
-						}
-						case Item::STRING_ITEM:	
-						{
-							*(*buffer + *nodeOffset + USER_DATA_OFFSET_DATA_TYPE) =  (unsigned char)('c');		// c for char string (user)
-							unsigned short stringSize = (((Item_int *)subItem)->str_value).length();	//length of user data
-							*(*buffer + *nodeOffset + USER_DATA_OFFSET_DATA_SIZE) =  (unsigned char)(stringSize);
-							if (stringSize > 255) {	//	255 max string length since size is stored as 1 byte
-								return false;		
-							}
-
-							//Since string is variable size, we must check if a realloc is needed now
-							if (stringSize + *nodeOffset + 128 >= *allocatedLength)
-							{
-								unsigned char * temp = (unsigned char *)realloc(*buffer, *allocatedLength + 256);
-								if (temp == NULL) {
-									return false;		//realloc failed
-								}
-								else {
-									*buffer = temp;
-									*allocatedLength += 256;
-								}
-							}
-
-							memcpy(*buffer + *nodeOffset + USER_DATA_OFFSET_USER_DATA, ((*subItem).str_value).ptr(), stringSize);	//copy user data to string
-							(*nodeOffset) += USER_DATA_OFFSET_USER_DATA + stringSize;		//increment the length of condition string accordingly
-							break;
-						}
-						case Item::CACHE_ITEM:		//negative int or double
-						{	
-							int CHECK = ((Item_cache_decimal *)subItem)->field_type();
-							if ((((Item_cache_decimal *)subItem)->field_type()) == MYSQL_TYPE_NEWDECIMAL)	//	negative double
-							{
-								*(*buffer + *nodeOffset + USER_DATA_OFFSET_DATA_TYPE) =  (unsigned char)('f');
-								*(*buffer + *nodeOffset + USER_DATA_OFFSET_DATA_SIZE) =  (unsigned char)(8); // size in bytes of double
-								*((double *)(*buffer + *nodeOffset + USER_DATA_OFFSET_USER_DATA)) = (double)((Item_cache_decimal *)subItem)->val_real();
-								(*nodeOffset) += USER_DATA_OFFSET_USER_DATA + 8;
-							}
-							else if (true)				//change to make sure it's int. 
-							{		//negative int
-								*(*buffer + *nodeOffset + USER_DATA_OFFSET_DATA_TYPE) =  (unsigned char)('i');
-								*(*buffer + *nodeOffset + USER_DATA_OFFSET_DATA_SIZE) =  (unsigned char)(8); // size in bytes of int
-								*((long long *)(*buffer + *nodeOffset + USER_DATA_OFFSET_USER_DATA)) = (long long)((Item_cache_int *)subItem)->val_int();
-								(*nodeOffset) += USER_DATA_OFFSET_USER_DATA + 8;
-							}
-							break;
-						}
-
-						default:
-						{
-							*(*buffer + *nodeOffset + USER_DATA_OFFSET_DATA_TYPE) =  (unsigned char)('u');		// u for unknown (user)
-							(*nodeOffset) += USER_DATA_OFFSET_DATA_TYPE;
-							break;
-						}
+						return false;
 					}
+
 					//end visit user data item
+				}
+
+				if ( !i )
+				{
+					pComperandItem					= subItem;
+					pComperandData					= *buffer + offsetComperandData;
+				}
+			}
+
+			// Extend the condition string if necessary
+			resultExtension							= checkConditionStringSize( buffer, nodeOffset, COMP_OP_NODE_LENGTH );
+
+			if ( resultExtension					< 0 )
+			{
+				// Extension failed
+				return false;
+			}
+			if ( resultExtension )
+			{
+				// Condition string was extended
+				if ( offsetComperandData )
+				{
+					pComperandData					= *buffer + offsetComperandData;
 				}
 			}
 
 			//Children visited. Write current node info to buffer
-			*(*buffer + *nodeOffset + COMP_OP_OFFSET_CHILDCOUNT) =  (unsigned char)(2);	//# of children
-
-			switch (((Item_func*) cond)->functype())
+			*( unsigned short* )( *buffer + *nodeOffset + COMP_OP_OFFSET_CHILDCOUNT )	= ( unsigned short )( countArgs );			// # of children
+			bool between_end=false;
+			switch ( typeFunc )
 			{
-
 				case Item_func::EQ_FUNC:
-					*(*buffer + *nodeOffset + COMP_OP_OFFSET_OPERATION) =  (unsigned char)('=');
+					*( *buffer + *nodeOffset + COMP_OP_OFFSET_OPERATION )	= ( unsigned char )( SDB_PUSHDOWN_OPERATOR_EQ );
 					break;
 				case Item_func::LE_FUNC:
-					*(*buffer + *nodeOffset + COMP_OP_OFFSET_OPERATION) =  (unsigned char)('{'); // This represents <=
+					*( *buffer + *nodeOffset + COMP_OP_OFFSET_OPERATION )	= ( unsigned char )( SDB_PUSHDOWN_OPERATOR_LE );		// This represents <=
 					break;
 				case Item_func::GE_FUNC:
-					*(*buffer + *nodeOffset + COMP_OP_OFFSET_OPERATION) =  (unsigned char)('}'); // This represents >=
+					*( *buffer + *nodeOffset + COMP_OP_OFFSET_OPERATION )	= ( unsigned char )( SDB_PUSHDOWN_OPERATOR_GE );		// This represents >=
 					break;
 				case Item_func::LT_FUNC:
-					*(*buffer + *nodeOffset + COMP_OP_OFFSET_OPERATION) =  (unsigned char)('<');
+					*( *buffer + *nodeOffset + COMP_OP_OFFSET_OPERATION )	= ( unsigned char )( SDB_PUSHDOWN_OPERATOR_LT );
 					break;
 				case Item_func::GT_FUNC:
-					*(*buffer + *nodeOffset + COMP_OP_OFFSET_OPERATION) =  (unsigned char)('>');
+					*( *buffer + *nodeOffset + COMP_OP_OFFSET_OPERATION )	= ( unsigned char )( SDB_PUSHDOWN_OPERATOR_GT );
 					break;
 				case Item_func::NE_FUNC:
-					*(*buffer + *nodeOffset + COMP_OP_OFFSET_OPERATION) =  (unsigned char)('!'); // This represents !=
+					*( *buffer + *nodeOffset + COMP_OP_OFFSET_OPERATION )	= ( unsigned char )( SDB_PUSHDOWN_OPERATOR_NE );		// This represents !=
+					break;
+				case Item_func::BETWEEN:
+					{
+						between_end=true;
+					*( *buffer + *nodeOffset + COMP_OP_OFFSET_OPERATION )	= ( unsigned char )( SDB_PUSHDOWN_OPERATOR_BETWEEN );	// This represents BETWEEN
+					break;
+					}
+				case Item_func::IN_FUNC:
+					*( *buffer + *nodeOffset + COMP_OP_OFFSET_OPERATION )	= ( unsigned char )( SDB_PUSHDOWN_OPERATOR_IN );		// This represents IN
+						break;
+				case Item_func::COND_AND_FUNC:
+					*( *buffer + *nodeOffset + LOGIC_OP_OFFSET_OPERATION )	= SDB_PUSHDOWN_OPERATOR_BITWISE_AND;					// Bitwise AND
+					break;
+				case Item_func::COND_OR_FUNC:
+					*( *buffer + *nodeOffset + LOGIC_OP_OFFSET_OPERATION )	= SDB_PUSHDOWN_OPERATOR_BITWISE_OR;						// Bitwise OR
+					break;
+				case Item_func::XOR_FUNC:
+					*( *buffer + *nodeOffset + LOGIC_OP_OFFSET_OPERATION )	= SDB_PUSHDOWN_OPERATOR_BITWISE_XOR;					// Bitwise XOR
 					break;
 				default:
-					*(*buffer + *nodeOffset + COMP_OP_OFFSET_OPERATION) =  (unsigned char)('?'); // This represents unknown operator
-					return false;		//once unkown operator code is complete, don't return false here
-					break;
+					*( *buffer + *nodeOffset + COMP_OP_OFFSET_OPERATION )	= ( unsigned char )( SDB_PUSHDOWN_UNKNOWN );			// Unsupported operator
+					return false;
 			}
 
-			*nodeOffset += COMP_OP_NODE_LENGTH;
+			*( bool* )( *buffer + *nodeOffset + COMP_OP_OFFSET_IS_NEGATED )	= isNegated;											// Operator result should [not] be negated
+
+			*nodeOffset							   += COMP_OP_NODE_LENGTH;
 			// end visit operator
+			if(between_end)
+			{				
+				if(rangeBounds.endSet==true)
+				{
+					//have already found the end range, can't be multiple end ranges so fail.
+					rangeBounds.valid=false;
+				}
+				else
+				{
+					//must be the end of range.
+					rangeBounds.valid=true;
+					rangeBounds.endSet=true;		
+					rangeBounds.endRange=*nodeOffset;
+				}
+			}
+
 			break;
 		}
+
 		default:
 		{
 			return false;	//Only parse operator nodes
 		}
 	}
 
-
-	// reallocate the buffer if neccesarry
-	if (*nodeOffset + 128 >= *allocatedLength)	//If we have less than 128 allocated bytes left, allocate next 256
-	{
-		if (*allocatedLength > 2048) {
-			return false;		//maximum buffer length
-		}
-		else {
-			unsigned char * temp = (unsigned char *)realloc(*buffer, *allocatedLength + 256);
-			if (temp == NULL) {
-				return false;		//realloc failed
-			}
-			else {
-				*buffer = temp;
-				*allocatedLength += 256;
-			}
-		}
-	}
-	return (true);
+	return true;
 }
+
 
 //--------------------------------------------------------------------------------------------------
-//Set up variables and call conditionTreeToString, which represents MYSQL pushed condition as a string to be sent to CAS
-//---------------------------------------------------------------------------------------------------------
+//	Add a converted MULT_EQUAL condition item to a condition string
+//--------------------------------------------------------------------------------------------------
+bool ha_scaledb::conditionMultEqToString( unsigned char** pCondString, unsigned int* pCondOffset, const COND* pCondMultEq )
+{
+	// MULT_EQUAL is a list of items in which the first item is a constant and the remaining items are fields
+	unsigned short				dbId			= 0;
+	unsigned short				tableId			= 0;
+	unsigned short				countEqs		= 0;
+	Item_equal*					pItemEqual		= ( Item_equal* ) pCondMultEq;
+	Item*						pItem			= pItemEqual->get_const();
+	Item_equal_fields_iterator	it( *pItemEqual );
+	Item*						pFieldItem;
+	Item*						pConstItem;
+	unsigned int				offsetFieldData;
+	unsigned int				offsetConstData;
+	int							resultExtension;
 
-void ha_scaledb::saveConditionToString(const COND *cond)
-{	
-	conditionStringLength_ = 0;
-	if (!conditionTreeToString(cond, &conditionString_, &conditionStringLength_, &condStringAllocatedLength_)) {
-		conditionStringLength_ = 0;
+	if ( !pItem )
+	{
+		pItem									= it++;
 	}
 
-#ifdef CONDITION_PUSH_DEBUG
+	// First item is always the constant item
+	pConstItem									= pItem;
+	offsetConstData								= *pCondOffset;
+
+	// Convert the list into FIELD1 = CONSTANT  OR  FIELD2 = CONSTANT  OR ...
+	while ( ( pItem								= it++ ) )
+	{
+		// Add an EQ comparison with one constant operand and one field operand in postorder
+		pFieldItem								= pItem;
+		offsetFieldData							= *pCondOffset;
+
+		// Add the field operand
+		if ( !( conditionFieldToString( pCondString, pCondOffset, pFieldItem, NULL, NULL, 2, Item_func::EQ_FUNC, &dbId, &tableId ) ) )
+		{
+			return false;
+		}
+
+		//	Add the constant operand
+		offsetConstData							= *pCondOffset;
+		if ( !( conditionConstantToString( pCondString, pCondOffset, pConstItem, pFieldItem, &offsetFieldData ) ) )
+		{
+			return false;
+		}
+
+		// Extend the condition string if necessary
+		resultExtension							= checkConditionStringSize( pCondString, pCondOffset, COMP_OP_NODE_LENGTH );
+
+		if ( resultExtension					< 0 )
+		{
+			// Extension failed
+			return false;
+		}
+		
+		// Add the EQ operator
+		*( unsigned short* )( *pCondString + *pCondOffset + COMP_OP_OFFSET_CHILDCOUNT )		= ( unsigned short )( 2 );							// # of children
+		*( *pCondString + *pCondOffset + COMP_OP_OFFSET_OPERATION )							= ( unsigned char  )( SDB_PUSHDOWN_OPERATOR_EQ );	// Operator =
+		*( bool* )( *pCondString + *pCondOffset + COMP_OP_OFFSET_IS_NEGATED )				= false;											// Result should not be negated
+		*pCondOffset																	   += COMP_OP_NODE_LENGTH;
+		countEqs++;
+	}
+
+	if ( countEqs								> 1 )
+	{
+		// Extend the condition string if necessary
+		resultExtension							= checkConditionStringSize( pCondString, pCondOffset, LOGIC_OP_NODE_LENGTH );
+
+		if ( resultExtension					< 0 )
+		{
+			// Extension failed
+			return false;
+		}
+
+		// Add an OR operator
+		*( unsigned short* )( *pCondString + *pCondOffset + LOGIC_OP_OFFSET_CHILDCOUNT )	= ( unsigned short )( countEqs );					// # of children
+		*( *pCondString + *pCondOffset + LOGIC_OP_OFFSET_OPERATION )						= SDB_PUSHDOWN_OPERATOR_OR;							// Operator OR
+		*( bool* )( *pCondString + *pCondOffset + LOGIC_OP_OFFSET_IS_NEGATED )				= false;											// Result should not be negated
+		*pCondOffset																	   += LOGIC_OP_NODE_LENGTH;
+	}
+
+	return true;
+}
+
+
+//--------------------------------------------------------------------------------------------------
+//	Add a table column field item to a condition string
+//--------------------------------------------------------------------------------------------------
+bool ha_scaledb::conditionFieldToString( unsigned char** pCondString, unsigned int* pItemOffset, Item* pFieldItem,
+										 Item* pComperandItem, unsigned int* pComperandDataOffset,
+										 unsigned short countArgs, int typeFunc, unsigned short* pDbId, unsigned short* pTableId )
+{
+	unsigned char*	pComperandData	= ( pComperandDataOffset ? ( *pCondString + *pComperandDataOffset ) : NULL );
+	unsigned char*	pColumnData;
+	int				resultExtension;
+	int				fieldType;
+#ifdef	SDB_DEBUG
+	bool			isBetween;
+#endif
+	bool			isIn;
+
+	// Extend the condition string if necessary
+	resultExtension					= checkConditionStringSize( pCondString, pItemOffset, ROW_DATA_NODE_LENGTH );
+
+	if ( resultExtension			< 0 )
+	{
+		// Extension failed
+		return false;
+	}
+	if ( resultExtension )
+	{
+		// Condition string was extended
+		if ( pComperandDataOffset )
+		{
+			pComperandData			= *pCondString + *pComperandDataOffset;
+		}
+	}
+
+	switch ( typeFunc )
+	{
+		case Item_func::BETWEEN:
+#ifdef	SDB_DEBUG
+			isBetween				= true;
+#endif
+			isIn					= false;
+			break;
+		case Item_func::IN_FUNC:
+#ifdef	SDB_DEBUG
+			isBetween				= false;
+#endif
+			isIn					= true;
+			break;
+		default:
+#ifdef	SDB_DEBUG
+			isBetween				=
+#endif
+			isIn					= false;
+	}
+
+	if ( isIn )
+	{
+		*( unsigned short* )( *pCondString + *pItemOffset + ROW_DATA_OFFSET_CHILDCOUNT )	= ( unsigned short )( countArgs );	// # of children of the IN operator
+	}
 	else
 	{
-		printMYSQLConditionBuffer(conditionString_, conditionStringLength_);
+		*( unsigned short* )( *pCondString + *pItemOffset + ROW_DATA_OFFSET_CHILDCOUNT )	= ( unsigned short )( 0 );			// # of children of the row data
 	}
-#endif	//CONDITION_PUSH_DEBUG
+
+	pColumnData						= *pCondString + *pItemOffset;
+
+	// Fetch the database, table and column metadata
+	char*			databaseName	= SDBUtilDuplicateString( ( char* )( ( Item_ident* ) pFieldItem )->db_name );
+	unsigned short	dbId			= SDBGetDatabaseNumberByName( sdbUserId_, databaseName );
+
+	FREE_MEMORY( databaseName );
+
+	if ( ( *pDbId )				   && ( *pDbId != dbId ) )
+	{
+		// We do not support a WHERE clause on multiple databases
+		return false;
+	}
+
+	unsigned short	tableId			= SDBGetTableNumberByName( sdbUserId_, dbId, ( ( ( Item_ident* ) pFieldItem )->table_name ) );
+
+	if ( !tableId )
+	{
+		return false;				// This seems to happen when the table is renamed
+	}
+
+	if ( ( *pTableId )			   && ( *pTableId != tableId ) )
+	{
+		// We do not support a WHERE clause on multiple tables
+		return false;
+	}
+
+	unsigned short	columnId		= SDBGetColumnNumberByName( dbId, tableId, ( ( ( Item_ident* ) pFieldItem )->field_name ) );
+
+	if ( !columnId )
+	{
+		return false;
+	}
+
+	if(SDBGetRangeKeyFieldID(sdbDbId(),  sdbTableNumber())==columnId)
+	{
+		//this is the start of a range specification
+		if(rangeBounds.startSet==false)
+		{	
+			rangeBounds.startSet=true;		
+			rangeBounds.startRange=*pItemOffset;
+		}
+		else
+		{
+			if(rangeBounds.endSet==true)
+			{
+				//have already found the end range, can't be multiple end ranges so fail.
+				rangeBounds.valid=false;
+			}
+			else
+			{
+			//must be the end of range.
+				rangeBounds.valid=true;
+				rangeBounds.endSet=true;
+			
+			}
+		}
+	}
+	else
+	{
+		if(rangeBounds.startSet==true && rangeBounds.endSet==false)
+		{
+			//a start range has been found, but no end range set yet, and looking at a differnt field so fail
+			rangeBounds.valid=false;
+		}
+
+	}
+	
+
+
+	unsigned short	columnSize		= SDBGetColumnSizeByNumber( dbId, tableId, columnId );
+	//unsigned char	columnType		= SDBGetColumnTypeByNumber( dbId, tableId, columnId );
+	unsigned short	columnOffset	= SDBGetColumnOffsetByNumber( dbId, tableId, columnId );
+
+	fieldType						= ( ( ( Item_field* ) pFieldItem )->field )->type();
+
+	switch ( fieldType )
+	{
+		case MYSQL_TYPE_TINY:
+		case MYSQL_TYPE_SHORT:
+		case MYSQL_TYPE_INT24:
+		case MYSQL_TYPE_LONG:
+		case MYSQL_TYPE_LONGLONG:
+			if ( ( ( ( Item_field* ) pFieldItem )->field )->flags	& UNSIGNED_FLAG )
+			{
+				*( *pCondString + *pItemOffset + ROW_DATA_OFFSET_ROW_TYPE )	=  SDB_PUSHDOWN_COLUMN_DATA_TYPE_UNSIGNED_INTEGER;	// unsigned int (row)
+			}
+			else
+			{
+				*( *pCondString + *pItemOffset + ROW_DATA_OFFSET_ROW_TYPE )	=  SDB_PUSHDOWN_COLUMN_DATA_TYPE_SIGNED_INTEGER;	//   signed int (row)
+			}
+			break;
+
+		case MYSQL_TYPE_BIT:
+			*( *pCondString + *pItemOffset + ROW_DATA_OFFSET_ROW_TYPE )		= SDB_PUSHDOWN_COLUMN_DATA_TYPE_BIT;				// bit (row)
+			break;
+
+		case MYSQL_TYPE_STRING:
+			*( *pCondString + *pItemOffset + ROW_DATA_OFFSET_ROW_TYPE )		= SDB_PUSHDOWN_COLUMN_DATA_TYPE_CHAR;				// char string (row)
+			break;
+
+		case MYSQL_TYPE_DOUBLE:
+		case MYSQL_TYPE_FLOAT:
+			*( *pCondString + *pItemOffset + ROW_DATA_OFFSET_ROW_TYPE )		= SDB_PUSHDOWN_COLUMN_DATA_TYPE_FLOAT;				// float (row)
+			break;
+
+		case MYSQL_TYPE_DECIMAL:
+		case MYSQL_TYPE_NEWDECIMAL:
+			*( *pCondString + *pItemOffset + ROW_DATA_OFFSET_ROW_TYPE )		= SDB_PUSHDOWN_COLUMN_DATA_TYPE_DECIMAL;			// binary decimal (row)
+			break;
+
+		case MYSQL_TYPE_DATE:
+		case MYSQL_TYPE_NEWDATE:
+			*( *pCondString + *pItemOffset + ROW_DATA_OFFSET_ROW_TYPE )		= SDB_PUSHDOWN_COLUMN_DATA_TYPE_DATE;				// date (row)
+			break;
+
+		case MYSQL_TYPE_TIME:
+			*( *pCondString + *pItemOffset + ROW_DATA_OFFSET_ROW_TYPE )		= SDB_PUSHDOWN_COLUMN_DATA_TYPE_TIME;				// time (row)
+			break;
+
+		case MYSQL_TYPE_DATETIME:
+			*( *pCondString + *pItemOffset + ROW_DATA_OFFSET_ROW_TYPE )		= SDB_PUSHDOWN_COLUMN_DATA_TYPE_DATETIME;			// datetime (row)
+			break;
+
+		case MYSQL_TYPE_YEAR:
+			*( *pCondString + *pItemOffset + ROW_DATA_OFFSET_ROW_TYPE )		= SDB_PUSHDOWN_COLUMN_DATA_TYPE_YEAR;				// year (row)
+			break;
+
+		case MYSQL_TYPE_TIMESTAMP:
+			*( *pCondString + *pItemOffset + ROW_DATA_OFFSET_ROW_TYPE )		= SDB_PUSHDOWN_COLUMN_DATA_TYPE_TIMESTAMP;			// timestamp (row)
+			break;
+
+		case MYSQL_TYPE_VARCHAR:
+		case MYSQL_TYPE_VAR_STRING:
+		default:
+			*( *pCondString + *pItemOffset + ROW_DATA_OFFSET_ROW_TYPE )		= SDB_PUSHDOWN_UNKNOWN;								// unknown (row)
+			return false;
+	}
+
+	*pDbId																					= dbId;
+	*pTableId																				= tableId;
+
+	// Write field (row) data info to string
+	*( unsigned short* )( *pCondString + *pItemOffset + ROW_DATA_OFFSET_DATABASE_NUMBER )	= dbId;
+	*( unsigned short* )( *pCondString + *pItemOffset + ROW_DATA_OFFSET_TABLE_NUMBER )		= tableId;
+	*( unsigned short* )( *pCondString + *pItemOffset + ROW_DATA_OFFSET_COLUMN_NUMBER )		= columnId;
+	*( unsigned short* )( *pCondString + *pItemOffset + ROW_DATA_OFFSET_COLUMN_OFFSET )		= columnOffset;
+	*( unsigned short* )( *pCondString + *pItemOffset + ROW_DATA_OFFSET_COLUMN_SIZE )		= columnSize;
+
+	switch ( fieldType )
+	{
+		case MYSQL_TYPE_STRING:
+			break;
+
+		default:
+			if ( columnSize			> sizeof( long long ) )
+			{
+				return false;
+			}
+	}
+
+	// Patch the comperand entry
+	switch ( fieldType )
+	{
+		case MYSQL_TYPE_TINY:
+		case MYSQL_TYPE_SHORT:
+		case MYSQL_TYPE_INT24:
+		case MYSQL_TYPE_LONG:
+		case MYSQL_TYPE_LONGLONG:
+			if ( pComperandItem )
+			{
+				Item_field*			pField			= ( pFieldItem->with_field ? ( ( Item_field* ) pFieldItem ) : NULL );
+				Item_field*			pComperandField	= ( pComperandItem->with_field ? ( ( Item_field* ) pComperandItem ) : NULL );
+				unsigned char*		pType			= ( unsigned char* )( pComperandData + USER_DATA_OFFSET_DATA_TYPE );
+				unsigned char*		pValue			= ( unsigned char* )( pComperandData + USER_DATA_OFFSET_USER_DATA );
+
+				if ( ( pField			&& ( pField->field->flags & UNSIGNED_FLAG ) ) ||
+						( pComperandField	&& ( ( ( Item_field* ) pComperandItem )->field )->flags	& UNSIGNED_FLAG ) )
+				{
+					*pType								= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_UNSIGNED_INTEGER );
+					*( unsigned long long* ) pValue		= ( unsigned long long )( ( Item_int* ) pComperandItem )->value;
+				}
+			}
+			break;
+
+		case MYSQL_TYPE_DECIMAL:
+		case MYSQL_TYPE_NEWDECIMAL:
+			if ( pComperandItem )
+			{
+				my_decimal			dValue;
+
+				Item_field*			pField			= ( Item_field* ) pFieldItem;
+				my_decimal*			pValue			= ( my_decimal* )( ( Item_decimal* ) pComperandItem )->val_decimal( &dValue );
+				unsigned char*		pType			= ( unsigned char* )( pComperandData + USER_DATA_OFFSET_DATA_TYPE );
+				unsigned char*		pBinary			= ( unsigned char* )( pComperandData + USER_DATA_OFFSET_USER_DATA );
+				int					iPrecision		= pField->decimal_precision();
+				int					iScale			= pField->decimals;
+				int					iLength			= *( unsigned short* )( *pCondString + *pItemOffset + ROW_DATA_OFFSET_COLUMN_SIZE );
+
+				if ( iLength						> sizeof( long long ) )
+				{
+					// Decimal values longer than 8 bytes are not yet supported
+					return false;
+				}
+
+				memset( pBinary, '\0', sizeof( long long ) );
+
+				int					retValue		= my_decimal2binary( E_DEC_FATAL_ERROR & ~E_DEC_OVERFLOW,
+																		 pValue, pBinary, iPrecision, iScale );
+
+				if ( retValue )
+				{
+					return false;
+				}
+
+				*pType								= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_DECIMAL );
+			}
+			break;
+
+		case MYSQL_TYPE_TIMESTAMP:
+		case MYSQL_TYPE_TIME:
+		case MYSQL_TYPE_DATE:
+		case MYSQL_TYPE_NEWDATE:
+		case MYSQL_TYPE_DATETIME:
+		case MYSQL_TYPE_YEAR:
+		{
+			if ( pComperandItem )
+			{
+				if ( pComperandItem->type()		   == Item::INT_ITEM )
+				{
+					switch ( fieldType )
+					{
+						case MYSQL_TYPE_TIMESTAMP:
+							*( pComperandData + USER_DATA_OFFSET_DATA_TYPE )	= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_TIMESTAMP );
+							break;
+						case MYSQL_TYPE_DATETIME:
+							*( pComperandData + USER_DATA_OFFSET_DATA_TYPE )	= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_DATETIME );
+							break;
+						case MYSQL_TYPE_TIME:
+							*( pComperandData + USER_DATA_OFFSET_DATA_TYPE )	= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_TIME );
+							break;
+						default:
+							if ( fieldType		   == MYSQL_TYPE_YEAR )
+							{
+								// Convert the comperand year value to its stored format
+								long long	lValue	= ( ( Item_int* ) pComperandItem )->value;
+
+								*( ( unsigned long long* )( pComperandData + USER_DATA_OFFSET_USER_DATA ) )	= ( unsigned long long ) convertYearToStoredFormat( lValue );
+							}
+							*( pComperandData + USER_DATA_OFFSET_DATA_TYPE )	= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_YEAR );
+					}
+				}
+				else
+				{
+					THD*			pMysqlThd		= ha_thd();
+					int				dataType		= ( ( ( Item_field* ) pFieldItem )->field )->type();
+					const char*		pString;
+					unsigned int	stringSize;
+					int				diffSize;
+					bool			isFromString;
+
+					if ( Item::CACHE_ITEM		   == pComperandItem->type() )
+					{
+#ifdef	_MARIA_SDB_10
+						MYSQL_TIME	myTime;
+
+						// Get the cached value as a time value
+						getTimeCachedResult( pMysqlThd, pFieldItem, dataType, &myTime );
+
+						// Convert the time value to the field's data type
+						convertTimeToType( pMysqlThd, pFieldItem, dataType, &myTime,
+										   pComperandData + USER_DATA_OFFSET_DATA_TYPE,
+										   pComperandData + USER_DATA_OFFSET_USER_DATA );
+
+						isFromString				= false;
+#else	// MARIADB 5
+						pString						= ( ( ( Item_cache_str* ) pComperandItem )->val_str( NULL ) )->ptr();
+						stringSize					= ( ( ( Item_cache_str* ) pComperandItem )->val_str( NULL ) )->length();
+						isFromString				= true;
+#endif	// MARIADB 5
+						diffSize					= 0;
+					}
+					else if ( Item::FUNC_ITEM	   == pComperandItem->type() )
+					{
+						switch ( ( ( Item_func* ) pComperandItem )->functype() )
+						{
+							case Item_func::GUSERVAR_FUNC:
+								switch ( ( ( Item_func_get_user_var* ) pFieldItem )->result_type() )
+								{
+									case STRING_RESULT:
+										// Time string was copied to the comperand's data
+										pString			=  ( const char*    )( pComperandData + USER_DATA_OFFSET_USER_DATA );
+										stringSize		= *( unsigned char* )( pComperandData + USER_DATA_OFFSET_DATA_SIZE );
+										isFromString	= false;
+										diffSize		= ( ( int ) stringSize ) - 8;
+
+										// Convert the time string to a time value, and deposit into the condition string
+										convertTimeStringToTimeConstant( pMysqlThd, pComperandItem, pString, stringSize, dataType,
+																		 pComperandData + USER_DATA_OFFSET_DATA_TYPE,
+																		 pComperandData + USER_DATA_OFFSET_USER_DATA );
+										break;
+
+									case INT_RESULT:
+										// No further conversion is necessary
+										isFromString	= false;
+										diffSize		= 0;
+										break;
+
+									default:
+										return false;
+								}
+								break;
+
+							default:
+								return false;
+						}
+					}
+					else
+					{
+						pString						= ( ( ( Item_int* ) pComperandItem )->str_value ).ptr();
+						stringSize					= ( ( ( Item_int* ) pComperandItem )->str_value ).length();
+						isFromString				= true;
+						diffSize					= ( ( int ) stringSize ) - 8;
+					}
+
+					if ( diffSize )
+					{
+						// Move the current entry to its new position in the condition string
+						memmove( *pCondString + *pItemOffset - diffSize, *pCondString + *pItemOffset, ROW_DATA_NODE_LENGTH );
+						( *pItemOffset )			   -= diffSize;
+					}
+
+					if ( isFromString )
+					{
+						// Convert the time string to a time value, and deposit into the condition string
+						convertTimeStringToTimeConstant( pMysqlThd, pComperandItem, pString, stringSize, dataType,
+														 pComperandData + USER_DATA_OFFSET_DATA_TYPE,
+														 pComperandData + USER_DATA_OFFSET_USER_DATA );
+					}
+
+					*( pComperandData + USER_DATA_OFFSET_DATA_SIZE ) = ( unsigned char )( 8 );
+				}
+			}
+			break;
+		}
+
+		case MYSQL_TYPE_STRING:
+			if ( pComperandItem )
+			{
+				unsigned char			pFieldEntry[ ROW_DATA_NODE_LENGTH ];
+
+				// Save a copy of the field entry created above
+				memcpy( pFieldEntry, *pCondString + *pItemOffset, ROW_DATA_NODE_LENGTH );
+
+				switch ( pComperandItem->type() )
+				{
+					case Item::INT_ITEM:
+					{
+						const uint		maxStringSize( 255 );	// Maximum length of a string
+						THD*			pMysqlThd	= ha_thd();
+						unsigned int	diffSize	= maxStringSize - sizeof( long long );
+						long long		intValue	= ( ( Item_int* ) pComperandItem )->value;
+
+						*pItemOffset				= *pComperandDataOffset;
+
+						// Extend the condition string if necessary
+						resultExtension				= checkConditionStringSize( pCondString, pItemOffset, diffSize );
+
+						if ( resultExtension		< 0 )
+						{
+							// Extension failed
+							return false;
+						}
+						if ( resultExtension )
+						{
+							// Condition string was extended
+							if ( pComperandDataOffset )
+							{
+								pComperandData		= *pCondString + *pComperandDataOffset;
+							}
+						}
+
+						String			stringValue( ( char* )( *pCondString + *pItemOffset + USER_DATA_OFFSET_USER_DATA ), maxStringSize, pMysqlThd->charset() );
+						const char*		pString;
+						unsigned int	stringSize;
+
+						// Convert the integer value to a string
+						( ( Item_int* ) pComperandItem )->val_str( &stringValue );
+						pString						= stringValue.ptr();
+						stringSize					= stringValue.length();
+
+						if ( stringSize				> maxStringSize )
+						{
+							return false;
+						}
+
+						*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_TYPE )	= ( unsigned char )
+																						  ( SDB_PUSHDOWN_LITERAL_DATA_TYPE_CHAR );
+						*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_SIZE )	= ( unsigned char )( stringSize );
+						*pItemOffset												   += ( unsigned int  )( USER_DATA_OFFSET_USER_DATA + stringSize );
+						break;
+					}
+
+					default:
+						// Other types are currently unsupported
+						return false;
+				}
+
+				// Restore the field entry to its new position following the comperand entry
+				memcpy( *pCondString + *pItemOffset, pFieldEntry, ROW_DATA_NODE_LENGTH );
+			}
+			break;
+
+		case MYSQL_TYPE_DOUBLE:
+		case MYSQL_TYPE_FLOAT:
+			if ( pComperandItem )
+			{
+				// Use the floating point representation of the value
+				double				dValue			= ( ( Item_decimal* ) pComperandItem )->val_real();
+
+				*( pComperandData + USER_DATA_OFFSET_DATA_TYPE )						=  ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_FLOAT );
+				*( double* )( pComperandData + USER_DATA_OFFSET_USER_DATA )				= dValue;
+			}
+			break;
+	}
+
+	*pItemOffset				   += ROW_DATA_NODE_LENGTH;
+
+	return true;
+}
+
+
+//--------------------------------------------------------------------------------------------------
+//	Add a constant value to a condition string
+//--------------------------------------------------------------------------------------------------
+bool ha_scaledb::conditionConstantToString( unsigned char** pCondString, unsigned int* pItemOffset, Item* pConstItem, Item* pComperandItem, unsigned int* pComperandDataOffset )
+{
+	unsigned char*	pComperandData	= ( pComperandDataOffset ? ( *pCondString + *pComperandDataOffset ) : NULL );
+	int				resultExtension;
+
+	// Extend the condition string if necessary
+	resultExtension					= checkConditionStringSize( pCondString, pItemOffset, USER_DATA_OFFSET_USER_DATA + 8 );
+
+	if ( resultExtension			< 0 )
+	{
+		// Extension failed
+		return false;
+	}
+	if ( resultExtension )
+	{
+		// Condition string was extended
+		if ( pComperandDataOffset )
+		{
+			pComperandData			= *pCondString + *pComperandDataOffset;
+		}
+	}
+
+	*( unsigned short* )( *pCondString + *pItemOffset + USER_DATA_OFFSET_CHILDCOUNT )	= ( unsigned short )( 0 ); // # of children
+
+	switch ( pConstItem->type() )
+	{
+		case Item::INT_ITEM:
+		{
+			Item_field*		pField				= ( pConstItem->with_field ? ( ( Item_field* ) pConstItem )  : NULL );
+			Item_field*		pComperandField		= ( ( pComperandItem && pComperandItem->with_field )   ? ( ( Item_field* ) pComperandItem ) : NULL );
+			int				typeComperand		= ( pComperandItem ? pComperandItem->type() : 0 );
+
+			if ( typeComperand				   == Item::FUNC_ITEM )
+			{
+				// Function result is not available during query preparation
+				return false;
+			}
+
+			typeComperand						= ( pComperandField ? ( pComperandField->field )->type() : 0 );
+
+			bool			isUnsignedField		= ( pField ? ( ( pField->field->flags & UNSIGNED_FLAG )  ? true : false  ) : false );
+			bool			isUnsignedComperand	= ( ( typeComperand && pComperandField ) ?
+													( ( pComperandField->field->flags & UNSIGNED_FLAG )  ? true : false  ) : false );
+			long long		intValue			= ( ( Item_int* ) pConstItem )->value;
+
+			switch ( typeComperand )
+			{
+				case MYSQL_TYPE_STRING:
+				{
+					const uint		maxStringSize( 255 );	// Maximum length of a string
+					THD*			pMysqlThd	= ha_thd();
+					Item_field*		pField		= ( Item_field* ) pConstItem;
+
+					// Extend the condition string if necessary
+					resultExtension				= checkConditionStringSize( pCondString, pItemOffset, USER_DATA_OFFSET_USER_DATA + maxStringSize );
+
+					if ( resultExtension		< 0 )
+					{
+						// Extension failed
+						return false;
+					}
+					if ( resultExtension )
+					{
+						// Condition string was extended
+						if ( pComperandDataOffset )
+						{
+							pComperandData		= *pCondString + *pComperandDataOffset;
+						}
+					}
+
+					String			stringValue( ( char* )( *pCondString + *pItemOffset + USER_DATA_OFFSET_USER_DATA ), maxStringSize, pMysqlThd->charset() );
+					const char*		pString;
+					unsigned int	stringSize;
+
+					// Convert the integer value to a string
+					( ( Item_int* ) pConstItem )->val_str( &stringValue );
+					pString						= stringValue.ptr();
+					stringSize					= stringValue.length();
+
+					if ( stringSize				> maxStringSize )
+					{
+						return false;
+					}
+
+					*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_TYPE )									= ( unsigned char )
+																													  ( SDB_PUSHDOWN_LITERAL_DATA_TYPE_CHAR );
+					*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_SIZE )									= ( unsigned char )( stringSize );
+					*pItemOffset																				   += ( unsigned int  )( USER_DATA_OFFSET_USER_DATA + stringSize );
+					break;
+				}
+
+				case MYSQL_TYPE_BIT:
+					*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_TYPE )									= ( unsigned char )
+																													  ( SDB_PUSHDOWN_LITERAL_DATA_TYPE_BIT );
+					*( ( unsigned long long* )( *pCondString + *pItemOffset + USER_DATA_OFFSET_USER_DATA ) )		= ( unsigned long long ) intValue;
+					*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_SIZE )									= ( unsigned char )( 8 );		// size in bytes of int
+					*pItemOffset																				   += USER_DATA_OFFSET_USER_DATA + 8;
+					break;
+
+				case MYSQL_TYPE_TIMESTAMP:
+					*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_TYPE )									= ( unsigned char )
+																													  ( SDB_PUSHDOWN_LITERAL_DATA_TYPE_TIMESTAMP );
+					*( ( long long* )( *pCondString + *pItemOffset + USER_DATA_OFFSET_USER_DATA ) )					= intValue;
+					*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_SIZE )									= ( unsigned char )( 8 );		// size in bytes of int
+					*pItemOffset																				   += USER_DATA_OFFSET_USER_DATA + 8;
+					break;
+
+				case MYSQL_TYPE_YEAR:
+					*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_TYPE )									= ( unsigned char )
+																													  ( SDB_PUSHDOWN_LITERAL_DATA_TYPE_YEAR );
+					*( ( unsigned long long* )( *pCondString + *pItemOffset + USER_DATA_OFFSET_USER_DATA ) )		= ( unsigned long long ) convertYearToStoredFormat( intValue );
+					*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_SIZE )									= ( unsigned char )( 8 );		// size in bytes of int
+					*pItemOffset																				   += USER_DATA_OFFSET_USER_DATA + 8;
+					break;
+
+				case MYSQL_TYPE_NEWDECIMAL:
+				{
+					*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_TYPE )									=  ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_DECIMAL );
+
+					my_decimal		dValue;
+
+					Item_field*		pField		= ( Item_field* ) pComperandItem;
+					my_decimal*		pValue		= ( my_decimal* )( ( Item_decimal* ) pConstItem )->val_decimal( &dValue );
+					unsigned char*	pBinary		= ( unsigned char* )( *pCondString + *pItemOffset + USER_DATA_OFFSET_USER_DATA );
+					int				iPrecision	= pField->decimal_precision();
+					int				iScale		= pField->decimals;
+					int				iLength		= *( unsigned short* )( pComperandData + ROW_DATA_OFFSET_COLUMN_SIZE );
+
+					if ( iLength				> sizeof( long long ) )
+					{
+						// Decimal values longer than 8 bytes are not yet supported
+						return false;
+					}
+
+					memset( pBinary, '\0', sizeof( long long ) );
+
+					int				retValue	= my_decimal2binary( E_DEC_FATAL_ERROR & ~E_DEC_OVERFLOW,
+																	 pValue, pBinary, iPrecision, iScale );
+
+					if ( retValue )
+					{
+						return false;
+					}
+					
+					*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_SIZE )									=  ( unsigned char )( 8 );		// max size in bytes of decimal
+					( *pItemOffset )																			   += USER_DATA_OFFSET_USER_DATA + 8;
+					break;
+				}
+
+				default:
+					if ( isUnsignedField	   || isUnsignedComperand )
+					{
+						*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_TYPE )								= ( unsigned char )
+																													  ( SDB_PUSHDOWN_LITERAL_DATA_TYPE_UNSIGNED_INTEGER );
+						*( ( unsigned long long* )( *pCondString + *pItemOffset + USER_DATA_OFFSET_USER_DATA ) )	= ( unsigned long long ) intValue;
+					}
+					else
+					{
+						*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_TYPE )								= ( unsigned char )
+																													  ( SDB_PUSHDOWN_LITERAL_DATA_TYPE_SIGNED_INTEGER );
+						*( ( long long* )( *pCondString + *pItemOffset + USER_DATA_OFFSET_USER_DATA ) )				= intValue;
+					}
+					*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_SIZE )									= ( unsigned char )( 8 );		// size in bytes of int
+					*pItemOffset																				   += USER_DATA_OFFSET_USER_DATA + 8;
+			}
+
+			break;
+		}
+
+		case Item::VARBIN_ITEM:
+		{
+			Item_field*		pField				= ( pConstItem->with_field ? ( ( Item_field* ) pConstItem )  : NULL );
+			Item_field*		pComperandField		= ( ( pComperandItem && pComperandItem->with_field )   ? ( ( Item_field* ) pComperandItem ) : NULL );
+			int				typeComperand		= ( pComperandItem ? pComperandItem->type() : 0 );
+
+			typeComperand						= ( pComperandField ? ( pComperandField->field )->type() : 0 );
+
+			long long		intValue			= ( ( Item_hex_hybrid* ) pConstItem )->val_int();
+			
+			*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_TYPE )											= ( unsigned char )
+																													  ( SDB_PUSHDOWN_LITERAL_DATA_TYPE_BIT );
+			*( ( unsigned long long* )( *pCondString + *pItemOffset + USER_DATA_OFFSET_USER_DATA ) )				= ( unsigned long long ) intValue;
+			*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_SIZE )	=  ( unsigned char )( 8 );		// size in bytes of numeric type
+			*pItemOffset += USER_DATA_OFFSET_USER_DATA + 8;
+			break;
+		}
+
+		case Item::DECIMAL_ITEM:
+		{
+			if ( pComperandItem )
+			{
+				if ( *( pComperandData + ROW_DATA_OFFSET_ROW_TYPE )							   == SDB_PUSHDOWN_COLUMN_DATA_TYPE_FLOAT )
+				{
+					// Use the floating point representation of the value
+					double			dValue		= ( ( Item_decimal* ) pConstItem )->val_real();
+
+					*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_TYPE )				=  ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_FLOAT );
+					*( double* )( *pCondString + *pItemOffset + USER_DATA_OFFSET_USER_DATA )	= dValue;
+				}
+				else
+				{
+					*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_TYPE )				=  ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_DECIMAL );
+
+					my_decimal		dValue;
+
+					Item_field*		pField		= ( Item_field* ) pComperandItem;
+					my_decimal*		pValue		= ( my_decimal* )( ( Item_decimal* ) pConstItem )->val_decimal( &dValue );
+					unsigned char*	pBinary		= ( unsigned char* )( *pCondString + *pItemOffset + USER_DATA_OFFSET_USER_DATA );
+					int				iPrecision	= pField->decimal_precision();
+					int				iScale		= pField->decimals;
+					int				iLength		= *( unsigned short* )( pComperandData + ROW_DATA_OFFSET_COLUMN_SIZE );
+
+					if ( iLength				> sizeof( long long ) )
+					{
+						// Decimal values longer than 8 bytes are not yet supported
+						return false;
+					}
+
+					memset( pBinary, '\0', sizeof( long long ) );
+
+					int				retValue	= my_decimal2binary( E_DEC_FATAL_ERROR & ~E_DEC_OVERFLOW,
+																	 pValue, pBinary, iPrecision, iScale );
+
+					if ( retValue )
+					{
+						return false;
+					}
+				}
+			}
+
+			*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_SIZE )	=  ( unsigned char )( 8 );		// max size in bytes of decimal or float
+			( *pItemOffset )											   += USER_DATA_OFFSET_USER_DATA + 8;
+			break;
+		}
+
+		case Item::REAL_ITEM:
+		{
+			*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_TYPE ) = ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_DECIMAL );
+			*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_SIZE ) = ( unsigned char )( 8 ); // size in bytes of double
+			*( ( double* )( *pCondString + *pItemOffset + USER_DATA_OFFSET_USER_DATA ) )	= ( double )( ( Item_decimal* ) pConstItem )->val_real();
+			( *pItemOffset ) += USER_DATA_OFFSET_USER_DATA + 8;
+			break;
+		}
+
+		case Item::FUNC_ITEM:
+		{
+			int				temporalDataType;
+
+			if ( pComperandItem )
+			{
+				temporalDataType			= ( ( ( Item_field* ) pComperandItem )->field )->type();
+
+				switch ( temporalDataType )
+				{
+					case MYSQL_TYPE_TIMESTAMP:
+					case MYSQL_TYPE_TIME:
+					case MYSQL_TYPE_DATETIME:
+					case MYSQL_TYPE_DATE:
+					case MYSQL_TYPE_NEWDATE:
+					case MYSQL_TYPE_YEAR:
+						break;
+					default:
+						return false;
+				}
+			}
+			else
+			{
+				temporalDataType			= 0;
+			}
+
+			switch ( ( ( Item_func* ) pConstItem )->functype() )
+			{
+				case Item_func::GUSERVAR_FUNC:
+					break;
+				default:
+					return false;
+			}
+
+			switch ( ( ( Item_func_get_user_var* ) pConstItem )->result_type() )
+			{
+				case STRING_RESULT:
+				case INT_RESULT:
+					break;
+				default:
+					return false;
+			}
+
+			if ( STRING_RESULT			   == ( ( Item_func_get_user_var* ) pConstItem )->result_type() )
+			{
+				const uint		maxTimeStringSize( 255 );	// Maximum length of a time string
+				THD*			pMysqlThd	= ha_thd();
+				Item_field*		pField		= ( Item_field* ) pConstItem;
+
+				// Extend the condition string if necessary
+				resultExtension				= checkConditionStringSize( pCondString, pItemOffset, USER_DATA_OFFSET_USER_DATA + maxTimeStringSize );
+
+				if ( resultExtension		< 0 )
+				{
+					// Extension failed
+					return false;
+				}
+				if ( resultExtension )
+				{
+					// Condition string was extended
+					if ( pComperandDataOffset )
+					{
+						pComperandData		= *pCondString + *pComperandDataOffset;
+					}
+				}
+
+				String			stringValue( ( char* )( *pCondString + *pItemOffset + USER_DATA_OFFSET_USER_DATA ), maxTimeStringSize, pMysqlThd->charset() );
+				const char*		pString;
+				unsigned int	stringSize;
+
+				// Copy the time string
+				( ( Item_func_get_user_var* ) pConstItem )->val_str( &stringValue );
+				pString						= stringValue.ptr();
+				stringSize					= stringValue.length();
+
+				if ( stringSize				> maxTimeStringSize )
+				{
+					return false;
+				}
+
+				if ( temporalDataType )
+				{
+					// Convert the time string to a time constant
+					convertTimeStringToTimeConstant( pMysqlThd, pConstItem, pString, stringSize, temporalDataType,
+													 *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_TYPE,
+													 *pCondString + *pItemOffset + USER_DATA_OFFSET_USER_DATA );
+
+					*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_SIZE )	= ( unsigned char )( 8 );
+					( *pItemOffset )	   += USER_DATA_OFFSET_USER_DATA + 8;
+				}
+				else
+				{
+					// Temporarily designate the time string as the data value
+					*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_TYPE )	= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_CHAR );
+					*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_SIZE )	= ( unsigned char )( stringSize );
+					( *pItemOffset )	   += USER_DATA_OFFSET_USER_DATA + stringSize;		// increment the length of condition string accordingly
+				}
+			}
+			else
+			{
+				// Function result type INT_RESULT
+				long long		intValue	= ( ( Item_func_get_user_var* ) pConstItem )->val_int();
+
+				*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_TYPE )		= ( unsigned char )( SDB_PUSHDOWN_COLUMN_DATA_TYPE_SIGNED_INTEGER );
+				*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_SIZE )		= ( unsigned char )( 8 );
+				*( ( long long* )( *pCondString + *pItemOffset + USER_DATA_OFFSET_USER_DATA ) )	= intValue;
+				( *pItemOffset )		   += USER_DATA_OFFSET_USER_DATA + 8;
+			}
+			break;
+		}
+
+		case Item::STRING_ITEM:
+		{
+			int		temporalDataType;
+
+			if ( pComperandItem )
+			{
+				temporalDataType			= ( ( ( Item_field* ) pComperandItem )->field )->type();
+
+				switch ( temporalDataType )
+				{
+					case MYSQL_TYPE_TIMESTAMP:
+					case MYSQL_TYPE_TIME:
+					case MYSQL_TYPE_DATETIME:
+					case MYSQL_TYPE_DATE:
+					case MYSQL_TYPE_NEWDATE:
+					case MYSQL_TYPE_YEAR:
+						break;
+					default:
+						temporalDataType	= 0;
+				}
+			}
+			else
+			{
+				temporalDataType			= 0;
+			}
+
+			if ( temporalDataType )
+			{
+				Item_field*		pField		= ( Item_field* ) pConstItem;
+				const char*		pString		= ( ( ( Item_int* ) pConstItem )->str_value ).ptr();
+				unsigned int	stringSize	= ( ( ( Item_int* ) pConstItem )->str_value ).length();
+				THD*			pMysqlThd	= ha_thd();
+				MYSQL_TIME		myTime;
+
+				// Convert the time string to a time value
+				if ( convertStringToTime( pMysqlThd, pString, stringSize, temporalDataType, &myTime ) )
+				{
+					// Convert the time value to the field's data type
+					convertTimeToType( pMysqlThd, pConstItem, temporalDataType, &myTime,
+										*pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_TYPE,
+										*pCondString + *pItemOffset + USER_DATA_OFFSET_USER_DATA );
+				}
+				else
+				{
+					// Time conversion error
+					handleTimeConversionError( temporalDataType,
+												*pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_TYPE,
+												*pCondString + *pItemOffset + USER_DATA_OFFSET_USER_DATA );
+				}
+
+				*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_SIZE )	= ( unsigned char )( 8 );
+				( *pItemOffset )			   += USER_DATA_OFFSET_USER_DATA + 8;
+			}
+			else
+			{
+				*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_TYPE )	= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_CHAR );
+				unsigned int stringSize = (((Item_int *)pConstItem)->str_value).length();	//length of user data
+				*(*pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_SIZE) =  (unsigned char)(stringSize);
+				if (stringSize > 255) {	//	255 max string length since size is stored as 1 byte
+					return false;		
+				}
+
+				// Extend the condition string if necessary
+				resultExtension				= checkConditionStringSize( pCondString, pItemOffset, USER_DATA_OFFSET_USER_DATA + stringSize );
+
+				if ( resultExtension		< 0 )
+				{
+					// Extension failed
+					return false;
+				}
+				if ( resultExtension )
+				{
+					// Condition string was extended
+					if ( pComperandDataOffset )
+					{
+						pComperandData		= *pCondString + *pComperandDataOffset;
+					}
+				}
+
+				memcpy(*pCondString + *pItemOffset + USER_DATA_OFFSET_USER_DATA, ((*pConstItem).str_value).ptr(), stringSize);	//copy user data to string
+				(*pItemOffset) += USER_DATA_OFFSET_USER_DATA + stringSize;		//increment the length of condition string accordingly
+			}
+
+			break;
+		}
+
+		case Item::CACHE_ITEM:		//negative int, decimal or double
+		{	
+			int						cacheType	= ( ( Item_cache_decimal* ) pConstItem )->field_type();
+
+			switch ( cacheType )
+			{
+			case MYSQL_TYPE_DECIMAL:
+			case MYSQL_TYPE_NEWDECIMAL:
+				*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_TYPE )	=  ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_DECIMAL );
+				*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_SIZE )	=  ( unsigned char )( 8 );		// max size in bytes of decimal
+							
+				if ( pComperandItem )
+				{
+					my_decimal		dValue;
+
+					Item_field*		pField		= ( Item_field* ) pComperandItem;
+					my_decimal*		pValue		= ( my_decimal* )( ( Item_decimal* ) pConstItem )->val_decimal( &dValue );
+					unsigned char*	pBinary		= ( unsigned char* )( *pCondString + *pItemOffset + USER_DATA_OFFSET_USER_DATA );
+					int				iPrecision	= pField->decimal_precision();
+					int				iScale		= pField->decimals;
+					int				iLength		= *( unsigned short* )( pComperandData + ROW_DATA_OFFSET_COLUMN_SIZE );
+
+					if ( iLength				> sizeof( long long ) )
+					{
+						// Decimal values longer than 8 bytes are not yet supported
+						return false;
+					}
+
+					memset( pBinary, '\0', sizeof( long long ) );
+
+					int				retValue	= my_decimal2binary( E_DEC_FATAL_ERROR & ~E_DEC_OVERFLOW,
+																	 pValue, pBinary, iPrecision, iScale );
+
+					if ( retValue )
+					{
+						return false;
+					}
+				}
+
+				( *pItemOffset )			   += USER_DATA_OFFSET_USER_DATA + 8;
+				break;
+								
+			case MYSQL_TYPE_DOUBLE:
+			case MYSQL_TYPE_FLOAT:
+				*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_TYPE )	= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_FLOAT );
+				*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_SIZE )	= ( unsigned char )( 8 ); // size in bytes of double
+				*( ( double* )( *pCondString + *pItemOffset + USER_DATA_OFFSET_USER_DATA ) )	= ( double )( ( Item_cache_decimal* ) pConstItem )->val_real();
+				( *pItemOffset ) += USER_DATA_OFFSET_USER_DATA + 8;
+				break;
+
+			case MYSQL_TYPE_TIMESTAMP:
+			case MYSQL_TYPE_TIME:
+			case MYSQL_TYPE_DATETIME:
+			case MYSQL_TYPE_DATE:
+			case MYSQL_TYPE_NEWDATE:
+			case MYSQL_TYPE_YEAR:
+				if ( pComperandItem )
+				{
+					int				dataType	= ( ( ( Item_field* ) pComperandItem )->field )->type();
+					THD*			pMysqlThd	= ha_thd();
+#ifdef	_MARIA_SDB_10
+					MYSQL_TIME		myTime;
+
+					// Get the cached value as a time value
+					getTimeCachedResult( pMysqlThd, pConstItem, dataType, &myTime );
+
+					// Convert the time value to the field's data type
+					convertTimeToType  ( pMysqlThd, pConstItem, dataType, &myTime,
+										 *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_TYPE,
+										 *pCondString + *pItemOffset + USER_DATA_OFFSET_USER_DATA );
+#else	// MARIADB 5
+					const char*		pString		= ( ( ( Item_cache_str* ) pConstItem )->val_str( NULL ) )->ptr();
+					unsigned int	stringSize	= ( ( ( Item_cache_str* ) pConstItem )->val_str( NULL ) )->length();
+
+					// Convert the cached value from a string to the field's data type
+					convertTimeStringToTimeConstant( pMysqlThd, pConstItem, pString, stringSize, dataType,
+													 *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_TYPE,
+													 *pCondString + *pItemOffset + USER_DATA_OFFSET_USER_DATA );
+#endif	// MARIADB 5
+
+					*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_SIZE ) = ( unsigned char )( 8 );
+					( *pItemOffset )			   += USER_DATA_OFFSET_USER_DATA + 8;
+					break;
+				}
+				// Fall through ...
+
+			default:				// treat as a negative int
+				*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_TYPE )	= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_SIGNED_INTEGER );
+				*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_SIZE )	= ( unsigned char )( 8 ); // size in bytes of int
+				*( ( long long* )( *pCondString + *pItemOffset + USER_DATA_OFFSET_USER_DATA ) )	= ( long long )( ( Item_cache_int* ) pConstItem )->val_int();
+				( *pItemOffset ) += USER_DATA_OFFSET_USER_DATA + 8;
+				break;
+			}
+
+			break;
+		}
+
+		default:
+		{
+			*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_TYPE )	= ( unsigned char )( SDB_PUSHDOWN_UNKNOWN );
+			*( ( long long* )( *pCondString + *pItemOffset + USER_DATA_OFFSET_USER_DATA ) )	= ( long long ) pConstItem->type();
+			( *pItemOffset ) += USER_DATA_OFFSET_USER_DATA + 8;
+			return false;
+		}
+	}
+
+	return true;
+}
+
+
+/*
+ enum Type {FIELD_ITEM= 0, FUNC_ITEM, SUM_FUNC_ITEM, STRING_ITEM,
+	     INT_ITEM, REAL_ITEM, NULL_ITEM, VARBIN_ITEM,
+	     COPY_STR_ITEM, FIELD_AVG_ITEM, DEFAULT_VALUE_ITEM,
+	     PROC_ITEM,COND_ITEM, REF_ITEM, FIELD_STD_ITEM,
+	     FIELD_VARIANCE_ITEM, INSERT_VALUE_ITEM,
+             SUBSELECT_ITEM, ROW_ITEM, CACHE_ITEM, TYPE_HOLDER,
+             PARAM_ITEM, TRIGGER_FIELD_ITEM, DECIMAL_ITEM,
+             XPATH_NODESET, XPATH_NODESET_CMP,
+             VIEW_FIXER_ITEM, EXPR_CACHE_ITEM};
+
+			  enum Sumfunctype
+  { COUNT_FUNC, COUNT_DISTINCT_FUNC, SUM_FUNC, SUM_DISTINCT_FUNC, AVG_FUNC,
+    AVG_DISTINCT_FUNC, MIN_FUNC, MAX_FUNC, STD_FUNC,
+    VARIANCE_FUNC, SUM_BIT_FUNC, UDF_SUM_FUNC, GROUP_CONCAT_FUNC
+  };
+
+			 */
+
+
+	
+int ha_scaledb::getSDBSize(enum_field_types fieldType, Field* field) 
+{
+
+
+	switch (fieldType) {
+		case MYSQL_TYPE_SHORT:
+			{
+			return SDB_SIZE_OF_SHORT;
+
+			}
+		case MYSQL_TYPE_INT24:
+			{
+			return SDB_SIZE_OF_MEDIUMINT;
+
+			}
+		case MYSQL_TYPE_LONG:
+			{
+			return  SDB_SIZE_OF_INTEGER;
+
+			}
+
+		case MYSQL_TYPE_LONGLONG:
+			{
+			return ENGINE_TYPE_SIZE_OF_LONG;
+
+			}
+		case MYSQL_TYPE_TINY:
+			{
+			return SDB_SIZE_OF_TINYINT;
+
+			}
+
+		case MYSQL_TYPE_FLOAT: // FLOAT is treated as a 4-byte number
+			{
+			return SDB_SIZE_OF_FLOAT;
+
+			}
+		case MYSQL_TYPE_DOUBLE: // DOUBLE is treated as a 8-byte number
+			{
+			return  ENGINE_TYPE_SIZE_OF_DOUBLE;
+		
+	
+			}
+
+		case MYSQL_TYPE_DATE: // DATE is treated as a non-negative 3-byte integer
+			{
+			return SDB_SIZE_OF_DATE;
+
+			}
+
+		case MYSQL_TYPE_TIME: // TIME is treated as a non-negative 3-byte integer
+			{
+			return  SDB_SIZE_OF_TIME;
+
+			}
+		case MYSQL_TYPE_DATETIME: // DATETIME is treated as a non-negative 8-byte integer
+			{
+			return  SDB_SIZE_OF_DATETIME;
+			}
+
+		case MYSQL_TYPE_TIMESTAMP: // TIMESTAMP is treated as a non-negative 4-byte integer
+			{
+				return SDB_SIZE_OF_TIMESTAMP;
+			}
+	
+		case MYSQL_TYPE_DECIMAL:
+		case MYSQL_TYPE_NEWDECIMAL:
+			{
+				return 8;
+			}
+		case MYSQL_TYPE_STRING: // can be CHAR or BINARY data type
+		{
+			return  field->pack_length(); // exact size used in RAM
+
+		}
+		case MYSQL_TYPE_VARCHAR:
+		case MYSQL_TYPE_VAR_STRING:
+		{
+			return  field->pack_length(); // exact size used in RA
+		}
+		
+
+		default:
+
+			return -1; //unsupported so fail.
+			break;
+		}
+
+}
+char ha_scaledb::getCASType(enum_field_types mysql_type, int flags)
+{
+		switch (mysql_type)
+					{
+					case MYSQL_TYPE_TINY:
+					case MYSQL_TYPE_SHORT:
+					case MYSQL_TYPE_INT24:
+					case MYSQL_TYPE_LONG:
+					case MYSQL_TYPE_LONGLONG:
+						{
+						if ( flags	& UNSIGNED_FLAG )
+						{
+							return  SDB_PUSHDOWN_COLUMN_DATA_TYPE_UNSIGNED_INTEGER;	// unsigned int (row)
+						}
+						else
+						{
+							return SDB_PUSHDOWN_COLUMN_DATA_TYPE_SIGNED_INTEGER;	//   signed int (row)
+						}
+						
+						}
+					case MYSQL_TYPE_STRING:
+						return SDB_PUSHDOWN_COLUMN_DATA_TYPE_CHAR;					// char string (row)
+						
+
+					case MYSQL_TYPE_DOUBLE:
+					case MYSQL_TYPE_FLOAT:
+						return SDB_PUSHDOWN_COLUMN_DATA_TYPE_FLOAT;					// float (row)
+					
+
+					case MYSQL_TYPE_DECIMAL:
+					case MYSQL_TYPE_NEWDECIMAL:
+						return  SDB_PUSHDOWN_COLUMN_DATA_TYPE_DECIMAL;				// binary decimal (row)
+					
+
+					case MYSQL_TYPE_DATE:
+					case MYSQL_TYPE_NEWDATE:
+						return  SDB_PUSHDOWN_COLUMN_DATA_TYPE_DATE;					// date (row)
+						
+
+					case MYSQL_TYPE_TIME:
+						return SDB_PUSHDOWN_COLUMN_DATA_TYPE_TIME;					// time (row)
+					
+
+					case MYSQL_TYPE_DATETIME:
+						return  SDB_PUSHDOWN_COLUMN_DATA_TYPE_DATETIME;				// datetime (row)
+					
+
+					case MYSQL_TYPE_YEAR:
+						return SDB_PUSHDOWN_COLUMN_DATA_TYPE_YEAR;					// year (row)
+
+
+					case MYSQL_TYPE_TIMESTAMP:
+						return  SDB_PUSHDOWN_COLUMN_DATA_TYPE_TIMESTAMP;			// timestamp (row)
+
+
+					case MYSQL_TYPE_VARCHAR:
+					case MYSQL_TYPE_VAR_STRING:
+						{
+							return SDB_PUSHDOWN_COLUMN_DATA_TYPE_VARCHAR;			// varchar (row)
+						}
+					default:
+						{
+						return  SDB_PUSHDOWN_UNKNOWN;								// unknown (row)
+						break;
+						}
+					}
+}
+
+int ha_scaledb::numberInOrderBy()
+{
+	SELECT_LEX  lex=(((THD*) ha_thd())->lex)->select_lex;
+	int n=lex.order_list.elements;
+	return n;
+}
+
+
+int ha_scaledb::addOrderByToList(char* buf, int& pos,  SelectAnalyticsHeader* sah, unsigned short dbid, unsigned short tabid)
+{
+	int n=0;
+	
+	short precision=0;
+	short result_precision=0;
+	short result_scale=0;
+	short scale=0;
+	enum_field_types type;
+	const char* field_name=NULL;
+	function_type function=FT_NONE;
+	char* alias_name=NULL;
+	int flag=0;
+
+
+//check if groupby is NOT in select lsit, if so add.
+
+   for (ORDER *cur_group= (((THD*) ha_thd())->lex)->select_lex.parent_lex->current_select->group_list.first ; cur_group ; cur_group= cur_group->next)
+   {	   
+		bool found=false;
+		
+		
+		int function_length=0;
+		enum_field_types type;
+	
+		Item* group_item=*cur_group->item;
+		function_type function=FT_NONE;
+		int flag=0;
+		
+		switch (group_item->type())
+		{
+			case Item::FIELD_ITEM:
+				{
+				function=FT_NONE;
+
+				Field *field =((Item_field *)group_item)->field;
+				field_name=field->field_name;
+				type= field->type();
+				found=isInSelectList( sah, (char*)field_name,dbid,tabid,function);
+				break;
+				}
+			default:
+				{
+//group fields cannot be aggregates, so not a alid condition but leave.
+					found=true;
+					break;
+				}
+
+		}
+		if(!found)
+		{
+			//add to groupby list.
+			bool contains_analytics_function=false;
+			SelectAnalyticsBody1* sab1= (SelectAnalyticsBody1*)(buf+pos);
+			sab1->numberFields=1;
+			sab1->function=FT_NONE;
+			pos=pos+ sizeof(SelectAnalyticsBody1);
+
+			bool ret=addSelectField(buf,  pos, dbid, tabid, type, function,  field_name, contains_analytics_function,precision,scale,flag,result_precision,result_scale ,alias_name);
+			n++;
+
+		}
+	}
+
+   	SELECT_LEX*  lex=   (((THD*) ha_thd())->lex)->select_lex.parent_lex->current_select;
+	ORDER *order;
+
+	for (order = (ORDER *) lex->order_list.first; order;  order = order->next)
+    {	
+		bool found=false;
+		Item* item=*order->item;
+		alias_name=item->name;
+		switch (item->type())
+		{
+
+			case Item::FIELD_ITEM:
+			{
+				//save each field
+				Field *field1 = ((Item_field *)item)->field;
+				const char* col_name=field1->field_name;	
+				type= field1->type();
+				function=FT_NONE;
+				flag=field1->flags;
+				if(type==MYSQL_TYPE_NEWDECIMAL)
+				{			
+					Field_new_decimal* fnd=(Field_new_decimal*)field1;
+					precision=fnd->precision;
+					scale=fnd->decimals();
+				}
+
+
+
+				Field *field =((Item_field *)item)->field;
+				field_name=field->field_name;
+				found=isInSelectList( sah, (char*)field_name,dbid,tabid,function);
+				break;
+			}
+			case  Item::SUM_FUNC_ITEM:
+			{			
+				Item_sum *sum = ((Item_sum *)item);
+				int yy=sum->sum_func();
+				if (sum->sum_func() == Item_sum::SUM_FUNC)
+				{				
+					function=FT_SUM;
+
+					Field *field =((Item_field *)item->next)->field;
+					field_name=field->field_name;
+          			        type= field->type();
+					flag=field->flags;
+					if(type==MYSQL_TYPE_NEWDECIMAL)
+					{			
+						Field_new_decimal* fnd=(Field_new_decimal*)field;
+						precision=fnd->precision;
+						result_precision =item->decimal_precision();
+						scale=fnd->decimals();
+						result_scale = item->decimals;
+					}
+					if(item->name!=NULL)
+					{
+						//if an alias  column, so MUST be in orderby so no need to add
+						found=true;
+					}
+					else
+					{
+						//for case like this 
+						//SELECT client_number,op_number,sum(type)  FROM test.cdr_scaledb_streaming group by client_number,op_number order by sum(type);
+						//mysql ALWAYS adds the orderby field to the front of the projection list (even though it appears in the select list
+						//the  only exception is if an alias is used
+						//i am not sure why but to be compataqbile we need todo the same.
+						found=false;
+					}
+				}
+				else if (sum->sum_func() == Item_sum::COUNT_FUNC)
+				{
+					function=FT_COUNT;
+					Field *field =((Item_field *)item->next)->field;
+
+					field_name=field->field_name;
+					type=field->type();
+					flag=field->flags;
+					if(type==MYSQL_TYPE_NEWDECIMAL)
+					{			
+						Field_new_decimal* fnd=(Field_new_decimal*)field;
+						precision=fnd->precision;
+						result_precision =item->decimal_precision();
+						scale=fnd->decimals();
+						result_scale = item->decimals;
+					}
+					if(item->name!=NULL)
+					{
+						//if an alias  column, so MUST be in orderby so no need to add
+						alias_name=item->name;
+						found=true;
+					}
+			
+
+				}
+				else if (sum->sum_func() == Item_sum::MAX_FUNC)
+				{
+					function=FT_MAX;
+					Field *field =((Item_field *)item->next)->field;
+
+					field_name=field->field_name;
+					type=field->type();
+					flag=field->flags;
+					if(type==MYSQL_TYPE_NEWDECIMAL)
+					{			
+						Field_new_decimal* fnd=(Field_new_decimal*)field;
+						precision=fnd->precision;
+						result_precision =item->decimal_precision();
+						scale=fnd->decimals();
+						result_scale = item->decimals;
+					}
+					if(item->name!=NULL)
+					{
+						//if an alias  column, so MUST be in orderby so no need to add
+						alias_name=item->name;
+						found=true;
+					}
+			
+
+				}
+				else if (sum->sum_func() == Item_sum::MIN_FUNC)
+				{
+					function=FT_MIN;
+					Field *field =((Item_field *)item->next)->field;
+
+					field_name=field->field_name;
+					type=field->type();
+					flag=field->flags;
+					if(type==MYSQL_TYPE_NEWDECIMAL)
+					{			
+						Field_new_decimal* fnd=(Field_new_decimal*)field;
+						precision=fnd->precision;
+						result_precision =item->decimal_precision();
+						scale=fnd->decimals();
+						result_scale = item->decimals;
+					}
+					if(item->name!=NULL)
+					{
+						//if an alias  column, so MUST be in orderby so no need to add
+						alias_name=item->name;
+						found=true;
+					}
+			
+
+				}
+
+				break;
+			}
+		
+			default:
+			{
+
+				break;
+			}
+       
+		}		
+		if(!found)
+		{
+			//add to groupby list.
+			bool contains_analytics_function=false;
+			SelectAnalyticsBody1* sab1= (SelectAnalyticsBody1*)(buf+pos);
+			sab1->numberFields=1;
+			sab1->function=function;
+			pos=pos+ sizeof(SelectAnalyticsBody1);
+
+			bool ret=addSelectField(buf,  pos, dbid, tabid, type, function,  field_name, contains_analytics_function,precision,scale,flag,result_precision,result_scale ,alias_name);
+			n++;
+
+		}
+    }
+	return n;
+}
+
+bool ha_scaledb::isInSelectList(SelectAnalyticsHeader* sah, char*  col_name, unsigned short dbid, unsigned short tabid, function_type ft)
+{
+
+	bool found=false;
+	unsigned short columnNumber = SDBGetColumnNumberByName(dbid, tabid, col_name );
+	if(columnNumber==0 ) {return false;}
+	
+	int	field_offset=SDBGetColumnOffsetByNumber(dbid, tabid, columnNumber);
+
+	char* pos=  ((char*)sah)+sizeof(SelectAnalyticsHeader);
+	for (unsigned short i = 0; i < sah->numberColumns; ++i)
+	{
+
+		SelectAnalyticsBody1* sab1= (SelectAnalyticsBody1*)(pos);
+		pos=pos+ sizeof(SelectAnalyticsBody1);
+		for (unsigned short j = 0; j <  sab1->numberFields; ++j)
+		{	
+			SelectAnalyticsBody2* sab2= (SelectAnalyticsBody2*)(pos);
+
+			
+			int field=sab2->field_offset;	
+			function_type ftype= (function_type)sab2->function;
+			if(field==field_offset && ftype==ft) {found=true;}
+
+			pos=pos+ sizeof(SelectAnalyticsBody2);
+
+		}
+	  
+	}
+
+	return found;
+
+
+}
+
+int ha_scaledb::getOrderByPosition(const char* col_name, const char* col_alias, function_type ft)
+{	
+	if(col_name==NULL) {return 0;}
+	int pos=0;
+	SELECT_LEX*  lex=   (((THD*) ha_thd())->lex)->select_lex.parent_lex->current_select;
+	ORDER *order;
+	const char* field_name=NULL;
+	const char* alias_name=NULL;
+	for (order = (ORDER *) lex->order_list.first; order;  order = order->next)
+    {
+        pos++;
+		
+		Item* item=*order->item;
+
+		switch (item->type())
+		{
+
+			case Item::FIELD_ITEM:
+			{
+				
+				Field *field =((Item_field *)item)->field;
+				field_name=field->field_name;
+				break;
+			}
+			case Item::SUM_FUNC_ITEM:
+			{			
+					Field *field =((Item_field *)item->next)->field;
+				
+					field_name=field->field_name;
+					alias_name= item->name;
+					break;
+			}
+			default:
+				{
+					//all fields and aggregates would have already been caught, so can't really be here
+					return 0;
+				}
+           
+		}
+
+
+		// if the column is in the order by so return the position (either 1,2,3 ...)
+		// if there is an alias, check the alias.
+		if(alias_name==NULL || col_alias == NULL)
+		{
+			if(field_name!= NULL && strcmp( field_name, col_name ) == 0 )
+			{
+				return pos;
+			}
+		}
+		else
+		{
+			if(strcmp( alias_name, col_alias ) == 0) 
+			{
+				return pos;
+			}
+		}
+
+    }
+
+	return 0;
+}
+int ha_scaledb::generateGroupConditionString(int cardinality, int thread_count, char* buf, int max_buf, unsigned short dbid, unsigned short tabid, char* select_buf)
+{
+	SelectAnalyticsHeader* sah= (SelectAnalyticsHeader*)select_buf;
+	Item *item;
+
+	int pos=0;
+	int select_limit=0;
+	SELECT_LEX*  lex=   (((THD*) ha_thd())->lex)->select_lex.parent_lex->current_select;
+	Item* limit= lex->select_limit;
+	if(limit!=NULL)
+	{
+		if(limit->type()==Item::INT_ITEM)
+		{
+			select_limit=(long)limit->val_int();
+		}
+	}
+	int info=0;
+	if(lex->order_list.elements>0)
+	{
+		info |= GH_ORDER_BY;   
+		if(lex->order_list.first->asc) {info |= ANALYTIC_FLAG_ASCENDING;}
+	}
+
+
+	GroupByAnalyticsHeader* gbh= (GroupByAnalyticsHeader*)buf;
+	gbh->cardinality=cardinality;
+	gbh->thread_count=(char)thread_count;
+	gbh->limit=select_limit;
+	gbh->info_flag=info;
+
+	pos=pos+sizeof(GroupByAnalyticsHeader);
+
+   const char* col_name=NULL;
+   const char* alias_name=NULL;
+   int n=0;
+   for (ORDER *cur_group= (((THD*) ha_thd())->lex)->select_lex.parent_lex->current_select->group_list.first ; cur_group ; cur_group= cur_group->next)
+   {
+	   
+		if (pos+100 >max_buf)
+		{
+			return 0;
+		} //only check for buffer overwrite once per loop, the + 100 is being conservative
+		n++;
+		
+		
+		int function_length=0;
+		enum_field_types type;
+		item=*cur_group->item;
+		function_type function=FT_NONE;
+		int flag=0;
+		
+		switch (item->type())
+		{
+
+			case Item::FIELD_ITEM:
+			{
+				Field *field = ((Item_field *)item)->field;
+				col_name=field->field_name;	
+				type= field->type();	
+				flag=field->flags;
+				break;
+			}
+			case Item::FUNC_ITEM:
+				{
+
+
+					  //these are  functions, so just ignore.
+					 Item_func *func = ((Item_func *)item);
+
+ 		 		 	 if(checkFunc(func->name, "char"))
+					 {
+						 function=FT_CHAR;
+						 Field *field =((Item_field *)item->next)->field;
+						 col_name=field->field_name;
+						 type= field->type();	
+						 flag=field->flags;
+
+
+					 }else  if(checkFunc(func->name, "date"))      
+					 {
+						 function=FT_DATE;
+						 Field *field =((Item_field *)item->next)->field;
+						 col_name=field->field_name;
+						  type= field->type();
+						  flag=field->flags;
+	
+						 
+					 }else  if(checkFunc(func->name, "hour"))   
+					 {
+						  function=FT_HOUR;
+						  Field *field =((Item_field *)item->next)->field;
+						  col_name=field->field_name;
+						   type= field->type();
+						   flag=field->flags;
+
+					 }
+					 else
+					 {
+						function=FT_UNSUPPORTED;
+						col_name=NULL;
+						type= MYSQL_TYPE_NULL;
+						flag=0;
+					 }
+
+					break;
+				}
+			default:
+				{
+					return 0;  //no condition string will get generated
+				}
+	     }
+
+
+		char castype=	getCASType(type,flag) ;
+	
+		GroupByAnalyticsBody* gab= (GroupByAnalyticsBody*)(buf+pos);
+
+		unsigned short columnNumber = SDBGetColumnNumberByName(dbid, tabid, col_name );
+		if(columnNumber==0 ) {return 0;}
+	
+		gab->field_offset=SDBGetColumnOffsetByNumber(dbid, tabid, columnNumber);
+		gab->columnNumber=columnNumber;
+		gab->length= SDBGetColumnSizeByNumber(dbid, tabid, columnNumber);
+		gab->type=castype;
+		gab->function=function;
+		gab->function_length=gab->length;
+		gab->orderByPosition=getOrderByPosition(col_name,alias_name,function); 
+		pos=pos+sizeof(GroupByAnalyticsBody);
+    }
+  
+
+   if(n==0)  
+   {
+          //there are NO group by so return analytics with col=0;
+	   gbh->numberColumns=0;
+	   gbh->numberInOrderby=0;
+	   return sizeof(GroupByAnalyticsHeader);
+   }
+   else
+   {
+	 
+		gbh->numberColumns=n;
+		gbh->numberInOrderby=numberInOrderBy();
+		return pos;
+   }
+}
+int ha_scaledb::generateOrderByConditionString(char* buf, int max_buf, unsigned short dbid, unsigned short tabid, char* select_buf)
+{
+
+/*
+1) the projection list is returned
+2) if the query contains a group by which is NOT in the projection list then the group by field is added as the first field
+3) if the query contains and ORDER BY and the field being ordered by is NOT in the projection list then order by field is added to front of projection list (but after group by if it exists)
+4) if group by contains multiple fields then add these fields in the order they appear (if the field is NOT in projection list)
+*/
+
+	SelectAnalyticsHeader* sah= (SelectAnalyticsHeader*)select_buf;
+	
+	SelectAnalyticsHeader* sah_new= (SelectAnalyticsHeader*)buf;
+	int pos=sizeof(SelectAnalyticsHeader);
+  	int n2=addOrderByToList(buf,pos,sah,dbid, tabid);
+
+
+	sah_new->numberColumns=sah->numberColumns+n2;
+	return pos;
 
 }
 
 
-
-/**
-  Push a condition to scaledb storage engine for enhancing  
- the index scans. SDB Index can use suffixes of the key parts - not only prefixes .
-  The conditions will be stored on a stack for possibly storing several conditions. 
-  The stack can be popped by calling cond_pop, handler::extra(HA_EXTRA_RESET) (handler::reset())
-  will clear the stack.
-  The current implementation supports a single constant comparisson i.e FIELD = 'X'. 
-*/
-
-const COND* ha_scaledb::cond_push(const COND *cond)
+bool ha_scaledb::addSelectField(char* buf, int& pos, unsigned short dbid, unsigned short tabid, enum_field_types type, short function, const char* col_name, bool& contains_analytics, short precision, short scale, int flag, short result_precision, short result_scale, char* alias_name )
 {
-
-	DBUG_ENTER("cond_push");
-	if ( cond ) 
+	char castype=	getCASType(type,flag) ;
+	
+	SelectAnalyticsBody2* sab2= (SelectAnalyticsBody2*)(buf+pos);
+	if (( !col_name ) || ( strcmp( "?", col_name ) == 0 ) || ( !dbid ) || ( !tabid ) )
 	{
+		//for count(*) don't have column info
+		sab2->field_offset=0;	//number of fields in operation
+		sab2->columnNumber=0;
+		sab2->length=0;		//the length of data
+		sab2->type = castype;				//the column type
+		sab2->precision=precision;
+		sab2->scale=scale;
+		sab2->result_precision=result_precision;
+		sab2->result_scale=result_scale;
+		sab2->orderByPosition=getOrderByPosition(col_name,alias_name,FT_NONE);
+	}
+	else
+	{
+		unsigned short columnNumber = SDBGetColumnNumberByName(dbid, tabid, col_name );
+		if(columnNumber==0 ) {return false;}
+		sab2->field_offset=SDBGetColumnOffsetByNumber(dbid, tabid, columnNumber);;	//number of fields in operation
+		sab2->columnNumber=columnNumber;
+		sab2->length=SDBGetColumnSizeByNumber(dbid, tabid, columnNumber);		//the length of data
+		sab2->type = castype;				//the column type
+		sab2->precision=precision;
+		sab2->scale=scale;
+		sab2->result_precision=result_precision;
+		sab2->result_scale=result_scale;
+		sab2->orderByPosition=getOrderByPosition(col_name,alias_name,(function_type)function);
+	}
+	sab2->function=function;		//this is operation to perform on the field
+
+	if(function!=FT_NONE) {contains_analytics=true;}
+	pos=pos+sizeof(SelectAnalyticsBody2);
+	return true;
+}
+char* trimwhitespace(char *str_base) {
+    char* buffer = str_base;
+    while((buffer = strchr(str_base, ' '))) {
+        strcpy(buffer, buffer+1);
+    }
+
+    return str_base;
+}
+bool ha_scaledb::checkFunc(char* name, char* my_function)
+{
+	 char* func_name= trimwhitespace(strtok(name, "("));
+	 if(strcasecmp(my_function,func_name)==0) {return true;}
+     else
+	 {
+		 return false;
+	 }
+}
+bool ha_scaledb::checkNestedFunc(char* name, char* my_func1, char* my_func2)
+{
+	 char* func_name= trimwhitespace(strtok(name, "("));
+	 if(strcasecmp(my_func1,func_name)==0)
+	 {
+		 char* func_name= trimwhitespace(strtok(NULL, "("));
+		 if(func_name!=NULL && strcasecmp(my_func2,func_name)==0) {return true;}
+		 else {return false;}
+	 }
+     else
+	 {		
+		 return false;
+	 }
+}
+
+Item* ha_scaledb::NestedFunc(enum_field_types& type, function_type& function, int& no_fields, char* name, Item::Type ft, Item *item, Item_sum* sum, char* buf, int& pos, SelectAnalyticsBody1* sab1,unsigned short dbid, unsigned short tabid, bool& contains_analytics_function )
+{
+	int len	= ( int ) strlen( name );
+
+	if(len>=1000) {return NULL;} //abort, function too long
+
+	char func_name[1000];
+	short precision=0;
+	short result_precision=0;
+	short result_scale=0;
+	short scale=0;
+	strcpy(func_name,name);
+	int comma_count=0;
+	int flag=	0;
+	for(int i=0; i<=len;i++)
+	{
+		if(func_name[i]==',')
+		{
+			comma_count=comma_count+1;
+		}
+	}
+
+	int no_arguments=comma_count+1;
+
+	int arg=0;
 
 
-		if (pushCondition) {
-			saveConditionToString(cond);	//Saves condition as a string to a class variable to be pushed to CAS
+	Item_func *func = ((Item_func *)item->next);
+
+
+
+	if(checkNestedFunc(func_name, "max","concat"))
+	{
+		sab1->function=FT_MAX_CONCAT;
+		//concat operator
+		char* buf_start=buf+pos;
+		while(arg<no_arguments)
+		{
+
+
+			item= item->next;
+			Item::Type ft1=item->type();
+			if(ft1==Item::FIELD_ITEM)
+			{
+				//save each field
+				Field *field1 = ((Item_field *)item)->field;
+				const char* col_name=field1->field_name;	
+				type= field1->type();
+				function=FT_NONE;
+				flag=field1->flags;
+				if(type==MYSQL_TYPE_NEWDECIMAL)
+				{			
+					Field_new_decimal* fnd=(Field_new_decimal*)field1;
+					precision=fnd->precision;
+					scale=fnd->decimals();
+				}
+
+				no_fields++;
+				bool ret=addSelectField(buf,  pos, dbid, tabid, type, function,  col_name, contains_analytics_function,precision,scale,flag,result_precision,result_scale,NULL );
+				if(ret==false) {return NULL;}
+			}
+			else if(ft1==Item::FUNC_ITEM)
+			{
+				item= item->next;
+				function=FT_NONE;
+				if(checkFunc(item->name, "char")) {function=FT_CHAR;}
+				Item::Type ft2=item->type();
+				if(ft2==Item::FIELD_ITEM)
+				{								
+					Field *field2 = ((Item_field *)item)->field;
+					const char* col_name=field2->field_name;
+					type= field2->type();
+					flag=field2->flags;
+					if(type==MYSQL_TYPE_NEWDECIMAL)
+					{			
+						Field_new_decimal* fnd=(Field_new_decimal*)field2;
+						precision=fnd->precision;
+						scale=fnd->decimals();
+					}
+					no_fields++;
+					bool ret=addSelectField(buf,  pos, dbid, tabid, type, function,  col_name,contains_analytics_function,precision,scale,flag,result_precision,result_scale,NULL );
+					if(ret==false) {return NULL;}
+				}
+				else if(ft2==Item::FUNC_ITEM)
+				{
+					item= item->next;
+					Item::Type ft2=item->type();
+					if(ft2==Item::FIELD_ITEM)
+					{								
+						Field *field2 = ((Item_field *)item)->field;
+						const char* col_name=field2->field_name;
+						type= field2->type();
+						flag=field2->flags;
+						if(type==MYSQL_TYPE_NEWDECIMAL)
+						{			
+							Field_new_decimal* fnd=(Field_new_decimal*)field2;
+							precision=fnd->precision;
+							scale=fnd->decimals();
+						}
+						no_fields++;
+						bool ret=addSelectField(buf,  pos, dbid, tabid, type,function,  col_name,contains_analytics_function,precision,scale,flag,result_precision,result_scale,NULL );
+						if(ret==false) {return NULL;}
+					}
+				}
+				else
+				{
+					return 0;
+				}
+			}								
+			else if(ft1==Item::STRING_ITEM)
+			{
+				//skipping just a constant so can ignore.
+
+			}
+			else
+			{
+				return NULL;
+			}
+
+			arg++;
 		}
-		else {		//This is so condition does not get pushed for delete where statements
-			pushCondition = true;
+
+		//reverse order
+		SelectAnalyticsBody2 tmp[10];
+		if(no_fields>9) {return NULL;} //max 10 arguments in nested funcition
+		int c,d;
+		for( c=no_fields-1,  d=0; c>=0; c--, d++)
+		{
+			tmp[d]=*((SelectAnalyticsBody2*)(buf_start+ c*sizeof(SelectAnalyticsBody2)));
 		}
+		//write back in correct order
+		for( c=0; c<no_fields; c++)
+		{
+			*((SelectAnalyticsBody2*)(buf_start+ c*sizeof(SelectAnalyticsBody2)))=tmp[c];
+		}
+
 
 	}
-	DBUG_RETURN(cond); 
+	else
+	{
+		return NULL;
+	}
+	return item;
+}
+
+#ifdef  PROCESS_COUNT_DISTINCT
+Item* ha_scaledb::multiArgumentFunction(function_type funct, enum_field_types& type, function_type& function, int& no_fields, char* name, Item::Type ft, Item *item, Item_sum* sum, char* buf, int& pos, SelectAnalyticsBody1* sab1,unsigned short dbid, unsigned short tabid, bool& contains_analytics_function )
+{
+	int len	= ( int ) strlen( name );
+
+	if(len>=1000) {return NULL;} //abort, function too long
+
+	char func_name[1000];
+	short precision=0;
+	short result_precision=0;
+	short result_scale=0;
+	short scale=0;
+	strcpy(func_name,name);
+	int comma_count=0;
+	int flag=	0;
+	for(int i=0; i<=len;i++)
+	{
+		if(func_name[i]==',')
+		{
+			comma_count=comma_count+1;
+		}
+	}
+
+	int no_arguments=comma_count+1;
+
+	int arg=0;
+
+
+	Item_func *func = ((Item_func *)item->next);
+
+	
+		sab1->function=funct;
+		//concat operator
+		char* buf_start=buf+pos;
+		while(arg<no_arguments)
+		{
+
+
+			item= item->next;
+			Item::Type ft1=item->type();
+			if(ft1==Item::FIELD_ITEM)
+			{
+				//save each field
+				Field *field1 = ((Item_field *)item)->field;
+				const char* col_name=field1->field_name;	
+				type= field1->type();
+				function=FT_NONE;
+				flag=field1->flags;
+				if(type==MYSQL_TYPE_NEWDECIMAL)
+				{			
+					Field_new_decimal* fnd=(Field_new_decimal*)field1;
+					precision=fnd->precision;
+					scale=fnd->decimals();
+				}
+
+				no_fields++;
+				bool ret=addSelectField(buf,  pos, dbid, tabid, type, function,  col_name, contains_analytics_function,precision,scale,flag,result_precision,result_scale,NULL );
+				if(ret==false) {return NULL;}
+			}
+			else
+			{
+					return NULL;
+			}
+			
+			arg++;
+		}
+
+		//reverse order
+		SelectAnalyticsBody2 tmp[10];
+		if(no_fields>9) {return NULL;} //max 10 arguments in nested funcition
+		int c,d;
+		for( c=no_fields-1,  d=0; c>=0; c--, d++)
+		{
+			tmp[d]=*((SelectAnalyticsBody2*)(buf_start+ c*sizeof(SelectAnalyticsBody2)));
+		}
+		//write back in correct order
+		for( c=0; c<no_fields; c++)
+		{
+			*((SelectAnalyticsBody2*)(buf_start+ c*sizeof(SelectAnalyticsBody2)))=tmp[c];
+		}
+	
+	return item;
+}
+#endif //  PROCESS_COUNT_DISTINCT	
+
+
+int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned short dbid, unsigned short tabid)
+{
+	bool contains_analytics_function=false;
+	Item *item;
+
+	int pos=0;
+
+
+	SelectAnalyticsHeader* sah= (SelectAnalyticsHeader*)buf;
+	pos += sizeof(SelectAnalyticsHeader);
+	
+	
+
+	int no_fields=0;	
+
+    List_iterator_fast<Item> fi((((THD*) ha_thd())->lex)->select_lex.parent_lex->current_select->item_list);
+
+	int n=0;
+  
+    while ((item = fi++))
+    {
+		if (pos+100 >max_buf)
+		{
+			return 0;
+		} //only check for buffer overwrite once per loop, the + 100 is being conservative
+		n++;
+		SelectAnalyticsBody1* sab1= (SelectAnalyticsBody1*)(buf+pos);
+		pos=pos+sizeof(SelectAnalyticsBody1);
+		const char* col_name;
+		char* alias_name=NULL;
+		enum_field_types type;
+		function_type function;
+		short precision=0;
+		short result_precision=0;
+		short result_scale=0;
+		short scale=0;
+		no_fields=0;	//reset the number of fields
+		int flag=0;
+	    alias_name= item->name;
+		switch (item->type())
+		{
+
+		case Item::FIELD_ITEM:
+			{
+				Field *field = ((Item_field *)item)->field;
+				col_name=field->field_name;	
+                type= field->type();
+				function=FT_NONE;
+				flag=field->flags;
+				if(type==MYSQL_TYPE_NEWDECIMAL)
+				{			
+					Field_new_decimal* fnd=(Field_new_decimal*)field;
+					precision=fnd->precision;
+					result_precision=precision;	
+					scale=fnd->decimals();
+					result_scale=scale;
+				}
+				break;
+			}
+			case  Item::SUM_FUNC_ITEM:
+			{			
+				Item_sum *sum = ((Item_sum *)item);
+				int yy=sum->sum_func();
+				if (sum->sum_func() == Item_sum::SUM_FUNC)
+				{				
+					function=FT_SUM;
+
+					Field *field =((Item_field *)item->next)->field;
+					col_name=field->field_name;
+                    type= field->type();
+					flag=field->flags;
+					if(type==MYSQL_TYPE_NEWDECIMAL)
+					{			
+						Field_new_decimal* fnd=(Field_new_decimal*)field;
+						precision=fnd->precision;
+						result_precision =item->decimal_precision();
+						scale=fnd->decimals();
+						result_scale = item->decimals;
+					}
+				}
+				else if (sum->sum_func() == Item_sum::COUNT_FUNC)
+				{
+					function=FT_COUNT;
+					Item::Type ft=item->next->type();
+					if(ft==Item::FIELD_ITEM)
+					{
+					
+						Field *field =((Item_field *)item->next)->field;
+				
+						col_name= field->field_name;
+						type= field->type();
+						flag=field->flags;		
+						if(strcmp("?",col_name)==0)
+						{			
+							alias_name= item->name;
+						}
+					}
+					else
+					{
+						//this is a count(*)
+						col_name="?";
+						type=MYSQL_TYPE_LONG;
+
+					}
+				
+				}
+#ifdef  PROCESS_COUNT_DISTINCT
+				else if (sum->sum_func() == Item_sum::COUNT_DISTINCT_FUNC)
+				{
+					function=FT_COUNT_DISTINCT;
+					Field *field =((Item_field *)item->next)->field;
+					Item::Type ft=item->next->type();
+					char* name= item->name;  //count distinct can have multile arguemnts
+					item=multiArgumentFunction(FT_COUNT_DISTINCT, type,function,no_fields,name, ft, item, sum,  buf,  pos,  sab1, dbid, tabid, contains_analytics_function );
+					contains_analytics_function=true;
+					if(item==NULL) {return 0;}			//unsupported so bail	
+			
+				}				
+#endif //  PROCESS_COUNT_DISTINCT
+				else if (sum->sum_func() == Item_sum::MIN_FUNC)
+				{
+						Item_sum_min *max = ((Item_sum_min *)item);
+						Item_result_field *rf= (Item_result_field *)sum;
+						Item::Type ft=item->next->type();
+						char* name= item->name;
+
+						if(ft==Item::FUNC_ITEM)
+						{
+							item=NestedFunc(type,function,no_fields,name, ft, item, sum,  buf,  pos,  sab1, dbid, tabid, contains_analytics_function );
+							if(item==NULL) {return 0;}			//unsupported so bail		
+						}
+						else
+						{
+							Field *field =((Item_field *)item->next)->field;
+							col_name=field->field_name;
+				     		type= field->type();	
+							flag=field->flags;
+							function=FT_MIN;
+							if(type==MYSQL_TYPE_NEWDECIMAL)
+							{			
+								Field_new_decimal* fnd=(Field_new_decimal*)field;
+								precision=fnd->precision;
+								result_precision =item->decimal_precision();
+								result_scale=item->decimals;
+								scale=fnd->decimals();
+							}
+						}
+
+				}
+				else if (sum->sum_func() == Item_sum::MAX_FUNC)
+				{
+						Item_sum_max *max = ((Item_sum_max *)item);
+						Item_result_field *rf= (Item_result_field *)sum;
+						Item::Type ft=item->next->type();
+						char* name= item->name;
+
+						if(ft==Item::FUNC_ITEM)
+						{
+							item=NestedFunc(type,function,no_fields,name, ft, item, sum,  buf,  pos,  sab1, dbid, tabid, contains_analytics_function );
+							if(item==NULL) {return 0;}			//unsupported so bail		
+						}
+						else
+						{
+							Field *field =((Item_field *)item->next)->field;
+							col_name=field->field_name;
+				     		type= field->type();				   
+							function=FT_MAX;
+							flag=field->flags;
+							if(type==MYSQL_TYPE_NEWDECIMAL)
+							{			
+								Field_new_decimal* fnd=(Field_new_decimal*)field;
+								precision=fnd->precision;
+								result_precision =item->decimal_precision();
+								result_scale=item->decimals;
+								scale=fnd->decimals();
+							}
+					
+						}
+  					  
+				}
+				else if(sum->sum_func() == Item_sum::UDF_SUM_FUNC)
+				{
+					if(checkFunc(sum->name, "stream_count"))
+					{
+						Field *field =((Item_field *)item->next)->field;
+						col_name=field->field_name;
+					    type= field->type();
+						function=FT_STREAM_COUNT;
+						flag=field->flags;
+
+					}
+					else
+					{
+						return 0;
+					}
+				}
+				else if (sum->sum_func() == Item_sum::AVG_FUNC)
+				{
+						
+						Item_result_field *rf= (Item_result_field *)sum;
+						Item::Type ft=item->next->type();
+						char* name= item->name;
+
+						if(ft==Item::FUNC_ITEM)
+						{
+							item=NestedFunc(type,function,no_fields,name, ft, item, sum,  buf,  pos,  sab1, dbid, tabid, contains_analytics_function );
+							if(item==NULL) {return 0;}			//unsupported so bail		
+						}
+						else
+						{
+							Field *field =((Item_field *)item->next)->field;
+							col_name=field->field_name;
+				     		type= field->type();				   
+							function=FT_AVG;
+							flag=field->flags;
+							if(type==MYSQL_TYPE_NEWDECIMAL)
+							{			
+								Field_new_decimal* fnd=(Field_new_decimal*)field;
+								precision=fnd->precision;
+								result_precision =item->decimal_precision();
+								result_scale=item->decimals;
+								scale=fnd->decimals();
+							}
+					
+						}
+  					  
+				}
+				else
+				{
+					return 0;  //no condition string will get generated
+				}
+
+				break;
+			}
+			case Item::FUNC_ITEM:
+				{
+
+					  //these are non-aggregate functions.
+					 Item_func *func = ((Item_func *)item);
+					 if(checkFunc(func->name, "date"))
+					 {
+						 function=FT_DATE;
+						 Field *field =((Item_field *)item->next)->field;
+						 col_name=field->field_name;
+						 type= field->type();		
+						 flag=field->flags;
+						 
+					 }else if(checkFunc(func->name, "hour"))   
+					 {
+						  function=FT_HOUR;
+						  Field *field =((Item_field *)item->next)->field;
+						  col_name=field->field_name;
+						  type= field->type();	
+					  	  flag=field->flags;
+					 }
+					 else
+					 {
+						function=FT_UNSUPPORTED;
+						col_name=NULL;
+						type= MYSQL_TYPE_NULL;		
+						flag=0;
+					 }
+
+					
+					break;
+				}
+			default:
+				{
+					return 0;  //no condition string will get generated
+				}
+	     }
+
+		
+	
+
+
+			if(no_fields>0)
+			{
+				sab1->numberFields=no_fields;
+
+			}
+			else
+			{
+				sab1->numberFields=1;
+				sab1->function=function;
+				switch ( function )
+				{
+				case FT_NONE:
+				case FT_UNSUPPORTED:
+					break;
+				default:
+					contains_analytics_function	= true;
+				}
+				bool ret=addSelectField(buf,  pos, dbid, tabid, type, function, col_name ,contains_analytics_function,precision,scale,flag,result_precision,result_scale, alias_name);
+				if (ret==false) {return 0;}
+			}
+		
+    }
+	sah->numberColumns=n;
+	
+	
+		if(contains_analytics_function==false)
+		{
+			return pos;
+//support analytics even if no aggregate functions.
+//                 	return 0;
+		}
+		else
+		{
+			//only return a buffer if the query contained an analytics function (eg SUM(...))
+			return pos;
+		}
+	
+}
+
+
+//-----------------------------------------------------------------------------------------
+//	Extract the range key from pushdown condition
+//-----------------------------------------------------------------------------------------
+bool ha_scaledb::getRangeKeys( unsigned char * string, unsigned int length, key_range* key_start, key_range* key_end )
+{
+	unsigned int	place			= 0;
+	unsigned short	numberOfChildren;
+	unsigned char	nodeType;
+	unsigned short	databaseNumber;
+	unsigned short	tableNumber;
+	unsigned short	columnNumber;
+	unsigned short	columnOffset;
+	unsigned short	columnSize;
+	unsigned short	dataSize;
+	long long		key_data;
+	bool			hasStartKey		= false;
+	bool			hasEndKey		= false;
+	bool			is_range_index	= false;
+	bool			contains_range_index	= false;
+
+	clearIndexKeyRange( key_start );
+	clearIndexKeyRange( key_end );
+
+
+	while ( place					< length )
+	{
+		numberOfChildren			= *( short* )( string + place );
+		place					   += sizeof( numberOfChildren );
+		nodeType					= *( string + place++ );
+
+
+		switch ( nodeType )
+		{
+
+		case SDB_PUSHDOWN_OPERATOR_EQ:
+			{
+				if(is_range_index)
+				{
+					key_start->key	= indexKeyRangeStartData_;
+					memcpy((char*)key_start->key,&key_data, sizeof(key_data));
+					key_start->flag=HA_READ_KEY_EXACT;
+					key_start->length=sizeof(key_data);
+					key_start->keypart_map=1;
+					hasStartKey		= true;
+				}
+				place++;
+				break;
+			}
+		case SDB_PUSHDOWN_OPERATOR_GE:
+			{
+				if(is_range_index)
+				{
+					key_start->key	= indexKeyRangeStartData_;
+					memcpy((char*)key_start->key,&key_data, sizeof(key_data));
+					key_start->flag=HA_READ_KEY_OR_NEXT;
+					key_start->length=sizeof(key_data);
+					key_start->keypart_map=1;
+					hasStartKey		= true;
+				}
+				place++;
+				break;
+			}
+		case SDB_PUSHDOWN_OPERATOR_GT:
+			{
+				if(is_range_index)
+				{
+					key_start->key	= indexKeyRangeStartData_;
+					memcpy((char*)key_start->key,&key_data, sizeof(key_data));
+					key_start->flag=HA_READ_AFTER_KEY;
+					key_start->length=sizeof(key_data);
+					key_start->keypart_map=1;
+					hasStartKey		= true;
+				}
+				place++;
+				break;
+			}
+		case SDB_PUSHDOWN_OPERATOR_LT:
+			{
+				if(is_range_index)
+				{
+					key_end->key	= indexKeyRangeEndData_;
+					memcpy((char*)key_end->key,&key_data, sizeof(key_data));
+					key_end->flag=HA_READ_BEFORE_KEY;
+					key_end->length=sizeof(key_data);
+					key_end->keypart_map=1;
+					hasEndKey		= true;
+				}
+				place++;
+				break;
+			}
+		case SDB_PUSHDOWN_OPERATOR_LE:
+			{
+				if(is_range_index)
+				{
+					key_end->key	= indexKeyRangeEndData_;
+					memcpy((char*)key_end->key,&key_data, sizeof(key_data));
+					key_end->flag=HA_READ_KEY_OR_PREV;
+					key_end->length=sizeof(key_data);
+					key_end->keypart_map=1;
+					hasEndKey		= true;
+				}
+				place++;
+				break;
+			}
+
+		case SDB_PUSHDOWN_OPERATOR_BETWEEN:
+		case SDB_PUSHDOWN_OPERATOR_IN:
+			{
+				place++;
+				break;
+			}
+
+			case SDB_PUSHDOWN_COLUMN_DATA_TYPE_SIGNED_INTEGER:			// signed integer
+			case SDB_PUSHDOWN_COLUMN_DATA_TYPE_UNSIGNED_INTEGER:		// unsigned integer
+			case SDB_PUSHDOWN_COLUMN_DATA_TYPE_BIT:						// bit
+			case SDB_PUSHDOWN_COLUMN_DATA_TYPE_DECIMAL:					// binary decimal
+			case SDB_PUSHDOWN_COLUMN_DATA_TYPE_FLOAT:					// float
+			case SDB_PUSHDOWN_COLUMN_DATA_TYPE_CHAR:					// char
+			case SDB_PUSHDOWN_COLUMN_DATA_TYPE_VARCHAR:					// varchar
+			case SDB_PUSHDOWN_COLUMN_DATA_TYPE_DATE:					// date
+			case SDB_PUSHDOWN_COLUMN_DATA_TYPE_TIME:					// time
+			case SDB_PUSHDOWN_COLUMN_DATA_TYPE_DATETIME:				// datetime
+			case SDB_PUSHDOWN_COLUMN_DATA_TYPE_YEAR:					// year
+			case SDB_PUSHDOWN_COLUMN_DATA_TYPE_TIMESTAMP:				// timestamp
+			{
+				databaseNumber = *(unsigned short *)(string + place);
+				place += 2;
+
+
+				tableNumber = *(unsigned short *)(string + place);
+				place += 2;
+
+
+				columnNumber = *( unsigned short* )( string + place );
+				place += 2;
+				if(SDBGetRangeKeyFieldID(sdbDbId(),  sdbTableNumber())==columnNumber)
+				{
+					is_range_index=true;
+					contains_range_index=true;
+				}
+				else
+				{
+					is_range_index=false;
+				}
+
+				columnOffset = *(unsigned short *)(string + place);
+				place += 2;
+
+
+				columnSize = *(unsigned short *)(string + place);
+				place += 2;
+	
+
+				break;
+			}
+
+			case SDB_PUSHDOWN_LITERAL_DATA_TYPE_SIGNED_INTEGER:
+			case SDB_PUSHDOWN_LITERAL_DATA_TYPE_TIMESTAMP:
+			case SDB_PUSHDOWN_LITERAL_DATA_TYPE_DECIMAL:
+			{
+				dataSize = *(string + place++);
+
+
+				long long data = *(long long *)(string + place);
+				key_data=data;
+				place += dataSize;
+	
+				break;
+			}
+
+			case SDB_PUSHDOWN_LITERAL_DATA_TYPE_UNSIGNED_INTEGER:
+			case SDB_PUSHDOWN_LITERAL_DATA_TYPE_DATETIME:
+			case SDB_PUSHDOWN_LITERAL_DATA_TYPE_BIT:
+			{
+				dataSize = *(string + place++);
+
+
+				unsigned long long data = *( unsigned long long* )( string + place );
+				place += dataSize;
+
+				break;
+			}
+
+			case SDB_PUSHDOWN_LITERAL_DATA_TYPE_FLOAT:
+			{
+				dataSize = *(string + place++);
+
+
+				double data = *(double *)(string + place);
+				//DataPrintOut::printString((const char *)(string+place), dataSize);		//need printDouble
+				place += dataSize;
+				break;
+			}
+
+			case SDB_PUSHDOWN_LITERAL_DATA_TYPE_CHAR:
+			{
+				dataSize = *(string + place++);
+	
+				place += dataSize;
+				break;
+			}
+
+			default:
+
+				return contains_range_index;  
+		}
+	}
+
+	if ( hasEndKey				   && ( !hasStartKey ) )
+	{
+		// Set up an empty start key for the beginning of the range
+		copyIndexKeyRangeStart( NULL, 0, HA_READ_AFTER_KEY, 1 );
+	}
+
+	return contains_range_index;
+}
+
+
+//--------------------------------------------------------------------------------------------------
+//Set up variables for condition pushdown and analytics pushdown strings to be sent to CAS
+//--------------------------------------------------------------------------------------------------
+void ha_scaledb::saveConditionToString(const COND *cond)
+{
+	THD* thd = ha_thd();
+
+	unsigned short DBID=0;
+	unsigned short TABID=0;
+
+	conditionStringLength_		= 0;
+	analyticsStringLength_		=
+	analyticsSelectLength_      = 0;
+	forceAnalytics_=false;
+
+	rangeBounds.clear();
+	char* s_disable_pushdown=SDBUtilFindComment(thd->query(), "disable_condition_pushdown") ; //if disable_condition_pushdown is in comment then don't do pushdown
+
+	if (s_disable_pushdown==NULL)
+	{
+		if ( !( conditionTreeToString( cond, &conditionString_, &conditionStringLength_, &DBID, &TABID ) ) )
+		{
+			conditionStringLength_	= 0;
+		}
+#ifdef CONDITION_PUSH_DEBUG
+		else
+		{
+			printMYSQLConditionBuffer( conditionString_, conditionStringLength_ );
+		}
+#endif	//CONDITION_PUSH_DEBUG
+
+	}
+}
+
+void ha_scaledb::generateAnalyticsString()
+{
+	THD* thd = ha_thd();
+
+
+	analyticsStringLength_		=
+	analyticsSelectLength_      = 0;
+	forceAnalytics_=false;
+
+		
+		char* s_force_analytics=SDBUtilFindComment(thd->query(), "force_sdb_analytics") ;
+
+		bool is_streaming_table=SDBIsStreamingTable(sdbDbId_, sdbTableNumber_);
+
+		if ( is_streaming_table )
+		{
+			//only proceed if condition pushdown was successful
+			int  cardinality=SDBUtilFindCommentIntValue(thd->query(), "cardinality") ;
+			int  thread_count=SDBUtilFindCommentIntValue(thd->query(), "thread_count") ;
+
+
+			char	group_buf[ 2000 ];
+			char	select_buf[ 2000 ];
+			char	order_and_select_buf[ 2000 ];
+
+			int		len2		= generateSelectConditionString( select_buf, sizeof( select_buf ),sdbDbId_, sdbTableNumber_  );
+
+			int len3=generateOrderByConditionString( order_and_select_buf,  2000,   sdbDbId_,   sdbTableNumber_,  select_buf);
+
+
+		
+
+			int		len1		= generateGroupConditionString(cardinality, thread_count, group_buf, sizeof( group_buf ), sdbDbId_, sdbTableNumber_, select_buf );
+			//check if analytics is enabled
+
+			//append the select buffer
+			memcpy(order_and_select_buf+len3,select_buf+sizeof(SelectAnalyticsHeader),len2-sizeof(SelectAnalyticsHeader));
+
+			int len4 = len3 + len2-sizeof(SelectAnalyticsHeader);
+                        analyticsSelectLength_=len4;
+
+			//turn analytics off
+			char* s_disable_analytics=SDBUtilFindComment(thd->query(), "disable_sdb_analytics") ;
+
+
+			if  (true )
+			{
+
+
+				if  (s_disable_analytics==NULL && len1		> 0 && len2		> 0 )
+				{
+					//need to check condition string is big enough?
+					memcpy(	analyticsString_, group_buf, len1 );
+					memcpy(	analyticsString_+len1, order_and_select_buf, len4 );
+					analyticsStringLength_	= len1+len4;
+
+					if(s_force_analytics!=NULL)
+					{
+						//analytics failed so return an error.
+						forceAnalytics_=true;
+					}
+
+				}
+				else
+				{
+					if(s_force_analytics!=NULL)
+					{
+						//analytics failed so return an error.
+						forceAnalytics_=true;
+					}
+				}
+			}
+		}
+		else
+		{
+			if(s_force_analytics!=NULL)
+			{
+						//analytics failed so return an error.
+				forceAnalytics_=true;
+			}
+		}
+}
+
+/**
+  Push a condition and/or analytics to the scaledb storage engines for enhancing
+  table scans. SDB Index can use suffixes of the key parts - not only prefixes.
+  The conditions will be stored on a stack for possibly storing several conditions.
+  The stack can be popped by calling cond_pop, handler::extra(HA_EXTRA_RESET) (handler::reset())
+  will clear the stack.
+*/
+
+const COND* ha_scaledb::cond_push( const COND* pCond )
+{
+	bool		doPush;
+
+	DBUG_ENTER( "cond_push" );
+
+	if ( pushCondition_ )
+	{
+		if ( pCond )
+		{
+			switch ( sqlCommand_ )
+			{
+				case SQLCOM_SELECT:
+				case SQLCOM_HA_READ:
+				case SQLCOM_INSERT_SELECT:
+					doPush				= true;
+					break;
+				default:
+					doPush				= false;
+					break;
+			}
+
+			if ( doPush )
+			{
+				// Save condition as a string to a class variable to be pushed to CAS
+				saveConditionToString( pCond );
+			}
+			else
+			{
+				conditionStringLength_	= 0;
+				analyticsStringLength_	=
+				analyticsSelectLength_	= 0;
+				forceAnalytics_			= false;
+			}
+		}
+
+		// Avoid pushing the condition more than once for the same statement
+		pushCondition_					= false;
+	}
+
+	DBUG_RETURN( pCond );
 }
 
 
@@ -4617,10 +7945,13 @@ int ha_scaledb::rnd_init(bool scan) {
 
 	DBUG_ENTER("ha_scaledb::rnd_init");
 	THD* thd = ha_thd();
-	sqlCommand_ = thd_sql_command(thd);
-	if (sqlCommand_) {
-		conditionStringLength_ = 0;
+
+	if ( isQueryEvaluation() )
+	{
+		DBUG_RETURN( 0 );
 	}
+
+	sqlCommand_ = thd_sql_command(thd);
 	// For select statement, we use the sequential scan since full table scan is faster in this case.
 	// For non-select statement, if the table has index, then we prefer to use index 
 	// (most likely the primary key) to fetch each record of a table.
@@ -4638,6 +7969,15 @@ int ha_scaledb::rnd_init(bool scan) {
 		switch ( sqlCommand_ )
 		{
 		case SQLCOM_SELECT:
+			{
+				if (forceAnalytics_==true)
+				{
+					SDBSetErrorMessage( sdbUserId_, INVALID_STREAMING_OPERATION, "- force_sdb_analytics was set but not used." );
+					DBUG_RETURN(HA_ERR_GENERIC);
+				}
+		
+				break;
+			}
 		case SQLCOM_HA_READ:
 		case SQLCOM_INSERT_SELECT:
 		case SQLCOM_ALTER_TABLE:
@@ -4675,6 +8015,27 @@ int ha_scaledb::rnd_end() {
 	}
 #endif
 
+	if ( isQueryEvaluation() )
+	{
+		DBUG_RETURN( 0 );
+	}
+
+	char* pTableName		= SDBGetTableNameByNumber( sdbUserId_, sdbDbId_, sdbTableNumber_ );
+
+#ifdef SDB_DEBUG
+	SDBDebugStart      ();
+	SDBDebugPrintString( "\nEnd of sequential scan on table [" );
+	SDBDebugPrintString( pTableName );
+	SDBDebugPrintString( "]\n" );
+	SDBDebugEnd        ();
+#endif
+
+	SDBEndSequentialScan( sdbUserId_, sdbQueryMgrId_, sdbDbId_, sdbPartitionId_, pTableName, ( ( THD* ) ha_thd() )->query_id );
+////
+	conditionStringLength_	= 0;
+	analyticsStringLength_	= 0;
+	forceAnalytics_=false;
+///
 	int errorNum = 0;
 	DBUG_RETURN(errorNum);
 }
@@ -4708,22 +8069,47 @@ int ha_scaledb::rnd_next(uchar* buf) {
 
 	ha_statistic_increment(&SSV::ha_read_rnd_next_count);
 
+	if ( isQueryEvaluation() )
+	{
+		errorNum	= evaluateTableScan();
+
+		DBUG_RETURN( errorNum );
+	}
+
 	if (beginningOfScan_) {
 		if ( !sdbQueryMgrId_ ) 
 		{
 			SDBTerminateEngine(0, "ha_scaledb::rnd_next - no query manger was taken", __FILE__, __LINE__ );
 		}
-		// build template at the begin of scan 
-		buildRowTemplate(buf);
-		
-		if (active_index == MAX_KEY) {
-			// prepare for sequential scan
-			char* pTableName		= SDBGetTableNameByNumber               ( sdbUserId_, sdbDbId_, sdbTableNumber_ );
-			char* pTableFsName		= SDBGetTableFileSystemNameByTableNumber( sdbDbId_, sdbTableNumber_ );
 
-			retValue = ( int ) SDBPrepareSequentialScan( sdbUserId_, sdbQueryMgrId_, sdbDbId_, sdbPartitionId_, pTableName, ( ( THD* ) ha_thd() )->query_id, releaseLocksAfterRead_ ,rowTemplate_, conditionString_, conditionStringLength_);
-			conditionStringLength_ = 0;
-			
+		// build template at the begin of scan 
+		buildRowTemplate(table, buf);
+
+		if (active_index == MAX_KEY)
+		{
+			// prepare for sequential scan
+			char* pTableName			= SDBGetTableNameByNumber( sdbUserId_, sdbDbId_, sdbTableNumber_ );
+
+			retValue					= ( int ) SDBPrepareSequentialScan( sdbUserId_, sdbQueryMgrId_, sdbDbId_, sdbPartitionId_, pTableName, ( ( THD* ) ha_thd() )->query_id,
+																			releaseLocksAfterRead_, rowTemplate_,
+																			conditionString_, conditionStringLength_, analyticsString_, analyticsStringLength_ );
+
+			if (temp_table){
+				// build template representing the result set - if the result set is defined by a tmp table
+				// i.e. with the group by handler.
+				buildRowTemplate(temp_table, buf);
+			}
+
+			if ( conditionStringLength_ )
+			{
+				conditionStringLength_	= 0;
+			}
+
+			if ( analyticsStringLength_ )
+			{
+				analyticsStringLength_	= 0;
+			}
+			forceAnalytics_=false;
 
 			// We fetch the result record and save it into buf
 			if (retValue == 0) {
@@ -4742,7 +8128,7 @@ int ha_scaledb::rnd_next(uchar* buf) {
 		beginningOfScan_ = false;
 	} 
 	else { // scaning the 2nd record and forwards
-		errorNum = fetchRow(buf);
+			errorNum = fetchRow(buf);	
 	}
 
 #ifdef SDB_DEBUG_LIGHT
@@ -4815,18 +8201,35 @@ int ha_scaledb::rnd_pos(uchar * buf, uchar *pos) {
 	int retValue = 0;
 
 	//prepare once
-	if (beginningOfScan_) {
+	if (beginningOfScan_)
+	{
 		// build template at the begin of scan 
-		buildRowTemplate(buf);
+		buildRowTemplate(table, buf);
 
 		unsigned int old_active_index = active_index;
 		resetSdbQueryMgrId();
 		prepareFirstKeyQueryManager();
-		active_index = old_active_index;
-		retValue = (int) SDBPrepareSequentialScan(sdbUserId_, sdbQueryMgrId_, sdbDbId_, sdbPartitionId_,
-		        table->s->table_name.str, ((THD*) ha_thd())->query_id, releaseLocksAfterRead_,rowTemplate_, conditionString_, conditionStringLength_);
-		beginningOfScan_ = false;
-		sdbSequentialScan_ = true;
+
+		active_index				= old_active_index;
+
+		retValue					= ( int ) SDBPrepareSequentialScan( sdbUserId_, sdbQueryMgrId_, sdbDbId_, sdbPartitionId_, table->s->table_name.str,
+																		( ( THD* ) ha_thd() )->query_id, releaseLocksAfterRead_, rowTemplate_,
+																		conditionString_, conditionStringLength_, analyticsString_, analyticsStringLength_ );
+
+		beginningOfScan_			= false;
+		sdbSequentialScan_			= true;
+
+		if ( conditionStringLength_ )
+		{
+			conditionStringLength_	= 0;
+		}
+
+		if ( analyticsStringLength_ )
+		{
+			analyticsStringLength_	= 0;
+		}
+		forceAnalytics_=false;
+
 	}
 
 	
@@ -4866,12 +8269,29 @@ int ha_scaledb::info(uint flag) {
 	}
 #endif
 
+	if(table==NULL)
+	{
+		DBUG_RETURN(0);
+	}
+
 	THD* thd = ha_thd();
+	
+	// Temporary Fix- Maria DB ahould call my_ok() bfore running an SQL command 
+	if ( thd->is_error() ) {
+		my_ok(thd);
+	}
+
 	placeSdbMysqlTxnInfo(thd);
 	sdbUserId_ = pSdbMysqlTxn_->getScaleDbUserId();
 
 	if (!sdbDbId_) {
 		DBUG_RETURN(0);
+	}
+
+	SessionSharedMetaLock ot(sdbDbId_);
+	if(ot.lock()==false)
+        {
+	        DBUG_RETURN(convertToMysqlErrorCode(LOCK_TABLE_FAILED));
 	}
 
 
@@ -4893,6 +8313,8 @@ int ha_scaledb::info(uint flag) {
 		errkey = get_last_index_error_key();		
 	}
 
+	bool			isFactTable		= SDBIsStreamingTable(sdbDbId_, sdbTableNumber_) && !SDBIsDimensionTable(sdbDbId_, sdbTableNumber_);
+	unsigned short	rangeDesignator	= ( unsigned short ) SDBGetRangeKey( sdbDbId_, sdbTableNumber_ );
 	unsigned short	sdbIndexTableId	= SDBGetIndexTableNumberForTable( sdbDbId_, sdbTableNumber_ );
 	bool			isVariableStats	= false;
 	bool			isConstStats	= false;
@@ -4908,6 +8330,17 @@ int ha_scaledb::info(uint flag) {
 	{
 		// update the 'variable' part of the info:
 		stats.records				= ( ha_rows )	SDBGetTableStats( sdbUserId_, sdbDbId_, sdbTableNumber_, sdbPartitionId_, SDB_STATS_INFO_FILE_RECORDS );
+		// this is a fixed to be compatibale with Innodb:
+		//  The MySQL optimizer seems to assume in a left join that n_rows
+		//  is an accurate estimate. If it is zero then, of course, it is not,
+		//  Since SHOW TABLE STATUS seems to call this function with the
+		//  HA_STATUS_TIME flag set, while the left join optimizer does not
+		//  set that flag, we add one to a zero value if the flag is not
+		//  set. That way SHOW TABLE STATUS will show the best estimate,
+		//  while the optimizer never sees the table empty. 
+		if (stats.records == 0 && !(flag & HA_STATUS_TIME)) {
+			stats.records           = 1;
+		}
 		stats.deleted				= ( ha_rows )	SDBGetTableStats( sdbUserId_, sdbDbId_, sdbTableNumber_, sdbPartitionId_, SDB_STATS_INFO_FILE_DELETED );
 		stats.delete_length			=				SDBGetTableStats( sdbUserId_, sdbDbId_, sdbTableNumber_, sdbPartitionId_, SDB_STATS_INFO_FILE_DELETE_LENGTH );
 		stats.data_file_length		=				SDBGetTableStats( sdbUserId_, sdbDbId_, sdbTableNumber_, sdbPartitionId_, SDB_STATS_INFO_DATA_FILE_LENGTH );
@@ -4949,28 +8382,43 @@ int ha_scaledb::info(uint flag) {
 			{
 				SDBTerminateEngine( -1, "Table contains fewer indexes in ScaleDB than are defined in MySQL", __FILE__, __LINE__ );
 			}
-
+#ifdef _MARIA_SDB_10
+			for ( uint j = 0; j < table->key_info[ i ].user_defined_key_parts; j++ )
+#else
 			for ( uint j = 0; j < table->key_info[ i ].key_parts; j++ )
+#endif //_MARIA_SDB_10
 			{
+			
 				// Get number of distinct key values for this key part
-				ha_rows		nDistinctKeys	= ( ha_rows ) SDBGetTableStats( sdbUserId_, sdbDbId_, idDesignator, sdbPartitionId_, SDB_STATS_INFO_FILE_DISTINCT_KEYS, j );
-
-				if ( !nDistinctKeys )
-				{
-					// The current transaction inserted rows - we treat each row as a uniuqe key - to get an upper bound on the current number of uniuqe keys 
-					rec_per_key				= records;
+				if ( isFactTable ) {
+					// on fact table we don't have avarge estimate - we just pass a fix number and use the record in range 
+					if (GET_DESIGNATOR_NUMBER(idDesignator) == rangeDesignator) {
+						rec_per_key				= 1;
+					}
+					else {
+						rec_per_key				= 2;
+					}
 				}
-				else
-				{
-					rec_per_key				= records / nDistinctKeys;
-				}
+				else {
+					ha_rows		nDistinctKeys	= ( ha_rows ) SDBGetTableStats( sdbUserId_, sdbDbId_, idDesignator, sdbPartitionId_, SDB_STATS_INFO_FILE_DISTINCT_KEYS, j );
 
-				/*	Since MySQL seems to favor table scans
+					if ( !nDistinctKeys )
+					{
+						// The current transaction inserted rows - we treat each row as a uniuqe key - to get an upper bound on the current number of uniuqe keys 
+						rec_per_key				= records;
+					}
+					else
+					{
+						rec_per_key				= records / nDistinctKeys;
+					}
+
+					/*	Since MySQL seems to favor table scans
 					too much over index searches, we pretend
 					index selectivity is 2 times better than
 					our estimate: */
 
-				rec_per_key					= rec_per_key / 2;
+					rec_per_key					= rec_per_key / 2;
+				}
 
 				if ( !rec_per_key )
 				{
@@ -5011,7 +8459,7 @@ int ha_scaledb::info(uint flag) {
 	{
 		if ( table->found_next_number_field && pSdbMysqlTxn_ )
 		{
-			stats.auto_increment_value = SDBGetAutoIncrBaseValue(sdbDbId_, sdbTableNumber_);
+			stats.auto_increment_value = SDBGetAutoIncrValue(sdbDbId_, sdbTableNumber_);
 		}
 		else
 		{
@@ -5137,6 +8585,462 @@ bool hasEngineEqualScaledb(char* sqlStatement) {
 }
 
 
+#ifdef _HIDDEN_DIMENSION_TABLE // UTIL FUNC IMPLEMENATION 
+
+char * ha_scaledb::getDimensionTablePKName(char* table_name, char* col_name, char* dimension_pk_name) {
+	strcat(getDimensionTableName(table_name, col_name,dimension_pk_name),"__primary_0");
+	return dimension_pk_name;
+}
+
+
+char * ha_scaledb::getDimensionTableName(char* table_name, char* col_name, char* dimension_table_name)
+{
+	strcpy(dimension_table_name,"sdb_dimension_");
+	strcat(dimension_table_name,table_name);
+	strcat(dimension_table_name,"_");
+	strcat(dimension_table_name,col_name);
+	strcat(dimension_table_name,"_1");
+	return dimension_table_name;
+}
+
+int ha_scaledb::parseTableOptions(HA_CREATE_INFO *create_info, bool& streamTable, bool& dimensionTable, unsigned long long&  dimensionSize, char** rangekey )
+{
+
+	engine_option_value* opt=create_info->option_list;
+	while(opt)
+	{
+		if ( SDBUtilStrstrCaseInsensitive( opt->name.str, "RANGEKEY" ) && ( opt->parsed == true ) )
+		{
+			// extract the RANGEKEY field: will be used in add_columns
+			if(rangekey!=NULL)
+			{
+				*rangekey=opt->value.str;
+			}
+		}
+		if ( SDBUtilStrstrCaseInsensitive( opt->name.str, "STREAMING" ) && ( opt->parsed == true ) && SDBUtilStrstrCaseInsensitive( opt->value.str, "YES" ) )
+		{
+			streamTable=true;
+		}
+		if ( SDBUtilStrstrCaseInsensitive( opt->name.str, "DIMENSION" ) && ( opt->parsed == true ) && SDBUtilStrstrCaseInsensitive( opt->value.str, "YES" ) )
+		{
+			dimensionTable=true;
+		}
+		if ( SDBUtilStrstrCaseInsensitive( opt->name.str, "STREAMINGDIMENSION" ) && ( opt->parsed == true ) && SDBUtilStrstrCaseInsensitive( opt->value.str, "YES" ) )
+		{
+			streamTable=true;
+			dimensionTable=true;
+		}
+
+		if ( SDBUtilStrstrCaseInsensitive( opt->name.str, "DIMENSION_SIZE" ) && ( opt->parsed == true ) )
+		{
+			dimensionSize= SDBUtilStringToInt( opt->value.str); 
+		}
+
+		opt=opt->next;
+	}
+	return 0;
+}
+
+int ha_scaledb::create_dimension_table(TABLE *fact_table_arg,char * col_name, unsigned char col_type, unsigned short col_size, unsigned long long  hash_size,  unsigned short ddlFlag, unsigned short tableCharSet, SdbDynamicArray * fkInfoArray ) 
+{
+	int retValue;
+	char    _pDimensionTableName[255];
+	char    _pDimensionPKName[255];
+	char    _pFactFKName[255];
+	char *  _pDimensionColName = col_name;
+	char *  _pFactTableName = fact_table_arg->s->table_name.str;
+	char *  _pkeyFields[2] = {NULL ,NULL};
+	unsigned short keySizes[2] = {0    ,0   };
+	char    _pKeysStr[255];
+	int keyNum;
+
+	DBUG_ENTER("ha_scaledb::create_dimension_table");
+	getDimensionTableName(_pFactTableName, col_name, _pDimensionTableName);
+	getDimensionTablePKName(_pFactTableName,col_name, _pDimensionPKName);
+	// 1. create_dimension_table in meta info 
+	short dimensionTableNumber = SDBCreateTable(sdbUserId_, sdbDbId_, _pDimensionTableName,
+		true, _pDimensionTableName, _pDimensionTableName, false,
+		false, true, true,hash_size,tableCharSet,ddlFlag);
+	 
+	if (dimensionTableNumber == 0) { // createTable fails, need to rollback
+		SDBRollBack(sdbUserId_, NULL, 0, true);
+		DBUG_RETURN( HA_ERR_GENERIC);
+	}
+
+	// 2. Add single field to the dimension_table - this field is the primary key (foreign key in the fact table )
+	int _sdbFieldId = SDBCreateField(sdbUserId_, sdbDbId_, dimensionTableNumber,
+		_pDimensionColName, col_type, col_size, 0, NULL,
+		false, 0, 2, NULL, true, false, true);
+
+
+	// 3. Add primary key index on the field 
+	_pkeyFields[0] = col_name;
+	  keySizes[0]  = col_size;
+	retValue = SDBCreateIndex(sdbUserId_, sdbDbId_, dimensionTableNumber,
+		(char*)_pDimensionPKName, _pkeyFields, keySizes, true, false, NULL, 0, 0,
+		INDEX_TYPE_IMPLICIT);
+
+	// 4. commit the changes such that a different node would be able to read the updates.
+	SDBCommit(sdbUserId_, false);
+
+	// 5. Bug 1008:  we need to open and close after create.
+	SDBOpenTable(sdbUserId_, sdbDbId_, _pDimensionTableName, 0, false);
+	int errorNum = SDBCloseTable(sdbUserId_, sdbDbId_, _pDimensionTableName, 0, false, true, false, false);
+	if (errorNum) {
+		SDBRollBack(sdbUserId_, NULL, 0, false); // rollback new table record in transaction
+		DBUG_RETURN(convertToMysqlErrorCode(CREATE_TABLE_FAILED_IN_CLUSTER));
+	}
+
+	// 6. Define FK for the fact table  
+	strcpy(_pFactFKName,col_name);
+	retValue = SDBDefineForeignKey(sdbUserId_, sdbDbId_, _pFactTableName, _pDimensionTableName, _pFactFKName, _pkeyFields, _pkeyFields);
+	if (retValue)
+	{	
+		DBUG_RETURN(convertToMysqlErrorCode(CREATE_TABLE_FAILED_IN_CLUSTER));
+	}
+
+	// 7. Add FK Info to list - to create Index 
+	MysqlForeignKey* pKeyI = new MysqlForeignKey();
+	pKeyI->setForeignKeyName(_pFactFKName);
+	keyNum = pKeyI->setKeyNumber(fact_table_arg->key_info, (int) fact_table_arg->s->keys, _pKeysStr);
+	if (keyNum == -1) {
+		DBUG_RETURN(METAINFO_WRONG_FOREIGN_FIELD_NAME);
+	}
+	pKeyI->setParentColumnNames(_pDimensionColName);
+	pKeyI->setParentTableName(_pDimensionTableName);
+	strcpy(_pKeysStr,_pDimensionColName);strcat(_pKeysStr,")");
+	
+
+	SDBArrayPutPtr(fkInfoArray, keyNum + 1, pKeyI);
+	DBUG_RETURN( 0);
+}
+
+int ha_scaledb::getSDBType(Field* pField, enum_field_types fieldType,  unsigned char& sdbFieldType, unsigned short& sdbMaxDataLength, unsigned short& sdbFieldSize, unsigned short&  dataLength) 
+{
+	const char* charsetName;
+
+	switch (fieldType) {
+		case MYSQL_TYPE_SHORT:
+			if (pField->flags & UNSIGNED_FLAG)
+				sdbFieldType = ENGINE_TYPE_U_NUMBER;
+			else
+				sdbFieldType = ENGINE_TYPE_S_NUMBER;
+			sdbFieldSize = SDB_SIZE_OF_SHORT;
+			sdbMaxDataLength = 0;
+			break;
+
+		case MYSQL_TYPE_INT24:
+			if (pField->flags & UNSIGNED_FLAG)
+				sdbFieldType = ENGINE_TYPE_U_NUMBER;
+			else
+				sdbFieldType = ENGINE_TYPE_S_NUMBER;
+			sdbFieldSize = SDB_SIZE_OF_MEDIUMINT;
+			sdbMaxDataLength = 0;
+			break;
+
+		case MYSQL_TYPE_LONG:
+			if (pField->flags & UNSIGNED_FLAG)
+				sdbFieldType = ENGINE_TYPE_U_NUMBER;
+			else
+				sdbFieldType = ENGINE_TYPE_S_NUMBER;
+			sdbFieldSize = SDB_SIZE_OF_INTEGER;
+			sdbMaxDataLength = 0;
+			break;
+
+		case MYSQL_TYPE_LONGLONG:
+			if (pField->flags & UNSIGNED_FLAG)
+				sdbFieldType = ENGINE_TYPE_U_NUMBER;
+			else
+				sdbFieldType = ENGINE_TYPE_S_NUMBER;
+			sdbFieldSize = ENGINE_TYPE_SIZE_OF_LONG;
+			sdbMaxDataLength = 0;
+			break;
+
+		case MYSQL_TYPE_TINY:
+			if (pField->flags & UNSIGNED_FLAG)
+				sdbFieldType = ENGINE_TYPE_U_NUMBER;
+			else
+				sdbFieldType = ENGINE_TYPE_S_NUMBER;
+			sdbFieldSize = SDB_SIZE_OF_TINYINT;
+			sdbMaxDataLength = 0;
+			break;
+
+		case MYSQL_TYPE_FLOAT: // FLOAT is treated as a 4-byte number
+			if (pField->flags & UNSIGNED_FLAG)
+				sdbFieldType = ENGINE_TYPE_U_NUMBER;
+			else
+				sdbFieldType = ENGINE_TYPE_S_NUMBER;
+			sdbFieldSize = SDB_SIZE_OF_FLOAT;
+			sdbMaxDataLength = 0;
+			break;
+
+		case MYSQL_TYPE_DOUBLE: // DOUBLE is treated as a 8-byte number
+			if (pField->flags & UNSIGNED_FLAG)
+				sdbFieldType = ENGINE_TYPE_U_NUMBER;
+			else
+				sdbFieldType = ENGINE_TYPE_S_NUMBER;
+			sdbFieldSize = ENGINE_TYPE_SIZE_OF_DOUBLE;
+			sdbMaxDataLength = 0;
+			break;
+
+		case MYSQL_TYPE_BIT: // BIT is treated as a byte array.  Its length is (M+7)/8
+			sdbFieldType = ENGINE_TYPE_BYTE_ARRAY;
+			sdbFieldSize = pField->pack_length();
+			//			sdbFieldSize = ((Field_bit*) pField)->pack_length();	// same effect as last statement (due to polymorphism)
+			sdbMaxDataLength = 0;
+			break;
+
+			// In MySQL 5.1.42, MySQL treats SET as string during create table, insert, and select.
+		case MYSQL_TYPE_SET: // SET is treated as a non-negative integer.  Its length is up to 8 bytes
+			sdbFieldType = ENGINE_TYPE_U_NUMBER;
+			sdbFieldSize = ((Field_set*) pField)->pack_length();
+			sdbMaxDataLength = 0;
+			break;
+
+		case MYSQL_TYPE_DATE: // DATE is treated as a non-negative 3-byte integer
+			sdbFieldType = ENGINE_TYPE_U_NUMBER;
+			sdbFieldSize = SDB_SIZE_OF_DATE;
+			sdbMaxDataLength = 0;
+			break;
+
+		case MYSQL_TYPE_TIME: // TIME is treated as a non-negative 3-byte integer
+			sdbFieldType = ENGINE_TYPE_U_NUMBER;
+			sdbFieldSize = SDB_SIZE_OF_TIME;
+			sdbMaxDataLength = 0;
+			break;
+
+		case MYSQL_TYPE_DATETIME: // DATETIME is treated as a non-negative 8-byte integer
+			sdbFieldType = ENGINE_TYPE_U_NUMBER;
+			sdbFieldSize = SDB_SIZE_OF_DATETIME;
+			sdbMaxDataLength = 0;
+			break;
+
+		case MYSQL_TYPE_TIMESTAMP: // TIMESTAMP is treated as a non-negative 4-byte integer
+			sdbFieldType = ENGINE_TYPE_U_NUMBER;
+			if(dataLength>4)
+			{
+				sdbFieldSize = SDB_SIZE_OF_DATETIME;
+			}
+			else
+			{
+				sdbFieldSize = SDB_SIZE_OF_TIMESTAMP;
+			}
+			sdbMaxDataLength = 0;
+			break;
+
+		case MYSQL_TYPE_YEAR:
+			sdbFieldType = ENGINE_TYPE_U_NUMBER;
+			sdbFieldSize = SDB_SIZE_OF_TINYINT;
+			sdbMaxDataLength = 0;
+			break;
+
+		case MYSQL_TYPE_NEWDECIMAL: // treat decimal as a fixed-length byte array
+			sdbFieldType = ENGINE_TYPE_BYTE_ARRAY;
+			sdbFieldSize = ((Field_new_decimal*) pField)->bin_size;
+			sdbMaxDataLength = 0;
+			break;
+
+		case MYSQL_TYPE_ENUM:
+			sdbFieldType = ENGINE_TYPE_U_NUMBER;
+			sdbFieldSize = ((Field_enum*) pField)->pack_length(); // TBD: need validation
+			sdbMaxDataLength = 0;
+			break;
+
+		case MYSQL_TYPE_STRING: // can be CHAR or BINARY data type
+			// if the character set name contains the string "bin" we infer that this is a binary string
+			charsetName = pField->charset()->name;
+			charsetName = strstr(charsetName, "bin");
+			if (pField->binary()) {
+				sdbFieldType = ENGINE_TYPE_BYTE_ARRAY;
+			} else if (charsetName) {
+				sdbFieldType = ENGINE_TYPE_BYTE_ARRAY;
+			} else {
+				sdbFieldType = ENGINE_TYPE_STRING_CHAR;
+			}
+			// do NOT use pField->field_length as it may be too big
+			sdbFieldSize = pField->pack_length(); // exact size used in RAM
+			sdbMaxDataLength = 0;
+			break;
+
+		case MYSQL_TYPE_VARCHAR:
+		case MYSQL_TYPE_VAR_STRING:
+		case MYSQL_TYPE_TINY_BLOB: // tiny	blob applies to TEXT as well
+			if (pField->binary())
+				sdbFieldType = ENGINE_TYPE_BYTE_ARRAY;
+			else {
+				sdbFieldType = ENGINE_TYPE_STRING_VAR_CHAR;
+	//			reduceSizeOfString = true;
+			}
+	//		keyFieldLength = sdbFieldSize = get_field_key_participation_length(thd, table_arg, pField);// if this is a key field - get the key length
+	//		if (keyFieldLength){
+	//			// for a key field - use the length of the key
+	//			sdbFieldSize = keyFieldLength;
+
+	//		}else{
+	//			sdbFieldSize = 0;		// this is a variable field
+	//		}
+			sdbMaxDataLength = pField->field_length;
+			break;
+
+		case MYSQL_TYPE_BLOB: // These 3 data types apply to TEXT as well
+		case MYSQL_TYPE_MEDIUM_BLOB:
+		case MYSQL_TYPE_LONG_BLOB:
+			if (pField->binary())
+				sdbFieldType = ENGINE_TYPE_BYTE_ARRAY;
+			else
+				sdbFieldType = ENGINE_TYPE_STRING_VAR_CHAR;
+
+			// We parse through the index keys, based on the participation of this field in the
+			// keys we decide how much of the field we want to store as part of the record and 
+			// how much in the overflow file. If field does not participate in any index then
+			// we do not store anything as part of the record.
+
+			// For a blob - the data is kept in the OVF file (sdbFieldSize is 0).
+			//	If the blob data is a key, we keep the key portion in the table data.
+
+
+		//	sdbFieldSize = get_field_key_participation_length(thd, table_arg, pField);
+			sdbMaxDataLength = pField->field_length;
+			break;
+
+		case MYSQL_TYPE_GEOMETRY:
+			if ( pField->get_geometry_type() == pField->GEOM_POINT )
+			{
+				// Point values are stored in the row as they are fixed length and relatively short.
+				// When it is an indexed column, the entire value is indexed.
+				sdbFieldType		= ENGINE_TYPE_BYTE_ARRAY;
+				sdbFieldSize		= SRID_SIZE + WKB_HEADER_SIZE + POINT_DATA_SIZE;
+				sdbMaxDataLength	= 0;		// max data length has value only with variable length.
+				break;
+			}
+			// Fall through: Other geometric data types are not supported
+
+		default:
+			sdbFieldType = 0;
+#ifdef SDB_DEBUG_LIGHT
+			SDBDebugStart(); // synchronize threads printout
+			SDBDebugPrintString("\0This data type is not supported yet.\0");
+			SDBDebugEnd(); // synchronize threads printout
+#endif
+			return HA_ERR_UNSUPPORTED;
+			break;
+		}
+		return 0;
+}
+
+int ha_scaledb::create_multi_dimension_table(TABLE *fact_table_arg, char* index_name, KEY_PART_INFO* hash_key, int key_parts, unsigned long long  hash_size,  unsigned short ddlFlag, unsigned short tableCharSet, SdbDynamicArray * fkInfoArray )
+{
+	int retValue;
+	char    _pDimensionTableName[255];
+	char    _pDimensionPKName[255];
+	char    _pFactFKName[255];
+	char   _pDimensionColNames[1000];
+	_pDimensionColNames[0]=0;
+	char *  _pFactTableName = fact_table_arg->s->table_name.str;
+	char    _pKeysStr[255];
+	int keyNum;
+
+	DBUG_ENTER("ha_scaledb::create_multi_dimension_table");
+
+	char ** _pkeyFields = new char*[key_parts+1];
+	unsigned short* keySizes = new unsigned short[key_parts+1] ;
+	getDimensionTableName(_pFactTableName, index_name, _pDimensionTableName);
+	getDimensionTablePKName(_pFactTableName,index_name, _pDimensionPKName);
+	// 1. create_dimension_table in meta info 
+	short dimensionTableNumber = SDBCreateTable(sdbUserId_, sdbDbId_, _pDimensionTableName,
+		true, _pDimensionTableName, _pDimensionTableName, false,
+		false, true, true,hash_size,tableCharSet,ddlFlag);
+	 
+	if (dimensionTableNumber == 0) { // createTable fails, need to rollback
+		SDBRollBack(sdbUserId_, NULL, 0, true);
+		DBUG_RETURN( HA_ERR_GENERIC);
+	}
+
+
+	for(int i=0;i<key_parts;i++)
+	{
+		const char* col_name=hash_key[i].field->field_name;
+
+
+		Field* pField =fact_table_arg->field[ hash_key[0].field->field_index];
+		enum_field_types fieldType =pField->type();
+
+		unsigned char sdbFieldType;
+		unsigned short sdbMaxDataLength;
+		unsigned short dataLength;
+		unsigned short sdbFieldSize;
+		
+		int rc=getSDBType( pField, fieldType,  sdbFieldType, sdbMaxDataLength, sdbFieldSize, dataLength) ;
+	    if(rc!=0)
+		{
+			DBUG_RETURN(convertToMysqlErrorCode(CREATE_TABLE_FAILED_IN_CLUSTER));
+		}
+		int col_type=sdbFieldType; //hash_key[i].type;
+		int col_size= hash_key[i].length; //sdbMaxDataLength; //hash_key[i].length;
+
+ 	    _pkeyFields[i]=(char*)col_name;
+		keySizes[i]=col_size;
+		strcat(_pDimensionColNames,col_name);
+		if(i<key_parts-1) {strcat(_pDimensionColNames,", ");} //dont add for last column
+	// 2. Add ALL fields to the dimension_table - this field is the primary key (foreign key in the fact table )
+		int _sdbFieldId = SDBCreateField(sdbUserId_, sdbDbId_, dimensionTableNumber,
+		(char*)col_name, col_type, col_size, 0, NULL,
+		false, 0, 2, NULL, true, false, true);
+
+	}
+	//termiate the arrays
+	_pkeyFields[key_parts]=NULL;
+	keySizes[key_parts]=0;
+
+	// 3. Add primary key index for all fields 
+
+	retValue = SDBCreateIndex(sdbUserId_, sdbDbId_, dimensionTableNumber,
+		(char*)_pDimensionPKName, _pkeyFields, keySizes, true, false, NULL, 0, 0,
+		INDEX_TYPE_IMPLICIT);
+
+	// 4. commit the changes such that a different node would be able to read the updates.
+	SDBCommit(sdbUserId_, false);
+
+	// 5. Bug 1008:  we need to open and close after create.
+	SDBOpenTable(sdbUserId_, sdbDbId_, _pDimensionTableName, 0, false);
+	int errorNum = SDBCloseTable(sdbUserId_, sdbDbId_, _pDimensionTableName, 0, false, true, false, false);
+	if (errorNum) {
+		SDBRollBack(sdbUserId_, NULL, 0, false); // rollback new table record in transaction
+		DBUG_RETURN(convertToMysqlErrorCode(CREATE_TABLE_FAILED_IN_CLUSTER));
+	}
+
+	// 6. Define FK for the fact table  
+	strcpy(_pFactFKName,index_name);
+	retValue = SDBDefineForeignKey(sdbUserId_, sdbDbId_, _pFactTableName, _pDimensionTableName, _pFactFKName, _pkeyFields, _pkeyFields);
+	if (retValue)
+	{	
+		DBUG_RETURN(convertToMysqlErrorCode(CREATE_TABLE_FAILED_IN_CLUSTER));
+	}
+
+	// 7. Add FK Info to list - to create Index 
+	MysqlForeignKey* pKeyI = new MysqlForeignKey();
+	pKeyI->setForeignKeyName(_pFactFKName);
+	keyNum = pKeyI->setKeyNumber(fact_table_arg->key_info, (int) fact_table_arg->s->keys, _pKeysStr);
+	if (keyNum == -1) {
+		DBUG_RETURN(METAINFO_WRONG_FOREIGN_FIELD_NAME);
+	}
+
+	char *  _pDimensionColName = index_name;
+
+
+	pKeyI->setParentColumnNames(_pDimensionColNames);
+	pKeyI->setParentTableName(_pDimensionTableName);
+	strcpy(_pKeysStr,_pDimensionColName);strcat(_pKeysStr,")");
+	
+
+	SDBArrayPutPtr(fkInfoArray, keyNum + 1, pKeyI);
+
+	
+
+	DBUG_RETURN( 0);
+}
+
+#endif //_HIDDEN_DIMENSION_TABLE -  UTIL FUNC IMPLEMENATION 
 /*
  Create a table. You do not want to leave the table open after a call to
  this (the database will call ::open if it needs to).
@@ -5162,13 +9066,15 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 		SDBDebugEnd(); // synchronize threads printout
 	}
 #endif
-
+#ifdef _MARIA_SDB_10
+#else
 	if(create_info->table_options & HA_OPTION_CREATE_FROM_ENGINE ) {
 //		SDBDebugPrintHeader("create from engine");
 		SDBDebugFlush();
 		DBUG_RETURN(0);
 	}
-
+#endif
+	
 	// we don't support temp tables -- REJECT
 	if (create_info->options & HA_LEX_CREATE_TMP_TABLE) {
 		DBUG_RETURN( HA_ERR_UNSUPPORTED);
@@ -5254,8 +9160,8 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 	// unsigned int userIdforOpen = SDBGetNewUserId();
 	// for now we commit for free session lock only - TBD
 	SDBCommit(sdbUserId_, true);
-	
-	
+
+
 #ifdef SDB_DEBUG_LIGHT
    SDBLogSqlStmt(sdbUserId_, thd->query(), thd->query_id); // inform engine to log user query for DDL
 #endif
@@ -5266,10 +9172,11 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 		DBUG_RETURN(convertToMysqlErrorCode(errorNum));
 	}
 
-	//lock database before create 
-	if (!lockDDL(sdbUserId_, sdbDbId_, 0, 0)) {				
+	SessionExclusiveMetaLock ot(sdbDbId_,sdbUserId_);
+	if(ot.lock()==false)
+	{
 		DBUG_RETURN(convertToMysqlErrorCode(LOCK_TABLE_FAILED));
-	}
+	}	
 
 	char* pCreateTableStmt = (char*) ALLOCATE_MEMORY(thd->query_length() + 1, SOURCE_HA_SCALEDB, __LINE__);
 	// convert LF to space, remove extra space, convert to lower case letters if needed.
@@ -5281,6 +9188,8 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 	}
 	bool streamTable=false;
 	bool dimensionTable=false;
+	unsigned long long  dimensionSize = 0;
+	
 	char* rangekey=NULL;
 	if (sqlCommand == SQLCOM_CREATE_TABLE ) {
 
@@ -5291,25 +9200,10 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 			pSdbMysqlTxn_->setScaleDbTxnId(SDBGetTransactionIdForUser(sdbUserId_));
 			pSdbMysqlTxn_->setActiveTrn(true);
 		}
-	
-		engine_option_value* opt=create_info->option_list;
-		while(opt)
-		{
-			if(SDBUtilStrstrCaseInsensitive(opt->name.str,"RANGEKEY") && opt->parsed==true && SDBUtilStrstrCaseInsensitive(opt->value.str,"YES"))
-			{
-				//extract the RQANGEKEY field, will get use in add_columns
-				rangekey=opt->value.str;
-			}	
-			if(SDBUtilStrstrCaseInsensitive(opt->name.str,"STREAMING") && opt->parsed==true &&SDBUtilStrstrCaseInsensitive(opt->value.str,"YES"))
-			{
-				streamTable=true;
-			}			
-			if(SDBUtilStrstrCaseInsensitive(opt->name.str,"DIMENSION") && opt->parsed==true && SDBUtilStrstrCaseInsensitive(opt->value.str,"YES"))
-			{
-				dimensionTable=true;
-			}	
-			opt=opt->next;
-		}
+
+		parseTableOptions(create_info, streamTable, dimensionTable, dimensionSize, &rangekey );
+
+
 
 #ifdef SDB_DEBUG_LIGHT
 		if (mysqlInterfaceDebugLevel_) {
@@ -5324,9 +9218,21 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 
 	} else {
 
+
+		parseTableOptions(create_info, streamTable, dimensionTable, dimensionSize,NULL);
+		if(streamTable)
+		{
+				//alter not supported on streaming tables
+				SDBRollBack(sdbUserId_, NULL, 0, true);
+				FREE_MEMORY(pCreateTableStmt);
+				SDBSetErrorMessage( sdbUserId_, INVALID_STREAMING_OPERATION, "- Alter Not supported on Streaming Tables." );
+				DBUG_RETURN(convertToMysqlErrorCode(HA_ERR_GENERIC));
+			}
+
 		if (pSdbMysqlTxn_->getAlterTableName() == NULL) {
 			// If the to-be-altered table is NOT a ScaleDB table,
 			// for cluster, we return an error (Bug 934);
+			SDBRollBack(sdbUserId_, NULL, 0, true);
 			FREE_MEMORY(pCreateTableStmt);
 			DBUG_RETURN( HA_ERR_UNSUPPORTED); // disallow this
 
@@ -5345,12 +9251,7 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 				sdbTableNumber_ = SDBOpenTable(sdbUserId_, sdbDbId_, pTableName, sdbPartitionId_, true);
 			}
 
-			// lock the session for create 
-			if (!lockDDL(sdbUserId_, sdbDbId_, sdbTableNumber_, 0)) {
-				FREE_MEMORY(pCreateTableStmt);
-				DBUG_RETURN(convertToMysqlErrorCode(LOCK_TABLE_FAILED));
-			}
-					
+				
 			//add a new partition to existing table
 			sdbPartitionId_ = SDBAddPartitions(sdbUserId_, sdbDbId_, sdbTableNumber_, partitionName, 0, false);
 			SDBCommit(sdbUserId_, false);
@@ -5376,11 +9277,7 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 	if (table_arg->part_info) {
 		if ((sdbTableNumber_ = SDBOpenTable(sdbUserId_, sdbDbId_, pTableName, sdbPartitionId_, true))) {
 
-			// lock the session for create 
-			if (!lockDDL(sdbUserId_, sdbDbId_, sdbTableNumber_, sdbPartitionId_)) {
-				FREE_MEMORY(pCreateTableStmt);
-				DBUG_RETURN(convertToMysqlErrorCode(LOCK_TABLE_FAILED));
-			}
+			
 			//add the partition into the partition meta table
 			sdbPartitionId_ = SDBAddPartitions(sdbUserId_, sdbDbId_, sdbTableNumber_, partitionName, sdbPartitionId_, false);
 
@@ -5394,15 +9291,15 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 			}
 
 			//commit for create table only + unlock DDL
-			SDBCommit(sdbUserId_, true);
+	SDBCommit(sdbUserId_, false);
 
 			//open and close to create the files for each partition
 			SDBOpenTable(sdbUserId_, sdbDbId_, pTableName, sdbPartitionId_, false); //protected by previous metalock
 
 			//close the table
-			SDBCloseTable(sdbUserId_, sdbDbId_, pTableName, sdbPartitionId_, false, true);
+			SDBCloseTable(sdbUserId_, sdbDbId_, pTableName, sdbPartitionId_, false, true, false, false);
 			
-				
+	SDBCommit(sdbUserId_, true);
 			//cleanup and return
 			FREE_MEMORY(pCreateTableStmt);
 			DBUG_RETURN( 0);
@@ -5418,7 +9315,7 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 	//temp put pTableName in tblFsName...
 	sdbTableNumber_ = SDBCreateTable(sdbUserId_, sdbDbId_, pTableName,
 			create_info->auto_increment_value, tblFsName, pTableName, virtualTableFlag_,
-			hasOverflow, streamTable, dimensionTable, tableCharSet, ddlFlag);
+			hasOverflow, streamTable, dimensionTable,dimensionSize, tableCharSet, ddlFlag);
 
 
 	if (sdbTableNumber_ == 0) { // createTable fails, need to rollback
@@ -5427,45 +9324,44 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 		DBUG_RETURN( HA_ERR_GENERIC);
 	}
 
-	// lock the session for create 
-	if (!lockDDL(sdbUserId_, sdbDbId_, sdbTableNumber_, sdbPartitionId_)) {
-		FREE_MEMORY(pCreateTableStmt);
-		DBUG_RETURN(convertToMysqlErrorCode(LOCK_TABLE_FAILED));
-	}
-
 
 	if (hasOverflow)
 		SDBSetOverflowFlag(sdbDbId_, sdbTableNumber_, true); // this table will now have over flows.
 
 	// Second we add column information to metadata memory
-	errorNum = add_columns_to_table(thd, table_arg, ddlFlag,tableCharSet,rangekey);
+	int number_streaming_keys=0;
+	int number_streaming_attributes=0;
+	int numOfKeys = (int) table_arg->s->keys;
+	// store info about foreign keys so the foreign key index can be created properly when designator is created
+	SdbDynamicArray*	fkInfoArray	= SDBArrayInit( numOfKeys + 1, numOfKeys + 1, sizeof( void* ), false );	// +1 because we use the locations 1,2,3 rather than 0,1,2
+
+	errorNum = add_columns_to_table(thd, table_arg, ddlFlag,tableCharSet,rangekey,number_streaming_keys,number_streaming_attributes,dimensionTable,fkInfoArray);
 	if (errorNum) {
 		SDBRollBack(sdbUserId_, NULL, 0, true); // rollback new table record in transaction
-		SDBRemoveLocalTableInfo(sdbUserId_, sdbDbId_, sdbTableNumber_);
+		SDBRemoveLocalTableInfo(sdbUserId_, sdbDbId_, sdbTableNumber_,false);
 		FREE_MEMORY(pCreateTableStmt);
 		DBUG_RETURN(errorNum);
 	}
 
-	int numOfKeys = (int) table_arg->s->keys;
-
-	// store info about foreign keys so the foreign key index can be created properly when designator is created
-	SdbDynamicArray*	fkInfoArray	= SDBArrayInit( numOfKeys + 1, numOfKeys + 1, sizeof( void* ), false );	// +1 because we use the locations 1,2,3 rather than 0,1,2
-
+	
 	if (numOfKeys > 0) { // index/designator exists
 		// we need to create the foreign key metadata before we work on index because we need
 		// foreign key information to build multi-table index.
+
+
 		errorNum = create_fks(thd, table_arg, pTableName, fkInfoArray, pCreateTableStmt, bIsAlterTableStmt);
 		if (errorNum) {
 			SDBRollBack(sdbUserId_, NULL, 0, true); // rollback new table record in transaction
-			SDBRemoveLocalTableInfo(sdbUserId_, sdbDbId_, sdbTableNumber_);
+			SDBRemoveLocalTableInfo(sdbUserId_, sdbDbId_, sdbTableNumber_,false);
 			FREE_MEMORY(pCreateTableStmt);
-			DBUG_RETURN(errorNum);
+			SDBSetErrorMessage( sdbUserId_, ALTER_TABLE_FAILED_IN_CLUSTER, "- Foreign key invalid." );
+			DBUG_RETURN(convertToMysqlErrorCode(HA_ERR_GENERIC));
 		}
 
 		errorNum = add_indexes_to_table( thd, table_arg, pTableName, ddlFlag, fkInfoArray, pCreateTableStmt );
 		if (errorNum) {
 			SDBRollBack(sdbUserId_, NULL, 0, true); // rollback new table record in transaction
-			SDBRemoveLocalTableInfo(sdbUserId_, sdbDbId_, sdbTableNumber_);
+			SDBRemoveLocalTableInfo(sdbUserId_, sdbDbId_, sdbTableNumber_,false);
 			FREE_MEMORY(pCreateTableStmt);
 			DBUG_RETURN(errorNum);
 		}
@@ -5503,14 +9399,73 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 		sdbPartitionId_ = SDBAddPartitions(sdbUserId_, sdbDbId_, sdbTableNumber_, partitionName, sdbPartitionId_, true);
 	}
 
+	if(streamTable==true && rangekey==NULL)
+	{
+		SDBSetErrorMessage( sdbUserId_, INVALID_STREAMING_OPERATION, "- Streaming table must contain a Range KEY." );
+		SDBRollBack(sdbUserId_, NULL, 0, true); // rollback new table record in transaction
+		SDBRemoveLocalTableInfo(sdbUserId_, sdbDbId_, sdbTableNumber_,false);
+		FREE_MEMORY(pCreateTableStmt);
+		DBUG_RETURN(convertToMysqlErrorCode(HA_ERR_GENERIC));
+	}
+
+	if(streamTable==true && number_streaming_keys!=1)
+	{
+		SDBSetErrorMessage( sdbUserId_, INVALID_STREAMING_OPERATION, "- Streaming table must contain a Streaming KEY." );
+		SDBRollBack(sdbUserId_, NULL, 0, true); // rollback new table record in transaction
+		SDBRemoveLocalTableInfo(sdbUserId_, sdbDbId_, sdbTableNumber_,false);
+		FREE_MEMORY(pCreateTableStmt);
+		DBUG_RETURN(convertToMysqlErrorCode(HA_ERR_GENERIC));
+	}
+
+	if(streamTable==false && number_streaming_attributes>0)
+	{
+		SDBSetErrorMessage( sdbUserId_, INVALID_STREAMING_OPERATION, "- It is illegal to specify Streaming attributes for non-Streaming tables." );
+		SDBRollBack(sdbUserId_, NULL, 0, true); // rollback new table record in transaction
+		SDBRemoveLocalTableInfo(sdbUserId_, sdbDbId_, sdbTableNumber_,false);
+		FREE_MEMORY(pCreateTableStmt);
+		DBUG_RETURN(convertToMysqlErrorCode(HA_ERR_GENERIC));
+	}
 
 	// pass the DDL statement to engine so that it can be propagated to other nodes.
 	// We need to make sure it is a regular CREATE TABLE command because this method is called
 	// when a user has ALTER TABLE or CREATE/DROP INDEX commands.
 	// We also need to make sure that the scaledb hint is not found in the user query.
-
-	if ((sqlCommand == SQLCOM_CREATE_TABLE)) 
+	
+	if ((sqlCommand == SQLCOM_CREATE_TABLE) )                                     
 	{
+
+#ifdef _USE_NEW_MARIADB_DISCOVERY
+		//with the new discovery process, the engine is responsible for creating the FRM file.
+		//the following code creates the create stmt that is required to generate the FRM.
+		//this is necessary because the current SQL might not be a valid create table, could be a 
+		//create from select or a create if dont exist which will fail the init_from_sql_statement_string
+
+////		int errorNum=table_arg->s->init_from_sql_statement_string(thd, true,thd->query(), thd->query_length());
+		int errorNum=init_from_sql_statement_string(table_arg,thd, true,thd->query(), thd->query_length());
+		if(errorNum!=SUCCESS)
+		{
+			//there is a problem with the create table, probably a create select into, try generating the SQL from the
+			//table meta data.
+			thd->clear_error();
+			TABLE_LIST table_list;
+			table_arg->s->tmp_table=NO_TMP_TABLE;
+			table_list.init_one_table(STRING_WITH_LEN(pDbName), tblFsName, strlen(tblFsName), NULL, TL_WRITE);
+			table_list.table=table_arg;
+			String _buffer; 
+		
+			int rc=store_create_info(thd, &table_list, &_buffer,
+                      NULL, false,
+                       true);
+			errorNum=table_arg->s->init_from_sql_statement_string(thd, true,_buffer.c_ptr(), _buffer.length());
+		}
+
+		if (errorNum) {
+			SDBRollBack(sdbUserId_, NULL, 0, true); // rollback new table record in transaction
+			SDBRemoveLocalTableInfo(sdbUserId_, sdbDbId_, sdbTableNumber_,false);
+			FREE_MEMORY(pCreateTableStmt);
+			DBUG_RETURN(convertToMysqlErrorCode(CREATE_TABLE_FAILED_IN_CLUSTER));
+		}		
+#endif //_MARIA_SDB_10
 		// commit the changes such that a different node would be able to read the updates.
 		SDBCommit(sdbUserId_, false);
 
@@ -5520,31 +9475,31 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 		SDBOpenTable(sdbUserId_, sdbDbId_, pTableName, sdbPartitionId_, false);
 
 		// Bug 1079: CREATE TABLE statement will commit at the end of this method.
-		errorNum = SDBCloseTable(sdbUserId_, sdbDbId_, pTableName, sdbPartitionId_, false, true);
+		errorNum = SDBCloseTable(sdbUserId_, sdbDbId_, pTableName, sdbPartitionId_, false, true, false, false);
 		if (errorNum) {
-			SDBRollBack(sdbUserId_, NULL, 0, false); // rollback new table record in transaction
-			SDBRemoveLocalTableInfo(sdbUserId_, sdbDbId_, sdbTableNumber_);
+			SDBRollBack(sdbUserId_, NULL, 0, true); // rollback new table record in transaction
+			SDBRemoveLocalTableInfo(sdbUserId_, sdbDbId_, sdbTableNumber_,false);
 			FREE_MEMORY(pCreateTableStmt);
 			DBUG_RETURN(convertToMysqlErrorCode(CREATE_TABLE_FAILED_IN_CLUSTER));
 		}
 
 		// Now we store  the CREATE TABLE frm 
-		saveFrmData( tblFsName, sdbUserId_, sdbDbId_, sdbTableNumber_ );
+			saveFrmData( tblFsName, sdbUserId_, sdbDbId_, sdbTableNumber_ );
 	}
-	
+
 
 	// CREATE TABLE: Primary node needs to release lockMetaInfo here after all nodes finish processing.
 	// ALTER TABLE: Primary node needs to release lockMetaInfo in the last step: delete_table .
 	SDBCommit(sdbUserId_, true);
 	
+	SDBCreateTableEndInSuccess(sdbUserId_, sdbDbId_, sdbTableNumber_);
 
-			
 #ifdef SDB_DEBUG_LIGHT
 	if (mysqlInterfaceDebugLevel_ > 4) {
 		// print user lock status on the primary node
 		SDBDebugStart(); // synchronize threads printout
 		SDBDebugPrintHeader(
-				"In ha_scaledb::create, print user locks imposed by primary node after commit ");
+			"In ha_scaledb::create, print user locks imposed by primary node after commit ");
 		SDBDebugEnd(); // synchronize threads printout
 		SDBShowUserLockStatus(sdbUserId_);
 	}
@@ -5552,12 +9507,110 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 
 	FREE_MEMORY(pCreateTableStmt);
 	errorNum = convertToMysqlErrorCode(SUCCESS);
-
-//	SDBPrintStructure(sdbDbId_);
+	
+	//	SDBPrintStructure(sdbDbId_);
 
 	DBUG_RETURN(errorNum);
 
 }
+
+//the following code has been copied directly from mariadb table.cpp, with only 1 change the
+//sql_unusable_for_discovery check has been removed because it will cause
+// failures in the following SQL
+// create from where does not exist
+// partition tables
+
+#ifdef _USE_NEW_MARIADB_DISCOVERY
+
+int  ha_scaledb::init_from_sql_statement_string(TABLE *table_arg, THD *thd, bool write,
+                                        const char *sql, size_t sql_length)
+{
+  ulonglong saved_mode= thd->variables.sql_mode;
+  CHARSET_INFO *old_cs= thd->variables.character_set_client;
+  Parser_state parser_state;
+  bool error;
+  char *sql_copy;
+  handler *file;
+  LEX *old_lex;
+  Query_arena *arena, backup;
+  LEX tmp_lex;
+  KEY *unused1;
+  uint unused2;
+  handlerton *hton= plugin_hton(table_arg->s->db_plugin);
+  LEX_CUSTRING frm= {0,0};
+
+  DBUG_ENTER("TABLE_SHARE::init_from_sql_statement_string");
+
+  /*
+    Ouch. Parser may *change* the string it's working on.
+    Currently (2013-02-26) it is used to permanently disable
+    conditional comments.
+    Anyway, let's copy the caller's string...
+  */
+  if (!(sql_copy= thd->strmake(sql, sql_length)))
+    DBUG_RETURN(HA_ERR_OUT_OF_MEM);
+
+  if ( parser_state.init( thd, sql_copy, ( unsigned int ) sql_length ) )
+  {
+	  DBUG_RETURN( HA_ERR_OUT_OF_MEM );
+  }
+
+  thd->variables.sql_mode= MODE_NO_ENGINE_SUBSTITUTION | MODE_NO_DIR_IN_CREATE;
+  thd->variables.character_set_client= system_charset_info;
+  tmp_disable_binlog(thd);
+  old_lex= thd->lex;
+  thd->lex= &tmp_lex;
+
+  arena= thd->stmt_arena;
+  if (arena->is_conventional())
+    arena= 0;
+  else
+    thd->set_n_backup_active_arena(arena, &backup);
+
+  lex_start(thd);
+
+  if ((error= parse_sql(thd, & parser_state, NULL) ))   //i have removed teh "suitable for discovery check" from the code to permit partitions, create from if don't exist etc
+    goto ret;
+
+  thd->lex->create_info.db_type= hton;
+
+  if (table_arg->s->tabledef_version.str)
+    thd->lex->create_info.tabledef_version= table_arg->s->tabledef_version;
+
+  promote_first_timestamp_column(&thd->lex->alter_info.create_list);
+  file= mysql_create_frm_image(thd, table_arg->s->db.str, table_arg->s->table_name.str,
+                               &thd->lex->create_info, &thd->lex->alter_info,
+                               C_ORDINARY_CREATE, &unused1, &unused2, &frm);
+  error|= file == 0;
+  delete file;
+
+  if (frm.str)
+  {
+    table_arg->s->option_list= 0;             // cleanup existing options ...
+    table_arg->s->option_struct= 0;           // ... if it's an assisted discovery
+    error= table_arg->s->init_from_binary_frm_image(thd, write, frm.str, frm.length);
+  }
+
+ret:
+  my_free(const_cast<uchar*>(frm.str));
+  lex_end(thd->lex);
+  thd->lex= old_lex;
+  if (arena)
+    thd->restore_active_arena(arena, &backup);
+  reenable_binlog(thd);
+  thd->variables.sql_mode= saved_mode;
+  thd->variables.character_set_client= old_cs;
+  if (thd->is_error() || error)
+  {
+    thd->clear_error();
+    my_error(ER_SQL_DISCOVER_ERROR, MYF(0),
+             plugin_name(table_arg->s->db_plugin)->str, table_arg->s->db.str, table_arg->s->table_name.str,
+             sql_copy);
+    DBUG_RETURN(HA_ERR_GENERIC);
+  }
+  DBUG_RETURN(0);
+}
+#endif // _USE_NEW_MARIADB_DISCOVERY
 
 //create table will call this function to save frm file
 int saveFrmData(const char* name, unsigned short userId, unsigned short dbId, unsigned short tableId) {
@@ -5583,7 +9636,11 @@ int saveFrmData(const char* name, unsigned short userId, unsigned short dbId, un
 	strcat(frmFilePathName, "/" );
 	strcat(frmFilePathName, name);
 #endif	
+#ifdef _MARIA_SDB_10
+	if (readfrm(frmFilePathName, (const uchar**)&data, &length)) {
+#else
 	if (readfrm(frmFilePathName, &data, &length)) {
+#endif 
 #ifdef SDB_DEBUG
 		SDBDebugStart(); // synchronize threads printout
 		SDBDebugPrintHeader(
@@ -5591,7 +9648,7 @@ int saveFrmData(const char* name, unsigned short userId, unsigned short dbId, un
 		SDBDebugPrintString( frmFilePathName );
 		SDBDebugEnd(); // synchronize threads printout
 #endif
-		return 1;
+			DBUG_RETURN(1);
 	}
 
 
@@ -5652,8 +9709,11 @@ int updateFrmData(const char* name, unsigned int userId, unsigned short dbId) {
 	strcat(frmFilePathName, "/" );
 	strcat(frmFilePathName, name);
 #endif
-
+#ifdef _MARIA_SDB_10
+	if (readfrm(frmFilePathName, (const uchar**)&frmData, &frmLength)) {
+#else
 	if (readfrm(frmFilePathName, &frmData, &frmLength)) {
+#endif
 		return 1;
 	}
 
@@ -5703,8 +9763,11 @@ int updateFrmData(const char* from_name, const char* name, unsigned int userId, 
 	strcat(frmFilePathName, "/" );
 	strcat(frmFilePathName, from_name);
 #endif
-
+#ifdef _MARIA_SDB_10
+	if (readfrm(frmFilePathName, (const uchar**)&frmData, &frmLength)) {
+#else
 	if (readfrm(frmFilePathName, &frmData, &frmLength)) {
+#endif
 		return 1;
 	}
 
@@ -5778,7 +9841,7 @@ int ha_scaledb::has_overflow_fields(THD* thd, TABLE *table_arg) {
 }
 
 // add columns to a table, part of create table
-int ha_scaledb::add_columns_to_table(THD* thd, TABLE *table_arg, unsigned short ddlFlag, unsigned short tableCharSet, char* rangekey) {
+int ha_scaledb::add_columns_to_table(THD* thd, TABLE *table_arg, unsigned short ddlFlag, unsigned short tableCharSet, char* rangekey, int& number_streaming_keys, int& number_streaming_attributes,bool dimensionTable,SdbDynamicArray * fkInfoArray) {
 	bool reduceSizeOfString = false;
 	Field* pField;
 	enum_field_types fieldType;
@@ -5788,7 +9851,7 @@ int ha_scaledb::add_columns_to_table(THD* thd, TABLE *table_arg, unsigned short 
 	unsigned int sdbMaxDataLength;
 	unsigned short sdbFieldId;
 	unsigned short sdbError;
-	
+	unsigned short dataLength;
 
 	bool isAutoIncrField;
 	Field* pAutoIncrField = NULL;
@@ -5812,6 +9875,7 @@ int ha_scaledb::add_columns_to_table(THD* thd, TABLE *table_arg, unsigned short 
 		}
 
 		pField = table_arg->field[i];
+		dataLength=pField->data_length();
 		fieldType = pField->type();
 		switch (fieldType) {
 		case MYSQL_TYPE_SHORT:
@@ -5911,7 +9975,14 @@ int ha_scaledb::add_columns_to_table(THD* thd, TABLE *table_arg, unsigned short 
 
 		case MYSQL_TYPE_TIMESTAMP: // TIMESTAMP is treated as a non-negative 4-byte integer
 			sdbFieldType = ENGINE_TYPE_U_NUMBER;
-			sdbFieldSize = SDB_SIZE_OF_TIMESTAMP;
+			if(dataLength>4)
+			{
+				sdbFieldSize = SDB_SIZE_OF_DATETIME;
+			}
+			else
+			{
+				sdbFieldSize = SDB_SIZE_OF_TIMESTAMP;
+			}
 			sdbMaxDataLength = 0;
 			break;
 
@@ -6033,7 +10104,7 @@ int ha_scaledb::add_columns_to_table(THD* thd, TABLE *table_arg, unsigned short 
 				sdbFieldSize = sdbFieldSize /3;
 			}
 
-			
+			bool isIndexed=false;
 			List_iterator<Key> key_iterator(thd->lex->alter_info.key_list);
 			Key* key=NULL;
 			unsigned short fieldFlag=SDB_FIELD_DEFAULT;
@@ -6041,30 +10112,98 @@ int ha_scaledb::add_columns_to_table(THD* thd, TABLE *table_arg, unsigned short 
 			{
 				Key_part_spec*  ks=(Key_part_spec*)key->columns.first_node()->info;
 
-   
+				
 				if(strcmp(ks->field_name.str,(char*) pField->field_name)==0)
 				{
+					isIndexed=true;
 					if(key->type == Key::FOREIGN_KEY) {fieldFlag=fieldFlag|SDB_FIELD_FK;}	
 					if(key->type == Key::PRIMARY || key->type == Key::UNIQUE) {fieldFlag=fieldFlag|SDB_FIELD_PK_OR_UNIQUE;}
 				}
 
 			}
-
+			bool isHashKey=false;
+			bool isMappedField=false;
+			bool isInsertCascade=false;
+			bool isStreamingKey=false;
+			int hashSize=1000; //set to 1000 by default.
 			engine_option_value* opt=pField->option_list;
 			while(opt)
 			{
+				if(SDBUtilStrstrCaseInsensitive(opt->name.str,"HASHKEY") && opt->parsed==true &&SDBUtilStrstrCaseInsensitive(opt->value.str,"YES"))
+				{
+					number_streaming_attributes++;
+					isHashKey=true;                    // hashkey implies the following:
+					isInsertCascade=true;              // 1.add parent to hidden table 
+					fieldFlag=fieldFlag|SDB_FIELD_FK;  // 2.foregin key to the hidden table  
+					isMappedField =true;               // 3.mapped column  
+				}	
+				if(SDBUtilStrstrCaseInsensitive(opt->name.str,"HASHSIZE") && opt->parsed==true )
+				{
+	
+					hashSize=SDBUtilStringToInt(opt->value.str);
+				}
 				if(SDBUtilStrstrCaseInsensitive(opt->name.str,"MAPPED") && opt->parsed==true &&SDBUtilStrstrCaseInsensitive(opt->value.str,"YES"))
 				{
-					fieldFlag=fieldFlag|SDB_FIELD_MAPPED;
-				}						
+					number_streaming_attributes++;
+					isMappedField=true;
+				}		
+				if(SDBUtilStrstrCaseInsensitive(opt->name.str,"INSERT_DIMENSION") && opt->parsed==true &&SDBUtilStrstrCaseInsensitive(opt->value.str,"YES"))
+				{
+					number_streaming_attributes++;
+					isInsertCascade=true;
+				}	
+				if(SDBUtilStrstrCaseInsensitive(opt->name.str,"STREAMING_KEY") && opt->parsed==true &&SDBUtilStrstrCaseInsensitive(opt->value.str,"YES"))
+				{
+					number_streaming_attributes++;
+					number_streaming_keys++;
+					isStreamingKey=true;
+					if(fieldType!=MYSQL_TYPE_LONGLONG && !dimensionTable)
+					{
+						SDBSetErrorMessage( sdbUserId_, INVALID_STREAMING_OPERATION, "- Streaming KEY must be a bigint." );
+						return convertToMysqlErrorCode(HA_ERR_GENERIC);
+					}
+
+					if(isAutoIncrField==false)
+					{
+						SDBSetErrorMessage( sdbUserId_, INVALID_STREAMING_OPERATION, "- Streaming KEY must be an AUTO_INCREMENT column." );
+						return convertToMysqlErrorCode(HA_ERR_GENERIC);
+					}
+
+
+					if( (fieldFlag&SDB_FIELD_PK_OR_UNIQUE)==0)
+					{
+						SDBSetErrorMessage( sdbUserId_, INVALID_STREAMING_OPERATION, "- Streaming KEY must be a Primary KEY column." );
+						return convertToMysqlErrorCode(HA_ERR_GENERIC);
+					}
+				}	
 				opt=opt->next;
 			}
+
 			sdbFieldId = SDBCreateField(sdbUserId_, sdbDbId_, sdbTableNumber_,
 				(char*) pField->field_name, sdbFieldType, sdbFieldSize, sdbMaxDataLength, NULL,
-				isAutoIncrField, ddlFlag, fieldFlag, rangekey ? stricmp(pField->field_name,rangekey)==0 : false);
+				isAutoIncrField, ddlFlag, fieldFlag, rangekey ? stricmp(pField->field_name,rangekey)==0 : false, isMappedField, isInsertCascade, isStreamingKey);
+
+#ifdef _HIDDEN_DIMENSION_TABLE // CREATE HIDDEN DIMENSION TABLE + INDEXES 
+			if ( isHashKey )
+			{
+				if(!isIndexed)
+				{
+					//streaming table require an index
+					
+					SDBSetErrorMessage( sdbUserId_, INVALID_STREAMING_OPERATION, "- Streaming Table requires the HASH key be Indexed." );
+					return convertToMysqlErrorCode(HA_ERR_GENERIC);
+				}
+				int rret=create_dimension_table(table_arg, (char*) pField->field_name, sdbFieldType, sdbFieldSize, hashSize, ddlFlag, tableCharSet, fkInfoArray);
+				if(rret!=SUCCESS)
+				{
+					return convertToMysqlErrorCode(CREATE_TABLE_FAILED_IN_CLUSTER);
+				}
+			}
+#endif
+
 		}
 
-		if(!sdbFieldType ||  !sdbFieldId) { // an error occurs
+		if(!sdbFieldType ||  !sdbFieldId ) { // an error occurs
 #ifdef SDB_DEBUG_LIGHT
 			SDBDebugStart(); // synchronize threads printout
 			SDBDebugPrintString("\0fails to create user column ");
@@ -6254,7 +10393,11 @@ int ha_scaledb::get_field_key_participation_length(THD* thd, TABLE *table_arg, F
 
 	for (int i = 0; i < numOfKeys; ++i) {
 		KEY* pKey = table_arg->key_info + i;
+#ifdef _MARIA_SDB_10
+		int numOfKeyFields = (int) pKey->user_defined_key_parts;
+#else
 		int numOfKeyFields = (int) pKey->key_parts;
+#endif
 		for (int i2 = 0; i2 < numOfKeyFields; ++i2) {
 			pKeyPart = pKey->key_part + i2;
 			if (SDBUtilCompareStrings(pKeyPart->field->field_name, pField->field_name, true))
@@ -6315,8 +10458,11 @@ int ha_scaledb::add_indexes_to_table( THD* thd, TABLE *table_arg, char* tblName,
 		char* designatorName = SDBUtilFindDesignatorName(pTableFsName, pKey->name, i, true, sdbDesignatorName_, SDB_MAX_NAME_LENGTH);
 
 		if ((primaryKeyNum == 0) && (i == 0)) { // primary key specified
-
+#ifdef _MARIA_SDB_10
+			int numOfKeyFields = (int) pKey->user_defined_key_parts;
+#else
 			int numOfKeyFields = (int) pKey->key_parts;
+#endif //_MARIA_SDB_10
 			char** keyFields = (char **) ALLOCATE_MEMORY((numOfKeyFields + 1) * sizeof(char *), SOURCE_HA_SCALEDB, __LINE__);
 			unsigned short* keySizes = (unsigned short*) ALLOCATE_MEMORY((numOfKeyFields + 1) * sizeof(unsigned short), SOURCE_HA_SCALEDB, __LINE__);
 
@@ -6347,14 +10493,17 @@ int ha_scaledb::add_indexes_to_table( THD* thd, TABLE *table_arg, char* tblName,
 			FREE_MEMORY(keySizes);
 			if (retValue == 0) { // an error occurs
 				SDBRollBack(sdbUserId_, NULL, 0, false);
-				SDBRemoveLocalTableInfo(sdbUserId_, sdbDbId_, sdbTableNumber_); // cleans up table name and field name
+				SDBRemoveLocalTableInfo(sdbUserId_, sdbDbId_, sdbTableNumber_,false); // cleans up table name and field name
 				retCode = METAINFO_FAIL_TO_CREATE_INDEX;
 				break;
 			}
 
 		} else { // add secondary index (including the foreign key)
-
+#ifdef _MARIA_SDB_10
+			int numOfKeyFields = (int) pKey->user_defined_key_parts;
+#else
 			int numOfKeyFields = (int) pKey->key_parts;
+#endif // _MARIA_SDB_10
 			bool isUniqueIndex = (pKey->flags & HA_NOSAME) ? true : false;
 			char** keyFields = (char **) ALLOCATE_MEMORY((numOfKeyFields + 1) * sizeof(char *), SOURCE_HA_SCALEDB, __LINE__);
 			unsigned short* keySizes = (unsigned short*) ALLOCATE_MEMORY((numOfKeyFields + 1) * sizeof(unsigned short), SOURCE_HA_SCALEDB, __LINE__);
@@ -6385,10 +10534,44 @@ int ha_scaledb::add_indexes_to_table( THD* thd, TABLE *table_arg, char* tblName,
 			FREE_MEMORY(keySizes);
 			if (retValue == 0) { // an error occurs as index number should be > 0
 				SDBRollBack(sdbUserId_, NULL, 0, false);
-				SDBRemoveLocalTableInfo(sdbUserId_, sdbDbId_, sdbTableNumber_); // cleans up table name and field name
+				SDBRemoveLocalTableInfo(sdbUserId_, sdbDbId_, sdbTableNumber_,false); // cleans up table name and field name
 				retCode = METAINFO_FAIL_TO_CREATE_INDEX;
 				break;
 			}
+
+
+			//lets create the streaming / hash index
+
+			bool isHashKey=false;
+			int hashSize=1000; //set to 1000 by default.
+			engine_option_value* opt=pKey->option_list;
+			while(opt)
+			{
+				if(SDBUtilStrstrCaseInsensitive(opt->name.str,"HASHKEY") && opt->parsed==true &&SDBUtilStrstrCaseInsensitive(opt->value.str,"YES"))
+				{					
+					isHashKey=true;                    // hashkey implies the following:
+				}	
+				if(SDBUtilStrstrCaseInsensitive(opt->name.str,"HASHSIZE") && opt->parsed==true )
+				{	
+					hashSize=SDBUtilStringToInt(opt->value.str);
+				}			
+				opt=opt->next;
+			}
+			
+			if ( isHashKey )
+			{
+#ifdef _MARIA_SDB_10
+				int rret=create_multi_dimension_table(table_arg, pKey->name,  pKey->key_part, pKey->user_defined_key_parts,   hashSize, ddlFlag, 0, fkInfoArray);
+#else
+				int rret=create_multi_dimension_table(table_arg, pKey->name,  pKey->key_part, pKey->key_parts,   hashSize, ddlFlag, 0, fkInfoArray);
+#endif
+				if(rret!=SUCCESS)
+				{
+					return convertToMysqlErrorCode(CREATE_TABLE_FAILED_IN_CLUSTER);
+				}
+			}
+
+
 		}
 	} // for (int i=0; i < numOfKeys; ++i )
 
@@ -6457,12 +10640,22 @@ int ha_scaledb::delete_table(const char* name) {
 		DBUG_RETURN(convertToMysqlErrorCode(retCode));
 	}
 
+
+	
+	SDBCommit(sdbUserId_, true);		
+
+	SessionExclusiveMetaLock ot(sdbDbId_,sdbUserId_);
+	if(ot.lock()==false)
+	{
+
+		DBUG_RETURN(convertToMysqlErrorCode(LOCK_TABLE_FAILED));
+	}	
 	if(sdbUserId_!= 0)
 	{
 		int tid = SDBGetTableNumberByFileSystemName(sdbUserId_, sdbDbId_, tblFsName);
 		if(tid!=0)
 		{
-			SDBRemoveLocalTableInfo(sdbUserId_, sdbDbId_, tid);			
+			SDBRemoveLocalTableInfo(sdbUserId_, sdbDbId_, tid,false);			
 		}
 	}
 
@@ -6483,19 +10676,14 @@ int ha_scaledb::delete_table(const char* name) {
 		isTableAlreadyOpen	= false;
 	}
 
-	// commit + release older locks
-	SDBCommit(sdbUserId_, true);							
-
+					
+	 
 	sdbTableNumber_ = SDBOpenTable(sdbUserId_, sdbDbId_, pTblFsName, sdbPartitionId_, false); // bug137
 
-	if(!lockDDL(sdbUserId_, sdbDbId_, sdbTableNumber_, sdbPartitionId_))
-	{
-		//even if drop fails, we MUST leave table closed because mysql has already closed the table
-		char* userFromTblName = SDBGetTableNameByNumber(sdbUserId_, sdbDbId_, sdbTableNumber_);
-		retCode=SDBCloseTable(sdbUserId_, sdbDbId_, userFromTblName, sdbPartitionId_, false, false);
+	if (!lockDDL(sdbUserId_, sdbDbId_, sdbTableNumber_, 0)){
+		SDBRollBack(sdbUserId_, NULL, 0, true);
 		DBUG_RETURN(convertToMysqlErrorCode(LOCK_TABLE_FAILED));
-	}	
-	
+	}
 
 	
 	// If a table name has special characters such as $ or + enclosed in back-ticks,
@@ -6525,18 +10713,18 @@ int ha_scaledb::delete_table(const char* name) {
 		// cluster solution: secondary node: MySQL already closed the to-be-dropped table and deleted MySQL metadata for the table.
 		unsigned short _tableId = SDBGetTableNumberByFileSystemName(sdbUserId_, sdbDbId_, tblFsName);
 		retCode = SDBDeleteTable(sdbUserId_, sdbDbId_, pTableName, partitionName, sdbPartitionId_, ddlFlag);
-
+		
 		if ( retCode == CAS_FILE_IN_USE )
 		{
-			SDBRollBack(sdbUserId_, NULL, 0, true);
+			
 
 			if ( !isTableAlreadyOpen )
 			{
 				// Close the table which was opened above
 				char*			userFromTblName	= SDBGetTableNameByNumber( sdbUserId_, sdbDbId_, sdbTableNumber_ );
-				unsigned short	retClose		= SDBCloseTable( sdbUserId_, sdbDbId_, userFromTblName, sdbPartitionId_, false, false );
+				unsigned short	retClose		= SDBCloseTable( sdbUserId_, sdbDbId_, userFromTblName, sdbPartitionId_, false, false, false, false );
 			}
-
+			SDBRollBack(sdbUserId_, NULL, 0, true);
 			FREE_MEMORY(partitionName);
 			DBUG_RETURN(convertToMysqlErrorCode(retCode));
 
@@ -6551,25 +10739,7 @@ int ha_scaledb::delete_table(const char* name) {
 
 	} 
 
-
-
-	// For both DROP TABLE and ALTER TABLE, primary node needs to release lockMetaInfo and table level lock
-	if (retCode == SUCCESS)
-	{
-		SDBCommit(sdbUserId_, true);		
-	}
-	else
-	{
-		SDBRollBack(sdbUserId_, NULL, 0, true);
-		
-		if ( !isTableAlreadyOpen )
-		{
-			// Close the table which was opened above
-			char*			userFromTblName	= SDBGetTableNameByNumber( sdbUserId_, sdbDbId_, sdbTableNumber_ );
-			unsigned short	retClose		= SDBCloseTable( sdbUserId_, sdbDbId_, userFromTblName, sdbPartitionId_, false, false );
-		}
-	}
-
+	
 	pSdbMysqlTxn_->setDdlFlag(0); // Bug1039: reset the flag as a subsequent statement may check this flag
 	pSdbMysqlTxn_->setActiveTrn(false); // mark the end of long implicit transaction
 
@@ -6589,7 +10759,8 @@ int ha_scaledb::delete_table(const char* name) {
 		SDBShowUserLockStatus(sdbUserId_);
 	}
 #endif
-
+	SDBCommit(sdbUserId_, true);	
+	
 	FREE_MEMORY(partitionName);
 	errorNum = convertToMysqlErrorCode(retCode);
 	DBUG_RETURN(errorNum);
@@ -6702,11 +10873,17 @@ int ha_scaledb::rename_table(const char* fromTable, const char* toTable) {
 	SDBCommit(sdbUserId_, false);	// release previous lock as we will take exclusive lock on the meta data tables
 	SDBRollBack(sdbUserId_, NULL, 0, true); // release session locks 
 	
-	// open the table for every partition.
+
+	SessionExclusiveMetaLock ot(sdbDbId_,sdbUserId_);
+	if (ot.lock()==false) {
+		DBUG_RETURN(convertToMysqlErrorCode(LOCK_TABLE_FAILED));
+	}
+
+		// open the table for every partition.
 	sdbTableNumber_ = SDBOpenTable(sdbUserId_, sdbDbId_, pFromTblFsName, sdbPartitionId_, false);
 	
-	// lock DML
-	if (!lockDDL(sdbUserId_, sdbDbId_, sdbTableNumber_, sdbPartitionId_)) {
+	if (!lockDDL(sdbUserId_, sdbDbId_, sdbTableNumber_, 0)){
+		SDBRollBack(sdbUserId_, NULL, 0, true);
 		DBUG_RETURN(convertToMysqlErrorCode(LOCK_TABLE_FAILED));
 	}
 
@@ -6957,7 +11134,24 @@ int ha_scaledb::index_end(void) {
 	}
 #endif
 
-	active_index = MAX_KEY;
+	if ( isQueryEvaluation() )
+	{
+		return 0;
+	}
+
+	char* pTableName		= SDBGetTableNameByNumber( sdbUserId_, sdbDbId_, sdbTableNumber_ );
+
+#ifdef SDB_DEBUG
+	SDBDebugStart      ();
+	SDBDebugPrintString( "\nEnd of indexed query on table [" );
+	SDBDebugPrintString( pTableName );
+	SDBDebugPrintString( "]\n" );
+	SDBDebugEnd        ();
+#endif
+
+	SDBEndIndexedQuery( sdbUserId_, sdbQueryMgrId_, sdbDbId_, sdbPartitionId_, pTableName, ( ( THD* ) ha_thd() )->query_id );
+
+	active_index			= MAX_KEY;
 	return 0;
 }
 
@@ -7062,10 +11256,6 @@ int ha_scaledb::extra(enum ha_extra_function operation) {
 	return (0);
 }
 
-// this is to compile mariadb interface
-double ha_scaledb::keyread_time(uint index, uint ranges, ha_rows rows) {
-        return 0;
-}
 
 // ---------------------------------------------------------------------
 //	Get the storage engine error message - call ScaleDB to get a message
@@ -7204,10 +11394,9 @@ double ha_scaledb::scan_time() {
 		seekLength = SDBGetTableStats(sdbUserId_, sdbDbId_, sdbTableNumber_, sdbPartitionId_, SDB_STATS_INFO_SEEK_LENGTH);
 	}
 
-
-	if (seekLength == 0)
-		seekLength = 1;
-
+	//  //  if the seekLength is 0 it is an empty table - leave it to be zero in order to favor sequential scan 
+	//	if (seekLength == 0)
+	//		seekLength = 1;
 	return (double) seekLength;
 }
 
@@ -7225,21 +11414,48 @@ double ha_scaledb::read_time(uint inx, uint ranges, ha_rows rows) {
 	}
 #endif
 
+	double readTime ;
+	
+
 	if (rows <= 2) {
+		readTime = ((double) rows);
+	}
+	else {
+		/* Assume that the read time is proportional, but slightly bigger (*1.1),  to the scan time for all
+		rows  + at most two seeks per range. */
+		double time_for_scan_index = scan_time()*1.1;
 
-		return((double) rows);
+		if (stats.records < rows) {
+
+			readTime =  time_for_scan_index;
+		}
+		else {
+			readTime = (ranges + (((double) rows / (double) stats.records) * time_for_scan_index));
+
+		}
 	}
 
-	/* Assume that the read time is proportional, but slightly bigger (*1.1),  to the scan time for all
-	rows  + at most two seeks per range. */
-	double time_for_scan_index = scan_time()*1.1;
+	////STREAMING_OPTIMIZATION
+	//if(sdbDbId_!=0 && sdbTableNumber_ !=0 && SDBIsStreamingTable(sdbDbId_, sdbTableNumber_))
+	//{
+	//	//if a table scan is required, lets make sure that the range key
+	//	// will get used
+	//	int range_index=SDBGetRangeKey(sdbDbId_, sdbTableNumber_) ;
+	//	int index_id=SDBGetIndexExternalId(sdbDbId_, range_index);
 
-	if (stats.records < rows) {
+	//	if(inx ==index_id)
+	//	{
+	//		// if range key return minimum 
+	//		readTime 1;
+	//	}
+	//	else
+	//	{
+	//		// on dimension and pk return bigger number
+	//		return 2;
+	//	}
+	//}
 
-		return(time_for_scan_index);
-	}
-
-	return(ranges + (((double) rows / (double) stats.records) * time_for_scan_index));
+	return readTime;
 }
 
 
@@ -7414,6 +11630,12 @@ static MYSQL_SYSVAR_UINT(cluster_port, scaledb_cluster_port,
 		"This parameter specifies the port for connecting to mysql for DDL operations, leave option out if using default port.",
 		NULL, NULL, 3306, 1, UINT_MAX, 0);
 
+
+static MYSQL_SYSVAR_UINT(statistics_level, statisticsLevel_,
+  PLUGIN_VAR_NOCMDOPT,
+  "Set the statistics level",
+  NULL, NULL, 2L, 1L, 1000L, 0);
+
 static MYSQL_SYSVAR_STR(cluster_user, scaledb_cluster_user,
 		PLUGIN_VAR_NOCMDOPT | PLUGIN_VAR_READONLY,
 		"user name for connecting to mysql for DDL operations",
@@ -7430,6 +11652,7 @@ static struct st_mysql_sys_var* scaledb_system_variables[] = { MYSQL_SYSVAR(conf
         MYSQL_SYSVAR(buffer_size_data), MYSQL_SYSVAR(max_file_handles), MYSQL_SYSVAR(aio_flag),
         MYSQL_SYSVAR(max_column_length_in_base_file), MYSQL_SYSVAR(dead_lock_milliseconds),
         MYSQL_SYSVAR(cluster), MYSQL_SYSVAR(cluster_port), MYSQL_SYSVAR(cluster_user),
+  	    MYSQL_SYSVAR(statistics_level),
         MYSQL_SYSVAR(debug_string), NULL // the last element of this array must be NULL
         };
 
