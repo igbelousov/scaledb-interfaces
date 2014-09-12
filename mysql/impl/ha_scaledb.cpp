@@ -6415,6 +6415,31 @@ int ha_scaledb::addOrderByToList(char* buf, int& pos,  SelectAnalyticsHeader* sa
 			
 
 				}
+				else if (sum->sum_func() == Item_sum::COUNT_DISTINCT_FUNC)
+				{
+					function=FT_COUNT_DISTINCT;
+					Field *field =((Item_field *)item->next)->field;
+
+					field_name=field->field_name;
+					type=field->type();
+					flag=field->flags;
+					if(type==MYSQL_TYPE_NEWDECIMAL)
+					{			
+						Field_new_decimal* fnd=(Field_new_decimal*)field;
+						precision=fnd->precision;
+						result_precision =item->decimal_precision();
+						scale=fnd->decimals();
+						result_scale = item->decimals;
+					}
+					if(item->name!=NULL)
+					{
+						//if an alias  column, so MUST be in orderby so no need to add
+						alias_name=item->name;
+						found=true;
+					}
+			
+
+				}
 				else if (sum->sum_func() == Item_sum::MAX_FUNC)
 				{
 					function=FT_MAX;
@@ -6464,6 +6489,35 @@ int ha_scaledb::addOrderByToList(char* buf, int& pos,  SelectAnalyticsHeader* sa
 					}
 			
 
+				}
+				else if (sum->sum_func() == Item_sum::AVG_FUNC)
+				{
+					function=FT_AVG;
+					Field *field =((Item_field *)item->next)->field;
+
+					field_name=field->field_name;
+					type=field->type();
+					flag=field->flags;
+					if(type==MYSQL_TYPE_NEWDECIMAL)
+					{			
+						Field_new_decimal* fnd=(Field_new_decimal*)field;
+						precision=fnd->precision;
+						result_precision =item->decimal_precision();
+						scale=fnd->decimals();
+						result_scale = item->decimals;
+					}
+					if(item->name!=NULL)
+					{
+						//if an alias  column, so MUST be in orderby so no need to add
+						alias_name=item->name;
+						found=true;
+					}
+				}
+				else
+				{
+
+					//unsupported function
+					throw "Unsupported Aggregate type in Order By";
 				}
 
 				break;
@@ -7630,6 +7684,8 @@ void ha_scaledb::saveConditionToString(const COND *cond)
 
 void ha_scaledb::generateAnalyticsString()
 {
+	try
+	{
 	THD* thd = ha_thd();
 
 
@@ -7709,6 +7765,13 @@ void ha_scaledb::generateAnalyticsString()
 				forceAnalytics_=true;
 			}
 		}
+	}
+	catch( char* e)
+	{
+		//somethign bad happened so failing analytics
+		analyticsStringLength_		=0;
+		analyticsSelectLength_      = 0;
+	}
 }
 
 /**
