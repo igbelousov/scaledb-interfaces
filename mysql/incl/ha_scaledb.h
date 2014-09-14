@@ -92,7 +92,8 @@ Version for file format.
 /* bits in group by header info_flags */
 #define GH_ORDER_BY             1       /* query contain an order by*/
 #define ANALYTIC_FLAG_ASCENDING 2
-//#define GH_ANOTHER_FLAG                 2       /* add as required */
+#define ANALYTIC_FLAG_USES_COUNT 4
+//#define GH_ANOTHER_FLAG                 8       /* add as required */
 
 
 #define SCALEDB_VERSION 1
@@ -902,7 +903,7 @@ private:
 	THR_LOCK_DATA lock; ///< MySQL lock
 
 	SCALEDB_SHARE *share; ///< Shared lock info
-
+	bool analytics_uses_count;
 	bool beginningOfScan_; // set to true only we begin scanning a table and have not fetched rows yet.
 	unsigned short sdbDbId_; // DbId used by ScaleDB
 	unsigned short sdbTableNumber_; // table number used by ScaleDB

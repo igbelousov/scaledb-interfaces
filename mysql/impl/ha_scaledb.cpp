@@ -6666,7 +6666,7 @@ int ha_scaledb::generateGroupConditionString(int cardinality, int thread_count, 
 		info |= GH_ORDER_BY;   
 		if(lex->order_list.first->asc) {info |= ANALYTIC_FLAG_ASCENDING;}
 	}
-
+	if(analytics_uses_count)		   {info |= ANALYTIC_FLAG_USES_COUNT;}
 
 	GroupByAnalyticsHeader* gbh= (GroupByAnalyticsHeader*)buf;
 	gbh->cardinality=cardinality;
@@ -6816,6 +6816,11 @@ int ha_scaledb::generateOrderByConditionString(char* buf, int max_buf, unsigned 
 bool ha_scaledb::addSelectField(char* buf, int& pos, unsigned short dbid, unsigned short tabid, enum_field_types type, short function, const char* col_name, bool& contains_analytics, short precision, short scale, int flag, short result_precision, short result_scale, char* alias_name )
 {
 	char castype=	getCASType(type,flag) ;
+
+	if(function==FT_COUNT || function == FT_AVG)
+	{
+	     analytics_uses_count=true;
+	}
 	
 	SelectAnalyticsBody2* sab2= (SelectAnalyticsBody2*)(buf+pos);
 	if (( !col_name ) || ( strcmp( "?", col_name ) == 0 ) || ( !dbid ) || ( !tabid ) )
@@ -7708,7 +7713,7 @@ void ha_scaledb::generateAnalyticsString()
 			char	group_buf[ 2000 ];
 			char	select_buf[ 2000 ];
 			char	order_and_select_buf[ 2000 ];
-
+			analytics_uses_count=false;
 			int		len2		= generateSelectConditionString( select_buf, sizeof( select_buf ),sdbDbId_, sdbTableNumber_  );
 
 			int len3=generateOrderByConditionString( order_and_select_buf,  2000,   sdbDbId_,   sdbTableNumber_,  select_buf);
