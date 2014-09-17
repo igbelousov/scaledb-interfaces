@@ -7716,48 +7716,53 @@ void ha_scaledb::generateAnalyticsString()
 			analytics_uses_count=false;
 			int		len2		= generateSelectConditionString( select_buf, sizeof( select_buf ),sdbDbId_, sdbTableNumber_  );
 
-			int len3=generateOrderByConditionString( order_and_select_buf,  2000,   sdbDbId_,   sdbTableNumber_,  select_buf);
-
-
-		
-
-			int		len1		= generateGroupConditionString(cardinality, thread_count, group_buf, sizeof( group_buf ), sdbDbId_, sdbTableNumber_, select_buf );
-			//check if analytics is enabled
-
-			//append the select buffer
-			memcpy(order_and_select_buf+len3,select_buf+sizeof(SelectAnalyticsHeader),len2-sizeof(SelectAnalyticsHeader));
-
-			int len4 = len3 + len2-sizeof(SelectAnalyticsHeader);
-                        analyticsSelectLength_=len4;
-
-			//turn analytics off
-			char* s_disable_analytics=SDBUtilFindComment(thd->query(), "disable_sdb_analytics") ;
-
-
-			if  (true )
+			if(len2>0)
 			{
+				//if no analytics then it failed so skip
+
+				int len3=generateOrderByConditionString( order_and_select_buf,  2000,   sdbDbId_,   sdbTableNumber_,  select_buf);
 
 
-				if  (s_disable_analytics==NULL && len1		> 0 && len2		> 0 )
+
+
+				int		len1		= generateGroupConditionString(cardinality, thread_count, group_buf, sizeof( group_buf ), sdbDbId_, sdbTableNumber_, select_buf );
+				//check if analytics is enabled
+
+				//append the select buffer
+				memcpy(order_and_select_buf+len3,select_buf+sizeof(SelectAnalyticsHeader),len2-sizeof(SelectAnalyticsHeader));
+
+				int len4 = len3 + len2-sizeof(SelectAnalyticsHeader);
+				analyticsSelectLength_=len4;
+
+				//turn analytics off
+				char* s_disable_analytics=SDBUtilFindComment(thd->query(), "disable_sdb_analytics") ;
+
+
+				if  (true )
 				{
-					//need to check condition string is big enough?
-					memcpy(	analyticsString_, group_buf, len1 );
-					memcpy(	analyticsString_+len1, order_and_select_buf, len4 );
-					analyticsStringLength_	= len1+len4;
 
-					if(s_force_analytics!=NULL)
+
+					if  (s_disable_analytics==NULL && len1		> 0 && len2		> 0 )
 					{
-						//analytics failed so return an error.
-						forceAnalytics_=true;
+						//need to check condition string is big enough?
+						memcpy(	analyticsString_, group_buf, len1 );
+						memcpy(	analyticsString_+len1, order_and_select_buf, len4 );
+						analyticsStringLength_	= len1+len4;
+
+						if(s_force_analytics!=NULL)
+						{
+							//analytics failed so return an error.
+							forceAnalytics_=true;
+						}
+
 					}
-
-				}
-				else
-				{
-					if(s_force_analytics!=NULL)
+					else
 					{
-						//analytics failed so return an error.
-						forceAnalytics_=true;
+						if(s_force_analytics!=NULL)
+						{
+							//analytics failed so return an error.
+							forceAnalytics_=true;
+						}
 					}
 				}
 			}
