@@ -791,7 +791,7 @@ static int scaledb_init_func(void *p) {
 // the discover_table_existence is disabled because it is redundant (and the current implmentation is unreliable). For scaledb really need to do a full discovery to be sure that
 // the tableexists or not. The table_existence is designed for a fast way of determining if a table exists, however i would have to map it to the
 // discover table function to be sure it wrks, because of this i will leave it disabled and force mariadb to do a full disscovery.
-//	scaledb_hton->discover_table_existence= scaledb_discover_table_existence;
+//---	scaledb_hton->discover_table_existence= scaledb_discover_table_existence;
 
 // this function is currently not enabled, and i need to enable to support accurate SHOW TABLES call. 
 //	scaledb_hton->discover_table_names= scaledb_discover_table_names;
@@ -6828,7 +6828,14 @@ bool ha_scaledb::addSelectField(char* buf, int& pos, unsigned short dbid, unsign
 		//for count(*) don't have column info
 		sab2->field_offset=0;	//number of fields in operation
 		sab2->columnNumber=0;
-		sab2->length=0;		//the length of data
+		if(function==FT_ANALYTIC_LITERAL)
+		{
+			sab2->length=precision;		//the length of data
+		}
+		else
+		{
+			sab2->length=0;		//the length of data
+		}
 		sab2->type = castype;				//the column type
 		sab2->precision=precision;
 		sab2->scale=scale;
@@ -7147,9 +7154,9 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 		n++;
 		SelectAnalyticsBody1* sab1= (SelectAnalyticsBody1*)(buf+pos);
 		pos=pos+sizeof(SelectAnalyticsBody1);
-		const char* col_name;
+		const char* col_name=NULL;
 		char* alias_name=NULL;
-		enum_field_types type;
+		enum_field_types type= MYSQL_TYPE_NULL;
 		function_type function;
 		short precision=0;
 		short result_precision=0;
@@ -7160,7 +7167,23 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 	    alias_name= item->name;
 		switch (item->type())
 		{
+		case Item::STRING_ITEM:
+			{
+				//going to save all the literals so that we can append the strings to end of buffer
+				if(literal_buffer_offset+item->name_length>MAX_ANALYTICS_LITERAL_BUFFER) {throw "analytics literals too long";}
+				memcpy(&analytics_literal[literal_buffer_offset],item->name,item->name_length);
+				literal_buffer_offset=literal_buffer_offset+item->name_length;
+				precision= item->name_length;
+				function=FT_ANALYTIC_LITERAL;
+				//the offset needs to get patched in.
+				break;
+			}
+		case Item::NULL_ITEM:
+			{
+				function=FT_ANALYTIC_NULL;
 
+				break;
+			}
 		case Item::FIELD_ITEM:
 			{
 				Field *field = ((Item_field *)item)->field;
@@ -7408,6 +7431,8 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 				{
 				case FT_NONE:
 				case FT_UNSUPPORTED:
+				case FT_ANALYTIC_LITERAL:
+				case FT_ANALYTIC_NULL:
 					break;
 				default:
 					contains_analytics_function	= true;
@@ -7705,6 +7730,10 @@ void ha_scaledb::generateAnalyticsString()
 
 		if ( is_streaming_table )
 		{
+
+			literal_buffer_offset=0;
+  
+
 			//only proceed if condition pushdown was successful
 			int  cardinality=SDBUtilFindCommentIntValue(thd->query(), "cardinality") ;
 			int  thread_count=SDBUtilFindCommentIntValue(thd->query(), "thread_count") ;
@@ -7714,7 +7743,7 @@ void ha_scaledb::generateAnalyticsString()
 			char	select_buf[ 2000 ];
 			char	order_and_select_buf[ 2000 ];
 			analytics_uses_count=false;
-			int		len2		= generateSelectConditionString( select_buf, sizeof( select_buf ),sdbDbId_, sdbTableNumber_  );
+			int		len2		= generateSelectConditionString( select_buf, sizeof( select_buf ),sdbDbId_, sdbTableNumber_ );
 
 			if(len2>0)
 			{
@@ -7733,6 +7762,65 @@ void ha_scaledb::generateAnalyticsString()
 
 				int len4 = len3 + len2-sizeof(SelectAnalyticsHeader);
 				analyticsSelectLength_=len4;
+
+
+
+
+#define	_ENABLE_ANALYTICS_LITERALS
+#ifdef _ENABLE_ANALYTICS_LITERALS
+					//need to iterate over all select fields, and if they are literals, then patch in the true offset
+				SelectAnalyticsHeader* sah= (SelectAnalyticsHeader*)(order_and_select_buf);
+				int columnsInResultSet = sah->numberColumns;
+
+				int offset = sizeof(SelectAnalyticsHeader);
+				int literal_offset=len4+len1;
+				for (unsigned short i = 0; i < columnsInResultSet; ++i)
+				{
+
+					SelectAnalyticsBody1* sab1= (SelectAnalyticsBody1*)(order_and_select_buf+offset);
+					offset=offset+sizeof(SelectAnalyticsBody1);
+					for (unsigned short j = 0; j <  sab1->numberFields; ++j)
+					{
+
+						SelectAnalyticsBody2* sab2= (SelectAnalyticsBody2*)(order_and_select_buf+offset);
+
+						switch(sab1->function)
+						{
+						case FT_ANALYTIC_LITERAL:
+							{
+								sab2->field_offset=literal_offset;
+								literal_offset= literal_offset+ sab2->length;
+								break;
+							}
+						case FT_ANALYTIC_NULL:
+							{
+								//to support storage node, set function to literal
+								sab1->function=FT_ANALYTIC_LITERAL;
+								sab2->function=FT_ANALYTIC_LITERAL;
+								sab2->field_offset=0;
+								break;
+							}
+						default:{break;}
+						}
+
+
+						offset += sizeof(SelectAnalyticsBody2);
+
+					}
+				}
+
+
+
+				
+					if(len4+literal_buffer_offset>2000) {throw "analytic buffer to big";}
+
+					memcpy(order_and_select_buf+len4,&analytics_literal[0],literal_buffer_offset);
+					len4=len4+literal_buffer_offset;
+				
+			
+
+#endif //_ENABLE_ANALYTICS_LITERALS
+
 
 				//turn analytics off
 				char* s_disable_analytics=SDBUtilFindComment(thd->query(), "disable_sdb_analytics") ;
