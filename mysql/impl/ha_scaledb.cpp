@@ -6828,14 +6828,9 @@ bool ha_scaledb::addSelectField(char* buf, int& pos, unsigned short dbid, unsign
 		//for count(*) don't have column info
 		sab2->field_offset=0;	//number of fields in operation
 		sab2->columnNumber=0;
-		if(function==FT_ANALYTIC_LITERAL)
-		{
-			sab2->length=precision;		//the length of data
-		}
-		else
-		{
-			sab2->length=0;		//the length of data
-		}
+	
+		sab2->length=0;		//the length of data
+	
 		sab2->type = castype;				//the column type
 		sab2->precision=precision;
 		sab2->scale=scale;
@@ -7151,6 +7146,17 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 		{
 			return 0;
 		} //only check for buffer overwrite once per loop, the + 100 is being conservative
+
+
+		switch (item->type())
+		{
+		case Item::STRING_ITEM:
+		case Item::NULL_ITEM:
+			{
+				//mysql will put in these fields, we need to skip them
+				continue;
+			}
+		}
 		n++;
 		SelectAnalyticsBody1* sab1= (SelectAnalyticsBody1*)(buf+pos);
 		pos=pos+sizeof(SelectAnalyticsBody1);
@@ -7167,23 +7173,6 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 	    alias_name= item->name;
 		switch (item->type())
 		{
-		case Item::STRING_ITEM:
-			{
-				//going to save all the literals so that we can append the strings to end of buffer
-				if(literal_buffer_offset+item->name_length>MAX_ANALYTICS_LITERAL_BUFFER) {throw "analytics literals too long";}
-				memcpy(&analytics_literal[literal_buffer_offset],item->name,item->name_length);
-				literal_buffer_offset=literal_buffer_offset+item->name_length;
-				precision= item->name_length;
-				function=FT_ANALYTIC_LITERAL;
-				//the offset needs to get patched in.
-				break;
-			}
-		case Item::NULL_ITEM:
-			{
-				function=FT_ANALYTIC_NULL;
-
-				break;
-			}
 		case Item::FIELD_ITEM:
 			{
 				Field *field = ((Item_field *)item)->field;
@@ -7431,8 +7420,6 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 				{
 				case FT_NONE:
 				case FT_UNSUPPORTED:
-				case FT_ANALYTIC_LITERAL:
-				case FT_ANALYTIC_NULL:
 					break;
 				default:
 					contains_analytics_function	= true;
@@ -7764,62 +7751,6 @@ void ha_scaledb::generateAnalyticsString()
 				analyticsSelectLength_=len4;
 
 
-
-
-#define	_ENABLE_ANALYTICS_LITERALS
-#ifdef _ENABLE_ANALYTICS_LITERALS
-					//need to iterate over all select fields, and if they are literals, then patch in the true offset
-				SelectAnalyticsHeader* sah= (SelectAnalyticsHeader*)(order_and_select_buf);
-				int columnsInResultSet = sah->numberColumns;
-
-				int offset = sizeof(SelectAnalyticsHeader);
-				int literal_offset=len4+len1;
-				for (unsigned short i = 0; i < columnsInResultSet; ++i)
-				{
-
-					SelectAnalyticsBody1* sab1= (SelectAnalyticsBody1*)(order_and_select_buf+offset);
-					offset=offset+sizeof(SelectAnalyticsBody1);
-					for (unsigned short j = 0; j <  sab1->numberFields; ++j)
-					{
-
-						SelectAnalyticsBody2* sab2= (SelectAnalyticsBody2*)(order_and_select_buf+offset);
-
-						switch(sab1->function)
-						{
-						case FT_ANALYTIC_LITERAL:
-							{
-								sab2->field_offset=literal_offset;
-								literal_offset= literal_offset+ sab2->length;
-								break;
-							}
-						case FT_ANALYTIC_NULL:
-							{
-								//to support storage node, set function to literal
-								sab1->function=FT_ANALYTIC_LITERAL;
-								sab2->function=FT_ANALYTIC_LITERAL;
-								sab2->field_offset=0;
-								break;
-							}
-						default:{break;}
-						}
-
-
-						offset += sizeof(SelectAnalyticsBody2);
-
-					}
-				}
-
-
-
-				
-					if(len4+literal_buffer_offset>2000) {throw "analytic buffer to big";}
-
-					memcpy(order_and_select_buf+len4,&analytics_literal[0],literal_buffer_offset);
-					len4=len4+literal_buffer_offset;
-				
-			
-
-#endif //_ENABLE_ANALYTICS_LITERALS
 
 
 				//turn analytics off
