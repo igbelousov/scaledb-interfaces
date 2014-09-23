@@ -480,7 +480,7 @@ public:
 	bool isInSelectList(SelectAnalyticsHeader* sah, char*  col_name, unsigned short dbid, unsigned short tabid, function_type ft);
 
 	// create a user table.
-	int parseTableOptions(HA_CREATE_INFO *create_info, bool& streamTable, bool& dimensionTable, unsigned long long&  dimensionSize, char** rangekey);
+	int parseTableOptions( THD *thd, HA_CREATE_INFO *create_info, bool& streamTable, bool& dimensionTable, unsigned long long&  dimensionSize, char** rangekey);
 
 	char getCASType(enum_field_types mysql_type, int flags);
 	int getSDBSize(enum_field_types fieldType, Field* field) ;

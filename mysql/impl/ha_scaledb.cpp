@@ -8695,7 +8695,7 @@ char * ha_scaledb::getDimensionTableName(char* table_name, char* col_name, char*
 	return dimension_table_name;
 }
 
-int ha_scaledb::parseTableOptions(HA_CREATE_INFO *create_info, bool& streamTable, bool& dimensionTable, unsigned long long&  dimensionSize, char** rangekey )
+int ha_scaledb::parseTableOptions( THD *thd, HA_CREATE_INFO *create_info, bool& streamTable, bool& dimensionTable, unsigned long long&  dimensionSize, char** rangekey )
 {
 
 	engine_option_value* opt=create_info->option_list;
@@ -8703,11 +8703,30 @@ int ha_scaledb::parseTableOptions(HA_CREATE_INFO *create_info, bool& streamTable
 	{
 		if ( SDBUtilStrstrCaseInsensitive( opt->name.str, "RANGEKEY" ) && ( opt->parsed == true ) )
 		{
-			// extract the RANGEKEY field: will be used in add_columns
+		        // extract the RANGEKEY field: will be used in add_columns
 			if(rangekey!=NULL)
 			{
 				*rangekey=opt->value.str;
 			}
+//make sure the range key is indexed
+			List_iterator<Key> key_iterator(thd->lex->alter_info.key_list);
+			Key* key=NULL;
+			bool is_indexed=false;
+			while ((key=key_iterator++))
+			{
+				Key_part_spec*  ks=(Key_part_spec*)key->columns.first_node()->info;				
+				if(strcmp(ks->field_name.str,(char*) *rangekey)==0)
+				{
+					if(key->type == Key::PRIMARY || key->type == Key::UNIQUE || key->type== Key::MULTIPLE) {is_indexed=true;}
+				}
+			}
+
+			if(is_indexed==false)
+			{
+				SDBSetErrorMessage( sdbUserId_, INVALID_STREAMING_OPERATION, "- Range KEY must be a Unique index column." );
+				return convertToMysqlErrorCode(HA_ERR_GENERIC);
+			}
+		
 		}
 		if ( SDBUtilStrstrCaseInsensitive( opt->name.str, "STREAMING" ) && ( opt->parsed == true ) && SDBUtilStrstrCaseInsensitive( opt->value.str, "YES" ) )
 		{
@@ -9293,8 +9312,12 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 			pSdbMysqlTxn_->setActiveTrn(true);
 		}
 
-		parseTableOptions(create_info, streamTable, dimensionTable, dimensionSize, &rangekey );
-
+		errorNum=parseTableOptions(thd, create_info, streamTable, dimensionTable, dimensionSize, &rangekey );
+		if (errorNum) {
+			SDBRollBack(sdbUserId_, NULL, 0, true); // rollback new table record in transaction
+			FREE_MEMORY(pCreateTableStmt);
+			DBUG_RETURN(errorNum);
+		}
 
 
 #ifdef SDB_DEBUG_LIGHT
@@ -9311,7 +9334,7 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 	} else {
 
 
-		parseTableOptions(create_info, streamTable, dimensionTable, dimensionSize,NULL);
+		parseTableOptions(thd, create_info, streamTable, dimensionTable, dimensionSize,NULL);
 		if(streamTable)
 		{
 				//alter not supported on streaming tables
@@ -10195,6 +10218,18 @@ int ha_scaledb::add_columns_to_table(THD* thd, TABLE *table_arg, unsigned short 
 #endif
 				sdbFieldSize = sdbFieldSize /3;
 			}
+
+			if(rangekey!=NULL && strcmp(rangekey,(char*) pField->field_name)==0)
+			{
+				if(fieldType == MYSQL_TYPE_TIMESTAMP) {} //all OK
+				else
+				{
+						SDBSetErrorMessage( sdbUserId_, INVALID_STREAMING_OPERATION, "- Range KEY must be a Timestamp column." );
+						return convertToMysqlErrorCode(HA_ERR_GENERIC);
+				}
+
+			}
+
 
 			bool isIndexed=false;
 			List_iterator<Key> key_iterator(thd->lex->alter_info.key_list);
