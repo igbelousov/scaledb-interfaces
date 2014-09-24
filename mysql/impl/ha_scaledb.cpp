@@ -5146,9 +5146,10 @@ bool ha_scaledb::conditionFieldToString( unsigned char** pCondString, unsigned i
 	}
 	else
 	{
-		if(rangeBounds.startSet==true && rangeBounds.endSet==false)
+		if( (rangeBounds.startSet==true && rangeBounds.endSet==false)  //a start range has been found, but no end range set yet, and looking at a differnt field so fail
+		||  (rangeBounds.startSet==true && rangeBounds.endSet==true && rangeBounds.endRange==0) ) //a start range and end range has been found, but not set the end yet, and looking at a differnt field so fail
 		{
-			//a start range has been found, but no end range set yet, and looking at a differnt field so fail
+			
 			rangeBounds.valid=false;
 		}
 
