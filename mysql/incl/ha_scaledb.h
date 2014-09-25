@@ -184,7 +184,7 @@ struct SelectAnalyticsBody2
 		char orderByPosition;
 };
 #pragma pack()
-
+#define  PROCESS_COUNT_DISTINCT
 enum function_type { FT_NONE=0, FT_MIN=1, FT_MAX=2, FT_SUM=3, FT_COUNT=4, FT_AVG=5, FT_COUNT_DISTINCT=6,  FT_STREAM_COUNT=17, FT_DATE=18, FT_HOUR=19, FT_MAX_CONCAT=20, FT_CHAR=21, FT_UNSUPPORTED=22 };
 
 
