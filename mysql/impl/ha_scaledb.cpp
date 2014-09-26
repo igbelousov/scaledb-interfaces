@@ -7702,6 +7702,9 @@ void ha_scaledb::saveConditionToString(const COND *cond)
 
 void ha_scaledb::generateAnalyticsString()
 {
+
+	char* s_force_analytics=NULL;
+
 	try
 	{
 	THD* thd = ha_thd();
@@ -7712,8 +7715,8 @@ void ha_scaledb::generateAnalyticsString()
 	forceAnalytics_=false;
 
 		
-		char* s_force_analytics=SDBUtilFindComment(thd->query(), "force_sdb_analytics") ;
-
+		s_force_analytics=SDBUtilFindComment(thd->query(), "force_sdb_analytics") ;
+	
 		bool is_streaming_table=SDBIsStreamingTable(sdbDbId_, sdbTableNumber_);
 
 		if ( is_streaming_table )
@@ -7786,6 +7789,15 @@ void ha_scaledb::generateAnalyticsString()
 					}
 				}
 			}
+			else
+			{
+
+				if(s_force_analytics!=NULL)
+				{
+					//analytics failed so return an error.
+					forceAnalytics_=true;
+				}
+			}
 		}
 		else
 		{
@@ -7801,6 +7813,11 @@ void ha_scaledb::generateAnalyticsString()
 		//somethign bad happened so failing analytics
 		analyticsStringLength_		=0;
 		analyticsSelectLength_      = 0;
+		if(s_force_analytics!=NULL)
+		{
+				//analytics failed so return an error.
+				forceAnalytics_=true;
+		}
 	}
 }
 
