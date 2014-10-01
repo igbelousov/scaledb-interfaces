@@ -6326,8 +6326,16 @@ int ha_scaledb::addOrderByToList(char* buf, int& pos,  SelectAnalyticsHeader* sa
    	SELECT_LEX*  lex=   (((THD*) ha_thd())->lex)->select_lex.parent_lex->current_select;
 	ORDER *order;
 
+//mysql expects the orderby list to be reversed (see bug 2210)
+
+	List<ORDER> reverse_order_list;   
 	for (order = (ORDER *) lex->order_list.first; order;  order = order->next)
-    {	
+        {
+		reverse_order_list.push_front( order);
+	}
+
+	while( order= reverse_order_list.pop())
+        {	
 		bool found=false;
 		Item* item=*order->item;
 		alias_name=item->name;
