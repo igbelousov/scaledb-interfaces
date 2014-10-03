@@ -4545,9 +4545,14 @@ bool   parse_op_for_sdb_index(Item_func::Functype op, Field * f, Item * value, S
 		(context->item_[context->numOfItems_++]).field_ = f;
 		break;
 
-	case Item::STRING_ITEM:			
+	case Item::STRING_ITEM:		
+#if MYSQL_VERSION_ID < 100014
 		(context->item_[context->numOfItems_]).value_ =(char *)((Item_string *) value)->str_value.c_ptr();
 		(context->item_[context->numOfItems_]).size_ = ((Item_string *) value)->str_value.length();		
+#else
+		(context->item_[context->numOfItems_]).value_ =(char *)((Item *) value)->val_str()->c_ptr();
+		(context->item_[context->numOfItems_]).size_ = ((Item *) value)->str_value->length();	
+#endif
 		(context->item_[context->numOfItems_++]).field_ = f;
 		break;
 
@@ -5406,8 +5411,13 @@ bool ha_scaledb::conditionFieldToString( unsigned char** pCondString, unsigned i
 					}
 					else
 					{
+#if MYSQL_VERSION_ID < 100014
 						pString						= ( ( ( Item_int* ) pComperandItem )->str_value ).ptr();
 						stringSize					= ( ( ( Item_int* ) pComperandItem )->str_value ).length();
+#else
+						pString						= ( ( ( Item* ) pComperandItem )->val_str() )->ptr();
+						stringSize					= ( ( ( Item* ) pComperandItem )->val_str() )->length();
+#endif
 						isFromString				= true;
 						diffSize					= ( ( int ) stringSize ) - 8;
 					}
@@ -5906,8 +5916,13 @@ bool ha_scaledb::conditionConstantToString( unsigned char** pCondString, unsigne
 			if ( temporalDataType )
 			{
 				Item_field*		pField		= ( Item_field* ) pConstItem;
+#if MYSQL_VERSION_ID < 100014
 				const char*		pString		= ( ( ( Item_int* ) pConstItem )->str_value ).ptr();
 				unsigned int	stringSize	= ( ( ( Item_int* ) pConstItem )->str_value ).length();
+#else
+				const char*		pString		= ( ( ( Item* ) pConstItem )->val_str() )->ptr();
+				unsigned int	stringSize	= ( ( ( Item* ) pConstItem )->val_str() )->length();
+#endif
 				THD*			pMysqlThd	= ha_thd();
 				MYSQL_TIME		myTime;
 
@@ -5933,7 +5948,11 @@ bool ha_scaledb::conditionConstantToString( unsigned char** pCondString, unsigne
 			else
 			{
 				*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_TYPE )	= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_CHAR );
+#if MYSQL_VERSION_ID < 100014
 				unsigned int stringSize = (((Item_int *)pConstItem)->str_value).length();	//length of user data
+#else
+				unsigned int stringSize = (((Item *)pConstItem)->val_str())->length();	//length of user data
+#endif
 				*(*pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_SIZE) =  (unsigned char)(stringSize);
 				if (stringSize > 255) {	//	255 max string length since size is stored as 1 byte
 					return false;		
@@ -5955,8 +5974,11 @@ bool ha_scaledb::conditionConstantToString( unsigned char** pCondString, unsigne
 						pComperandData		= *pCondString + *pComperandDataOffset;
 					}
 				}
-
+#if MYSQL_VERSION_ID < 100014
 				memcpy(*pCondString + *pItemOffset + USER_DATA_OFFSET_USER_DATA, ((*pConstItem).str_value).ptr(), stringSize);	//copy user data to string
+#else
+				memcpy(*pCondString + *pItemOffset + USER_DATA_OFFSET_USER_DATA, ((*pConstItem).val_str())->ptr(), stringSize);	//copy user data to string
+#endif
 				(*pItemOffset) += USER_DATA_OFFSET_USER_DATA + stringSize;		//increment the length of condition string accordingly
 			}
 
@@ -9593,11 +9615,12 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 			table_list.init_one_table(STRING_WITH_LEN(pDbName), tblFsName, strlen(tblFsName), NULL, TL_WRITE);
 			table_list.table=table_arg;
 			String _buffer; 
-		
+#if MYSQL_VERSION_ID < 100014		
 			int rc=store_create_info(thd, &table_list, &_buffer,
-                      NULL, false,
+                     NULL, false,
                        true);
 			errorNum=table_arg->s->init_from_sql_statement_string(thd, true,_buffer.c_ptr(), _buffer.length());
+#endif
 		}
 
 		if (errorNum) {
