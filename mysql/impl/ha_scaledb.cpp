@@ -4551,7 +4551,7 @@ bool   parse_op_for_sdb_index(Item_func::Functype op, Field * f, Item * value, S
 		(context->item_[context->numOfItems_]).size_ = ((Item_string *) value)->str_value.length();		
 #else
 		(context->item_[context->numOfItems_]).value_ =(char *)((Item *) value)->val_str()->c_ptr();
-		(context->item_[context->numOfItems_]).size_ = ((Item *) value)->str_value->length();	
+		(context->item_[context->numOfItems_]).size_ = ((Item *) value)->val_str()->length();	
 #endif
 		(context->item_[context->numOfItems_++]).field_ = f;
 		break;
@@ -9619,8 +9619,12 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 			int rc=store_create_info(thd, &table_list, &_buffer,
                      NULL, false,
                        true);
-			errorNum=table_arg->s->init_from_sql_statement_string(thd, true,_buffer.c_ptr(), _buffer.length());
+
+#else
+			int rc=show_create_table(thd, &table_list, &_buffer,
+                     NULL, WITHOUT_DB_NAME);	
 #endif
+		  	errorNum=table_arg->s->init_from_sql_statement_string(thd, true,_buffer.c_ptr(), _buffer.length());
 		}
 
 		if (errorNum) {

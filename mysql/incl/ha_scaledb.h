@@ -100,11 +100,7 @@ Version for file format.
 #if defined(MARIADB_BASE_VERSION) && MYSQL_VERSION_ID >= 100000
 #define _MARIA_SDB_10
 #define _USE_NEW_MARIADB_DISCOVERY
-#if MYSQL_VERSION_ID < 100014
-int store_create_info(THD *thd, TABLE_LIST *table_list, String *packet,
-                      HA_CREATE_INFO *create_info_arg, bool show_database,
-                      bool create_or_replace);
-#endif
+#include "sql_show.h"
 bool parse_sql(THD *thd, Parser_state *parser_state,
                Object_creation_ctx *creation_ctx, bool do_pfs_digest=false);
 #endif
