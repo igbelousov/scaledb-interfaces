@@ -6275,8 +6275,8 @@ char ha_scaledb::getCASType(enum_field_types mysql_type, int flags)
 
 int ha_scaledb::numberInOrderBy()
 {
-	SELECT_LEX  lex=(((THD*) ha_thd())->lex)->select_lex;
-	int n=lex.order_list.elements;
+	SELECT_LEX*  lex=  (((THD*) ha_thd())->lex)->select_lex.parent_lex->current_select;
+	int n=lex->order_list.elements;
 	return n;
 }
 
@@ -6740,7 +6740,9 @@ int ha_scaledb::generateGroupConditionString(int cardinality, int thread_count, 
 			case Item::FUNC_ITEM:
 				{
 
-
+//these are non-aggregate functions.
+//the storage node does not support so abort for now.
+/*
 					  //these are  functions, so just ignore.
 					 Item_func *func = ((Item_func *)item);
 
@@ -6773,12 +6775,10 @@ int ha_scaledb::generateGroupConditionString(int cardinality, int thread_count, 
 					 }
 					 else
 					 {
-						function=FT_UNSUPPORTED;
-						col_name=NULL;
-						type= MYSQL_TYPE_NULL;
-						flag=0;
+						return 0;
 					 }
-
+*/
+return 0;
 					break;
 				}
 			default:
@@ -7187,6 +7187,22 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 				//mysql will put in these fields, we need to skip them
 				continue;
 			}
+		case Item::FUNC_ITEM:
+			{
+				Item_func *func = ((Item_func *)item);
+				switch(func->functype())
+				{
+				case Item_func::GUSERVAR_FUNC:
+					{
+						continue;
+					}
+				default:
+					{
+						break;
+					}
+				}
+				break;	
+			}
 		}
 		n++;
 		SelectAnalyticsBody1* sab1= (SelectAnalyticsBody1*)(buf+pos);
@@ -7399,8 +7415,13 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 			case Item::FUNC_ITEM:
 				{
 
-					  //these are non-aggregate functions.
-					 Item_func *func = ((Item_func *)item);
+  				   Item_func *func = ((Item_func *)item);
+
+
+				
+//these are non-aggregate functions.
+//the storage node does not support so abort for now.
+					/*
 					 if(checkFunc(func->name, "date"))
 					 {
 						 function=FT_DATE;
@@ -7419,13 +7440,10 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 					 }
 					 else
 					 {
-						function=FT_UNSUPPORTED;
-						col_name=NULL;
-						type= MYSQL_TYPE_NULL;		
-						flag=0;
+						return 0;
 					 }
-
-					
+					 */
+					return 0;
 					break;
 				}
 			default:
