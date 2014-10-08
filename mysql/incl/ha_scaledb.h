@@ -522,8 +522,6 @@ public:
 
 	int check( THD* thd, HA_CHECK_OPT* check_opt );
 
-	// tells if data copy to new table is needed during an alter    
-	bool check_if_incompatible_data(HA_CREATE_INFO *info, uint table_changes);
 	ha_rows estimate_rows_upper_bound();
 
 	// return table scan time

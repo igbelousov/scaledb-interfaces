@@ -116,7 +116,7 @@ typedef unsigned long long uint64;
 //
 //////////////////////////////////////////////////////////////////////////////
 */
-unsigned short SDBGlobalInit(char* engineConfigFileName);
+unsigned short SDBGlobalInit(char* engineConfigFileName, unsigned int clusterPort);
 unsigned short SDBGlobalEnd();
 unsigned short SDBOpenMasterDbAndRecoverLog(unsigned int userId);
 bool SDBStorageEngineIsInited();
@@ -135,8 +135,6 @@ char* SDBGetDatabaseNameByNumber(unsigned short databaseId);
 bool SDBGetDatabaseStatusByNumber(unsigned short databaseId);
 unsigned short SDBDropDbms(unsigned short userId, unsigned short dbId, unsigned short ddlFlag, char *databaseName);
 unsigned short SDBDCloseDbms(unsigned short userId, unsigned short dbId, char *databaseName) ;
-char * SDBGetClusterPassword();
-char * SDBGetClusterUser();
 int SDBGetSystemParamInt(const char *param, int defValue);
 char* SDBGetSystemParamString(const char *param);
 
@@ -417,7 +415,7 @@ void SDBSetOverflowFlag(unsigned short dbId, unsigned short tableId, bool ovfFla
 //
 //////////////////////////////////////////////////////////////////////////////
 */
-
+unsigned short SDBKillQueryByUserId(unsigned int userId);
 unsigned short SDBStartTransaction( unsigned int userId, bool bAutocommit = false );
 unsigned short SDBCommit(unsigned int userId, bool releaseSessionLocks);
 unsigned short SDBSyncToDisk(unsigned int userId);
@@ -775,7 +773,6 @@ unsigned int SDBGetMaxFileHandles();
 unsigned int SDBGetMaxColumnLengthInBaseFile();
 unsigned int SDBGetMaxKeyLength();
 unsigned int SDBGetDeadlockMilliseconds();
-unsigned int SDBGetClusterPort();
 char* SDBGetDebugString();
 
 /*

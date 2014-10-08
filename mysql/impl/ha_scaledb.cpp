@@ -137,13 +137,12 @@ static my_bool scaledb_aio_flag = TRUE;
 static unsigned int scaledb_max_column_length_in_base_file;
 static unsigned int scaledb_dead_lock_milliseconds;
 static my_bool scaledb_cluster = FALSE;
-static unsigned int scaledb_cluster_port;
-static char* scaledb_cluster_user = NULL;
 static char* scaledb_debug_string = NULL;
 
 static int scaledb_init_func();
 static handler *scaledb_create_handler(handlerton *hton, TABLE_SHARE *table, MEM_ROOT *mem_root);
 
+static void scaledb_kill_query(handlerton *hton, THD* thd, enum thd_kill_levels level);
 static int scaledb_close_connection(handlerton *hton, THD* thd);
 static int scaledb_commit(handlerton *hton, THD* thd, bool all); // inside handlerton
 static int scaledb_rollback(handlerton *hton, THD* thd, bool all); // inside handlerton
@@ -774,7 +773,7 @@ static int scaledb_init_func(void *p) {
 	// The following are pointers to functions.
 	// Once we uncommet a pointer, then we need to implement the corresponding function.
 	scaledb_hton->close_connection = scaledb_close_connection;
-
+	scaledb_hton->kill_query = scaledb_kill_query;
 	scaledb_hton->savepoint_offset = 0;
 	scaledb_hton->savepoint_set = scaledb_savepoint_set;
 	scaledb_hton->savepoint_rollback = scaledb_savepoint_rollback;
@@ -813,7 +812,7 @@ static int scaledb_init_func(void *p) {
 	//scaledb_hton->flags = HTON_CAN_RECREATE;
 	scaledb_hton->flags = HTON_TEMPORARY_NOT_SUPPORTED | HA_CAN_PARTITION;
 
-	if (SDBGlobalInit(scaledb_config_file)) {
+	if (SDBGlobalInit(scaledb_config_file, mysqld_port)) {
 		sql_print_error("________________________________________________");
 		sql_print_error("ScaleDB: Failed to initialize the storage engine");
 		sql_print_error("Check the configuration file and its location");
@@ -844,8 +843,6 @@ static int scaledb_init_func(void *p) {
 	scaledb_aio_flag = true;
 	scaledb_max_column_length_in_base_file = 256;
 	scaledb_dead_lock_milliseconds = SDBGetDeadlockMilliseconds();
-	scaledb_cluster_port = SDBGetClusterPort();
-	scaledb_cluster_user = SDBGetClusterUser();
 	scaledb_debug_string = SDBGetDebugString();
 
 	DBUG_RETURN(0);
@@ -1232,6 +1229,33 @@ static int free_share(SCALEDB_SHARE *share) {
 
 	return 0;
 }
+
+/*****************************************************************//**
+Cancel any pending lock request associated with the current THD. */
+static void scaledb_kill_query(
+
+        handlerton*	hton,	    /* in:  handlerton */
+		THD*	thd,	    /* in: MySQL thread being killed */
+        enum thd_kill_levels level) /* in: kill level */
+{
+	DBUG_ENTER("scaledb_kill_query");
+		MysqlTxn* pMysqlTxn = (MysqlTxn *) *thd_ha_data(thd, hton);
+	
+
+
+	if (pMysqlTxn != NULL) {
+		// we assume that we get the user ID that is related to the handle
+		unsigned short userId = pMysqlTxn->getScaleDbUserId();
+		
+	
+		unsigned short rc=SDBKillQueryByUserId(userId);
+
+	
+	}
+
+	DBUG_VOID_RETURN;
+}
+
 
 /* We close user connection when he logs off.
  We need to free MysqlTxn object for this user session.
@@ -11152,126 +11176,7 @@ int ha_scaledb::rename_table(const char* fromTable, const char* toTable) {
 	DBUG_RETURN(errorNum);
 }
 
-// -------------------------------------------------------
-// 
-// this function will issue the DDL statement to all other nodes on the cluster
-//
-// Pass DDL SQL statement and its related DbId
-// When bIgnoreDB is set to false, we should pass databasename when we set up a mysql connection.
-// When bIgnoreDB is set to true, then we pass NULL for db name in setting up a mysql connection. 
-// return true for success and false for failure
-// -------------------------------------------------------
-int ha_scaledb::sqlStmt(unsigned short userId, unsigned short dbmsId, char* sqlStmt,
-        bool bIgnoreDB, bool bEngineOption) {
 
-#ifdef SDB_DEBUG_LIGHT
-	if (mysqlInterfaceDebugLevel_) {
-		SDBDebugStart(); // synchronize threads printout
-		SDBDebugPrintHeader("MySQL Interface: executing ha_scaledb::sqlStmt(...) ");
-		SDBDebugEnd(); // synchronize threads printout
-	}
-#endif
-
-	unsigned short nodesBuffLength = MAX_NODE_DATA_BUFFER_LENGTH;
-	char nodesDataBuffer[MAX_NODE_DATA_BUFFER_LENGTH];
-	SDBGetConnectedNodesList(userId, nodesBuffLength, nodesDataBuffer);
-
-	// The first 2 bytes show the number of nodes (other than itself) in a cluster
-	signed short numberOfNodes = *((signed short*) nodesDataBuffer);
-
-	if (!numberOfNodes) {
-		return SUCCESS;
-	}
-
-	if (numberOfNodes < 0) // No response from other nodes
-		return DEAD_LOCK;
-
-	char* pNodeDataOffset = nodesDataBuffer + 2;
-
-	//bool overallRc =` true;
-	int queryLength = SDBUtilGetStrLength(sqlStmt);
-	char* pDbName = NULL;
-	if (bIgnoreDB == false)
-		pDbName = SDBGetDatabaseNameByNumber(dbmsId);
-
-	// loop through all non-primary nodes and execute the sqlStmt
-	for (unsigned char i = 0; i < numberOfNodes; ++i) {
-
-		unsigned short ipStringLength = *((unsigned short*) pNodeDataOffset);
-		char* pIpString = pNodeDataOffset + 2; // skip ip string length
-
-		unsigned short portStringLength = *((unsigned short*) (pIpString + ipStringLength + 1)); // there is '\0'
-		char* pPortString = pIpString + ipStringLength + 3; // skip ip string, '\0', and port-string-length
-		int port = atoi(pPortString);
-
-		char* password = SDBGetClusterPassword();
-		char* user = SDBGetClusterUser();
-		char* socket = NULL;
-
-		// set up MySQL client connection
-		SdbMysqlClient* pSdbMysqlClient = new SdbMysqlClient(pIpString, user, password, pDbName,
-		        socket, port, mysqlInterfaceDebugLevel_);
-
-		// Execute the statement on MySQL server on a non-primary node
-		int rc = 0;
-		rc = pSdbMysqlClient->executeQuery(sqlStmt, queryLength, bEngineOption);
-		if (rc) {
-			// Issue a warning message if the DDL fails in other nodes.
-			SDBDebugStart(); // synchronize threads printout
-			SDBDebugPrintHeader("Warning: Fails to replicate DDL (or the like) to ip=");
-			SDBDebugPrintString(pIpString);
-			SDBDebugPrintString(", port=");
-			SDBDebugPrintString(pPortString);
-			SDBDebugPrintString(", Statement=");
-			SDBDebugPrintString(sqlStmt);
-			SDBDebugPrintHeader("\n fails in mysql_real_query return code = ");
-			SDBDebugPrintInt(rc);
-			SDBDebugPrintHeader(
-			        ".  You may later copy the new MySQL .frm file to the failed node directly.");
-			SDBDebugEnd(); // synchronize threads printout
-		}
-
-		delete pSdbMysqlClient; // remove the client connection
-
-		pNodeDataOffset = pNodeDataOffset + ipStringLength + portStringLength + 6; // move to next node data
-	}
-
-	// No need to crash the system when other node fails.  We already output a warning message!
-	//if (!overallRc){
-	//	SDBTerminate(0, "cluster ddl failed");
-	//}
-
-	return SUCCESS;
-}
-
-// tells if data copy to new table is needed during an alter
-bool ha_scaledb::check_if_incompatible_data(HA_CREATE_INFO* info, uint table_changes) {
-#ifdef SDB_DEBUG_LIGHT
-	if (mysqlInterfaceDebugLevel_) {
-		SDBDebugStart(); // synchronize threads printout
-		SDBDebugPrintHeader(
-		        "MySQL Interface: executing ha_scaledb::check_if_incompatible_data(...) ");
-		if (mysqlInterfaceDebugLevel_ > 1)
-			outputHandleAndThd();
-		SDBDebugEnd(); // synchronize threads printout
-	}
-#endif
-
-	if (table_changes != IS_EQUAL_YES) {
-		return COMPATIBLE_DATA_NO;
-	}
-
-	/* Check that auto_increment value was not changed */
-	if ((info->used_fields & HA_CREATE_USED_AUTO) && info->auto_increment_value != 0) {
-		return COMPATIBLE_DATA_NO;
-	}
-
-	/* Check that row format didn't change */
-	if ((info->used_fields & HA_CREATE_USED_ROW_FORMAT) && get_row_type() != info->row_type) {
-		return COMPATIBLE_DATA_NO;
-	}
-	return COMPATIBLE_DATA_YES;
-}
 
 // analyze the table
 int ha_scaledb::analyze(THD* thd, HA_CHECK_OPT* check_opt) {
@@ -11823,21 +11728,12 @@ static MYSQL_SYSVAR_BOOL(cluster, scaledb_cluster,
 		"This flag shows whether ScaleDB cluster software is enabled.",
 		NULL, NULL, FALSE);
 
-static MYSQL_SYSVAR_UINT(cluster_port, scaledb_cluster_port,
-		PLUGIN_VAR_NOCMDOPT | PLUGIN_VAR_READONLY,
-		"This parameter specifies the port for connecting to mysql for DDL operations, leave option out if using default port.",
-		NULL, NULL, 3306, 1, UINT_MAX, 0);
-
 
 static MYSQL_SYSVAR_UINT(statistics_level, statisticsLevel_,
   PLUGIN_VAR_NOCMDOPT,
   "Set the statistics level",
   NULL, NULL, 2L, 1L, 1000L, 0);
 
-static MYSQL_SYSVAR_STR(cluster_user, scaledb_cluster_user,
-		PLUGIN_VAR_NOCMDOPT | PLUGIN_VAR_READONLY,
-		"user name for connecting to mysql for DDL operations",
-		NULL, NULL, NULL);
 
 static MYSQL_SYSVAR_STR(debug_string, scaledb_debug_string,
 		PLUGIN_VAR_NOCMDOPT | PLUGIN_VAR_READONLY ,
@@ -11849,7 +11745,7 @@ static struct st_mysql_sys_var* scaledb_system_variables[] = { MYSQL_SYSVAR(conf
         MYSQL_SYSVAR(log_dir_append_host), MYSQL_SYSVAR(buffer_size_index),
         MYSQL_SYSVAR(buffer_size_data), MYSQL_SYSVAR(max_file_handles), MYSQL_SYSVAR(aio_flag),
         MYSQL_SYSVAR(max_column_length_in_base_file), MYSQL_SYSVAR(dead_lock_milliseconds),
-        MYSQL_SYSVAR(cluster), MYSQL_SYSVAR(cluster_port), MYSQL_SYSVAR(cluster_user),
+        MYSQL_SYSVAR(cluster), 
   	    MYSQL_SYSVAR(statistics_level),
         MYSQL_SYSVAR(debug_string), NULL // the last element of this array must be NULL
         };
