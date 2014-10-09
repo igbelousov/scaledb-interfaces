@@ -812,7 +812,7 @@ static int scaledb_init_func(void *p) {
 	//scaledb_hton->flags = HTON_CAN_RECREATE;
 	scaledb_hton->flags = HTON_TEMPORARY_NOT_SUPPORTED | HA_CAN_PARTITION;
 
-	if (SDBGlobalInit(scaledb_config_file, mysqld_port)) {
+	if (SDBGlobalInit(scaledb_config_file, 0)) {
 		sql_print_error("________________________________________________");
 		sql_print_error("ScaleDB: Failed to initialize the storage engine");
 		sql_print_error("Check the configuration file and its location");
