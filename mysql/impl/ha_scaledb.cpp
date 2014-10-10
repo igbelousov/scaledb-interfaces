@@ -6699,7 +6699,7 @@ int ha_scaledb::getOrderByPosition(const char* col_name, const char* col_alias, 
 
 	return 0;
 }
-int ha_scaledb::generateGroupConditionString(int cardinality, int thread_count, char* buf, int max_buf, unsigned short dbid, unsigned short tabid, char* select_buf)
+int ha_scaledb::generateGroupConditionString(int cardinality, char* buf, int max_buf, unsigned short dbid, unsigned short tabid, char* select_buf)
 {
 	SelectAnalyticsHeader* sah= (SelectAnalyticsHeader*)select_buf;
 	Item *item;
@@ -6725,7 +6725,6 @@ int ha_scaledb::generateGroupConditionString(int cardinality, int thread_count, 
 
 	GroupByAnalyticsHeader* gbh= (GroupByAnalyticsHeader*)buf;
 	gbh->cardinality=cardinality;
-	gbh->thread_count=(char)thread_count;
 	gbh->limit=select_limit;
 	gbh->info_flag=info;
 
@@ -7799,7 +7798,6 @@ void ha_scaledb::generateAnalyticsString()
 
 			//only proceed if condition pushdown was successful
 			int  cardinality=SDBUtilFindCommentIntValue(thd->query(), "cardinality") ;
-			int  thread_count=SDBUtilFindCommentIntValue(thd->query(), "thread_count") ;
 
 
 			char	group_buf[ 2000 ];
@@ -7817,7 +7815,7 @@ void ha_scaledb::generateAnalyticsString()
 
 
 
-				int		len1		= generateGroupConditionString(cardinality, thread_count, group_buf, sizeof( group_buf ), sdbDbId_, sdbTableNumber_, select_buf );
+				int		len1		= generateGroupConditionString( cardinality, group_buf, sizeof( group_buf ), sdbDbId_, sdbTableNumber_, select_buf );
 				//check if analytics is enabled
 
 				//append the select buffer
