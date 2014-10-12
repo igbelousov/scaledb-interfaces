@@ -415,7 +415,7 @@ void SDBSetOverflowFlag(unsigned short dbId, unsigned short tableId, bool ovfFla
 //
 //////////////////////////////////////////////////////////////////////////////
 */
-unsigned short SDBKillQueryByUserId(unsigned int userId);
+void SDBKillQueryByUserId(unsigned int userId);
 unsigned short SDBStartTransaction( unsigned int userId, bool bAutocommit = false );
 unsigned short SDBCommit(unsigned int userId, bool releaseSessionLocks);
 unsigned short SDBSyncToDisk(unsigned int userId);

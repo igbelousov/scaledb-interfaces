@@ -1248,7 +1248,7 @@ static void scaledb_kill_query(
 		unsigned short userId = pMysqlTxn->getScaleDbUserId();
 		
 	
-		unsigned short rc=SDBKillQueryByUserId(userId);
+		SDBKillQueryByUserId(userId);
 
 	
 	}
@@ -7878,7 +7878,7 @@ void ha_scaledb::generateAnalyticsString()
 			}
 		}
 	}
-	catch( char* e)
+	catch(const char* )
 	{
 		//somethign bad happened so failing analytics
 		analyticsStringLength_		=0;
