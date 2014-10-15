@@ -945,7 +945,7 @@ static group_by_handler *scaledb_create_group_by_handler(THD *thd,
 
 	ha_scaledb* scaledb					= (ha_scaledb*) (table_list->table->file);
 
-	scaledb->forceAnalytics_=false; //need to reset, because might have got set in the external lock
+	scaledb->forceAnalytics_=SDBForceAnalyticsEngine(); //need to reset to default, because might have got set in the external lock
 
 	const COND* cond					= scaledb->cond_push( pWhere );
 
@@ -7750,7 +7750,6 @@ void ha_scaledb::saveConditionToString(const COND *cond)
 	conditionStringLength_		= 0;
 	analyticsStringLength_		=
 	analyticsSelectLength_      = 0;
-	forceAnalytics_=false;
 
 	rangeBounds.clear();
 	char* s_disable_pushdown=SDBUtilFindComment(thd->query(), "disable_condition_pushdown") ; //if disable_condition_pushdown is in comment then don't do pushdown
@@ -7783,7 +7782,7 @@ void ha_scaledb::generateAnalyticsString()
 
 	analyticsStringLength_		=
 	analyticsSelectLength_      = 0;
-	forceAnalytics_=false;
+//	forceAnalytics_=false;   //remove this
 
 		
 		s_force_analytics=SDBUtilFindComment(thd->query(), "force_sdb_analytics") ;

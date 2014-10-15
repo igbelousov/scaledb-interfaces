@@ -773,6 +773,7 @@ unsigned int SDBGetMaxFileHandles();
 unsigned int SDBGetMaxColumnLengthInBaseFile();
 unsigned int SDBGetMaxKeyLength();
 unsigned int SDBGetDeadlockMilliseconds();
+bool SDBForceAnalyticsEngine();
 char* SDBGetDebugString();
 
 /*
