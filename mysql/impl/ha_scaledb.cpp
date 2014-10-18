@@ -3550,11 +3550,24 @@ int ha_scaledb::fetchSingleRow(unsigned char* buf) {
 	if (retValue == ROW_RETRY_FETCH) {
 		goto retryFetch;
 	}
-	// Assetion that MariaDB has in its code and we need to apply 
-	else if (retValue == SUCCESS && !stats.records) {
+
+	// Assertion that MariaDB has in its code and we need to apply, for non-streaming tables only
+	else if (retValue == SUCCESS && !stats.records)
+	{
 		stats.records				= ( ha_rows )	SDBGetTableStats( sdbUserId_, sdbDbId_, sdbTableNumber_, sdbPartitionId_, SDB_STATS_INFO_FILE_RECORDS );
-		if (!stats.records) {
-			SDBTerminate(0, "ScaleDB internal error:  stats records is zero differs from actual scan which returns a row - forbidden by MariaDB ");
+
+		if ( !stats.records )
+		{
+			if ( SDBIsStreamingTable( sdbDbId_, sdbTableNumber_ ) )
+			{
+				// Streaming table: the statistics are committed during the next checkpoint
+				SDBDebugPrintString( "\n Streaming table statistics will be saved during the next checkpoint " );
+			}
+			else
+			{
+				// Non-streaming table
+				SDBTerminate(0, "ScaleDB internal error:  stats records is zero differs from actual scan which returns a row - forbidden by MariaDB ");
+			}
 		}
 		else
 		{
@@ -6363,7 +6376,7 @@ int ha_scaledb::addOrderByToList(char* buf, int& pos,  SelectAnalyticsHeader* sa
 			sab1->function=FT_NONE;
 			pos=pos+ sizeof(SelectAnalyticsBody1);
 
-			bool ret=addSelectField(buf,  pos, dbid, tabid, type, function,  field_name, contains_analytics_function,precision,scale,flag,result_precision,result_scale ,alias_name);
+			bool ret=addSelectField(buf,  pos, dbid, tabid, type, function,  field_name, contains_analytics_function,precision,scale,flag,result_precision,result_scale ,alias_name,false);
 			n++;
 
 		}
@@ -6407,7 +6420,8 @@ int ha_scaledb::addOrderByToList(char* buf, int& pos,  SelectAnalyticsHeader* sa
 
 				Field *field =((Item_field *)item)->field;
 				field_name=field->field_name;
-				found=isInSelectList( sah, (char*)field_name,dbid,tabid,function);
+
+				
 				break;
 			}
 			case  Item::SUM_FUNC_ITEM:
@@ -6585,16 +6599,16 @@ int ha_scaledb::addOrderByToList(char* buf, int& pos,  SelectAnalyticsHeader* sa
 			}
        
 		}		
-		if(!found)
+		if(!found) 
 		{
-			//add to groupby list.
+			//add orderby list.
 			bool contains_analytics_function=false;
 			SelectAnalyticsBody1* sab1= (SelectAnalyticsBody1*)(buf+pos);
 			sab1->numberFields=1;
 			sab1->function=function;
 			pos=pos+ sizeof(SelectAnalyticsBody1);
 
-			bool ret=addSelectField(buf,  pos, dbid, tabid, type, function,  field_name, contains_analytics_function,precision,scale,flag,result_precision,result_scale ,alias_name);
+			bool ret=addSelectField(buf,  pos, dbid, tabid, type, function,  field_name, contains_analytics_function,precision,scale,flag,result_precision,result_scale ,alias_name,true);
 			n++;
 
 		}
@@ -6637,7 +6651,7 @@ bool ha_scaledb::isInSelectList(SelectAnalyticsHeader* sah, char*  col_name, uns
 
 }
 
-int ha_scaledb::getOrderByPosition(const char* col_name, const char* col_alias, function_type ft)
+int ha_scaledb::getOrderByPosition(const char* col_name, const char* col_alias, function_type ft, bool order_by_field)
 {	
 	if(col_name==NULL) {return 0;}
 	int pos=0;
@@ -6680,16 +6694,28 @@ int ha_scaledb::getOrderByPosition(const char* col_name, const char* col_alias, 
 
 		// if the column is in the order by so return the position (either 1,2,3 ...)
 		// if there is an alias, check the alias.
-		if(alias_name==NULL || col_alias == NULL)
+		if(order_by_field)
 		{
-			if(field_name!= NULL && strcmp( field_name, col_name ) == 0 )
+			if(alias_name==NULL || col_alias == NULL)
 			{
-				return pos;
+				if(field_name!= NULL && strcmp( field_name, col_name ) == 0 )
+				{
+					return pos;
+				}
+			}
+			else
+			{
+				if(strcmp( alias_name, col_alias ) == 0) 
+				{
+					return pos;
+				}
 			}
 		}
 		else
 		{
-			if(strcmp( alias_name, col_alias ) == 0) 
+			//if it is not an orderby field then we only add if it was an alias, because mysql does not include the orderby field when there is an alias
+			//so the field will be in the projection liat
+			if(alias_name!=NULL && col_alias != NULL && strcmp( alias_name, col_alias ) == 0) 
 			{
 				return pos;
 			}
@@ -6824,7 +6850,7 @@ return 0;
 		gab->type=castype;
 		gab->function=function;
 		gab->function_length=gab->length;
-		gab->orderByPosition=getOrderByPosition(col_name,alias_name,function); 
+		gab->orderByPosition=getOrderByPosition(col_name,alias_name,function,true); 
 		pos=pos+sizeof(GroupByAnalyticsBody);
     }
   
@@ -6862,12 +6888,12 @@ int ha_scaledb::generateOrderByConditionString(char* buf, int max_buf, unsigned 
 
 
 	sah_new->numberColumns=sah->numberColumns+n2;
-	return pos;
+	return pos; 
 
 }
 
 
-bool ha_scaledb::addSelectField(char* buf, int& pos, unsigned short dbid, unsigned short tabid, enum_field_types type, short function, const char* col_name, bool& contains_analytics, short precision, short scale, int flag, short result_precision, short result_scale, char* alias_name )
+bool ha_scaledb::addSelectField(char* buf, int& pos, unsigned short dbid, unsigned short tabid, enum_field_types type, short function, const char* col_name, bool& contains_analytics, short precision, short scale, int flag, short result_precision, short result_scale, char* alias_name, bool order_by_field )
 {
 	char castype=	getCASType(type,flag) ;
 
@@ -6890,7 +6916,7 @@ bool ha_scaledb::addSelectField(char* buf, int& pos, unsigned short dbid, unsign
 		sab2->scale=scale;
 		sab2->result_precision=result_precision;
 		sab2->result_scale=result_scale;
-		sab2->orderByPosition=getOrderByPosition(col_name,alias_name,FT_NONE);
+		sab2->orderByPosition=getOrderByPosition(col_name,alias_name,FT_NONE,order_by_field);		
 	}
 	else
 	{
@@ -6904,7 +6930,7 @@ bool ha_scaledb::addSelectField(char* buf, int& pos, unsigned short dbid, unsign
 		sab2->scale=scale;
 		sab2->result_precision=result_precision;
 		sab2->result_scale=result_scale;
-		sab2->orderByPosition=getOrderByPosition(col_name,alias_name,(function_type)function);
+		sab2->orderByPosition=getOrderByPosition(col_name,alias_name,(function_type)function,order_by_field);		
 	}
 	sab2->function=function;		//this is operation to perform on the field
 
@@ -7002,7 +7028,7 @@ Item* ha_scaledb::NestedFunc(enum_field_types& type, function_type& function, in
 				}
 
 				no_fields++;
-				bool ret=addSelectField(buf,  pos, dbid, tabid, type, function,  col_name, contains_analytics_function,precision,scale,flag,result_precision,result_scale,NULL );
+				bool ret=addSelectField(buf,  pos, dbid, tabid, type, function,  col_name, contains_analytics_function,precision,scale,flag,result_precision,result_scale,NULL,false );
 				if(ret==false) {return NULL;}
 			}
 			else if(ft1==Item::FUNC_ITEM)
@@ -7024,7 +7050,7 @@ Item* ha_scaledb::NestedFunc(enum_field_types& type, function_type& function, in
 						scale=fnd->decimals();
 					}
 					no_fields++;
-					bool ret=addSelectField(buf,  pos, dbid, tabid, type, function,  col_name,contains_analytics_function,precision,scale,flag,result_precision,result_scale,NULL );
+					bool ret=addSelectField(buf,  pos, dbid, tabid, type, function,  col_name,contains_analytics_function,precision,scale,flag,result_precision,result_scale,NULL,false );
 					if(ret==false) {return NULL;}
 				}
 				else if(ft2==Item::FUNC_ITEM)
@@ -7044,7 +7070,7 @@ Item* ha_scaledb::NestedFunc(enum_field_types& type, function_type& function, in
 							scale=fnd->decimals();
 						}
 						no_fields++;
-						bool ret=addSelectField(buf,  pos, dbid, tabid, type,function,  col_name,contains_analytics_function,precision,scale,flag,result_precision,result_scale,NULL );
+						bool ret=addSelectField(buf,  pos, dbid, tabid, type,function,  col_name,contains_analytics_function,precision,scale,flag,result_precision,result_scale,NULL,false );
 						if(ret==false) {return NULL;}
 					}
 				}
@@ -7145,7 +7171,7 @@ Item* ha_scaledb::multiArgumentFunction(function_type funct, enum_field_types& t
 				}
 
 				no_fields++;
-				bool ret=addSelectField(buf,  pos, dbid, tabid, type, function,  col_name, contains_analytics_function,precision,scale,flag,result_precision,result_scale,NULL );
+				bool ret=addSelectField(buf,  pos, dbid, tabid, type, function,  col_name, contains_analytics_function,precision,scale,flag,result_precision,result_scale,NULL,false );
 				if(ret==false) {return NULL;}
 			}
 			else
@@ -7496,7 +7522,7 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 				default:
 					contains_analytics_function	= true;
 				}
-				bool ret=addSelectField(buf,  pos, dbid, tabid, type, function, col_name ,contains_analytics_function,precision,scale,flag,result_precision,result_scale, alias_name);
+				bool ret=addSelectField(buf,  pos, dbid, tabid, type, function, col_name ,contains_analytics_function,precision,scale,flag,result_precision,result_scale, alias_name,false);
 				if (ret==false) {return 0;}
 			}
 		
