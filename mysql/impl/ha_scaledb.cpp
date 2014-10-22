@@ -6677,11 +6677,15 @@ int ha_scaledb::getOrderByPosition(const char* col_name, const char* col_alias, 
 			}
 			case Item::SUM_FUNC_ITEM:
 			{			
+				if(ft==FT_NONE) {break;}  //if the group field is NOT a function, then can being ordering over it.
+				else
+				{
 					Field *field =((Item_field *)item->next)->field;
 				
 					field_name=field->field_name;
 					alias_name= item->name;
 					break;
+				}
 			}
 			default:
 				{
