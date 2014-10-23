@@ -6920,7 +6920,7 @@ bool ha_scaledb::addSelectField(char* buf, int& pos, unsigned short dbid, unsign
 		sab2->scale=scale;
 		sab2->result_precision=result_precision;
 		sab2->result_scale=result_scale;
-		sab2->orderByPosition=getOrderByPosition(col_name,alias_name,FT_NONE,order_by_field);		
+		sab2->orderByPosition=getOrderByPosition(col_name,alias_name,(function_type)function,order_by_field);		
 	}
 	else
 	{
