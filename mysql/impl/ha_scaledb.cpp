@@ -6735,7 +6735,7 @@ int ha_scaledb::generateGroupConditionString(int cardinality, char* buf, int max
 	Item *item;
 
 	int pos=0;
-	int select_limit=0;
+	int select_limit=-1;
 	SELECT_LEX*  lex=   (((THD*) ha_thd())->lex)->select_lex.parent_lex->current_select;
 	Item* limit= lex->select_limit;
 	if(limit!=NULL)
