@@ -3534,7 +3534,7 @@ int ha_scaledb::fetchSingleRow(unsigned char* buf) {
 		table->status = STATUS_NOT_FOUND;
 		if(retValue==QUERY_ABORTED)
 		{
-			SDBSetErrorMessage( sdbUserId_, QUERY_ABORTED, " - Insufficient resources to complete the query." );
+			SDBSetErrorMessage( sdbUserId_, QUERY_ABORTED, " - Insufficient resources to complete the query (or query cancelled by user)." );
 		}
 		DBUG_RETURN(convertToMysqlErrorCode(retValue));
 	}
