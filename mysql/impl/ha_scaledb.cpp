@@ -7343,11 +7343,30 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 					function=FT_COUNT_DISTINCT;
 					Field *field =((Item_field *)item->next)->field;
 					Item::Type ft=item->next->type();
-					char* name= item->name;  //count distinct can have multile arguemnts
-					item=multiArgumentFunction(FT_COUNT_DISTINCT, type,function,no_fields,name, ft, item, sum,  buf,  pos,  sab1, dbid, tabid, contains_analytics_function );
-					contains_analytics_function=true;
-					if(item==NULL) {return 0;}			//unsupported so bail	
-			
+					if(ft==Item::FIELD_ITEM)
+					{
+						col_name=field->field_name;
+						type= field->type();	
+						flag=field->flags;
+
+						if(type==MYSQL_TYPE_NEWDECIMAL)
+						{			
+							Field_new_decimal* fnd=(Field_new_decimal*)field;
+							precision=fnd->precision;
+							result_precision =item->decimal_precision();
+							result_scale=item->decimals;
+							scale=fnd->decimals();
+						}
+
+					}
+					else
+					{
+								char* name= item->name;  //count distinct can have multile arguemnts
+								item=multiArgumentFunction(FT_COUNT_DISTINCT, type,function,no_fields,name, ft, item, sum,  buf,  pos,  sab1, dbid, tabid, contains_analytics_function );
+								contains_analytics_function=true;
+								if(item==NULL) {return 0;}			//unsupported so bail
+					}						
+
 				}				
 #endif //  PROCESS_COUNT_DISTINCT
 				else if (sum->sum_func() == Item_sum::MIN_FUNC)
