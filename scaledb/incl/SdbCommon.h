@@ -73,7 +73,7 @@ typedef enum SdbKeySearchDirection {
 #define INITIAL_QUERY_MANAGER_ID_IN_VECTOR 20
 #define METAINFO_MAX_KEY_FIELDS 10
 #define METAINFO_BLOCK_SIZE  8192
-#define SMALL_VAR_FIELD_SIZE	1024
+#define SMALL_VAR_FIELD_SIZE	2048
 
 // About 15 bytes for an IP address string, about 5 bytes for a port number string, plus 4 length bytes.
 // Hence one node ip+port takes about 24 bytes.
