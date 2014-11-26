@@ -7231,6 +7231,11 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 			return 0;
 		} //only check for buffer overwrite once per loop, the + 100 is being conservative
 
+		if(item->const_item())
+		{
+			continue;
+		}
+
 
 		switch (item->type())
 		{
