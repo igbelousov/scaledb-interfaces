@@ -6421,7 +6421,7 @@ int ha_scaledb::addOrderByToList(char* buf, int& pos,  SelectAnalyticsHeader* sa
 				Field *field =((Item_field *)item)->field;
 				field_name=field->field_name;
 
-				
+				found=isInSelectList( sah, (char*)field_name,dbid,tabid,function);
 				break;
 			}
 			case  Item::SUM_FUNC_ITEM:
