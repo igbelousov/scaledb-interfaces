@@ -6463,17 +6463,25 @@ int ha_scaledb::addOrderByToList(char* buf, int& pos,  SelectAnalyticsHeader* sa
 				{
 					function=FT_COUNT;
 					Field *field =((Item_field *)item->next)->field;
-
-					field_name=field->field_name;
-					type=field->type();
-					flag=field->flags;
-					if(type==MYSQL_TYPE_NEWDECIMAL)
-					{			
-						Field_new_decimal* fnd=(Field_new_decimal*)field;
-						precision=fnd->precision;
-						result_precision =item->decimal_precision();
-						scale=fnd->decimals();
-						result_scale = item->decimals;
+					Item::Type ft=item->next->type();
+					if(ft==Item::FIELD_ITEM)
+					{
+						field_name=field->field_name;
+						type=field->type();
+						flag=field->flags;
+						if(type==MYSQL_TYPE_NEWDECIMAL)
+						{			
+							Field_new_decimal* fnd=(Field_new_decimal*)field;
+							precision=fnd->precision;
+							result_precision =item->decimal_precision();
+							scale=fnd->decimals();
+							result_scale = item->decimals;
+						}
+					}
+					else
+					{
+						field_name="?";
+						type=MYSQL_TYPE_LONG;
 					}
 					if(item->name!=NULL)
 					{
@@ -6489,17 +6497,17 @@ int ha_scaledb::addOrderByToList(char* buf, int& pos,  SelectAnalyticsHeader* sa
 					function=FT_COUNT_DISTINCT;
 					Field *field =((Item_field *)item->next)->field;
 
-					field_name=field->field_name;
-					type=field->type();
-					flag=field->flags;
-					if(type==MYSQL_TYPE_NEWDECIMAL)
-					{			
-						Field_new_decimal* fnd=(Field_new_decimal*)field;
-						precision=fnd->precision;
-						result_precision =item->decimal_precision();
-						scale=fnd->decimals();
-						result_scale = item->decimals;
-					}
+						field_name=field->field_name;
+						type=field->type();
+						flag=field->flags;
+						if(type==MYSQL_TYPE_NEWDECIMAL)
+						{			
+							Field_new_decimal* fnd=(Field_new_decimal*)field;
+							precision=fnd->precision;
+							result_precision =item->decimal_precision();
+							scale=fnd->decimals();
+							result_scale = item->decimals;
+						}
 					if(item->name!=NULL)
 					{
 						//if an alias  column, so MUST be in orderby so no need to add
@@ -6680,10 +6688,19 @@ int ha_scaledb::getOrderByPosition(const char* col_name, const char* col_alias, 
 				if(ft==FT_NONE) {break;}  //if the group field is NOT a function, then can being ordering over it.
 				else
 				{
-					Field *field =((Item_field *)item->next)->field;
-				
-					field_name=field->field_name;
-					alias_name= item->name;
+                                        Item::Type ft=item->next->type();
+					if(ft==Item::FIELD_ITEM)
+					{
+						Field *field =((Item_field *)item->next)->field;
+
+						field_name=field->field_name;
+						alias_name= item->name;
+					}
+					else
+					{
+						field_name="?";   //this is a count(*), anonymous types are treatedlike this
+						//no alias and not a field so do nothing.
+					}
 					break;
 				}
 			}
@@ -6702,7 +6719,7 @@ int ha_scaledb::getOrderByPosition(const char* col_name, const char* col_alias, 
 		{
 			if(alias_name==NULL || col_alias == NULL)
 			{
-				if(field_name!= NULL && strcmp( field_name, col_name ) == 0 )
+				if(field_name!= NULL && ( (strcmp( field_name, col_name ) == 0) )) 
 				{
 					return pos;
 				}
