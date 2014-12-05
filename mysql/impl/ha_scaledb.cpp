@@ -6688,7 +6688,7 @@ int ha_scaledb::getOrderByPosition(const char* col_name, const char* col_alias, 
 				if(ft==FT_NONE) {break;}  //if the group field is NOT a function, then can being ordering over it.
 				else
 				{
-                                        Item::Type ft=item->next->type();
+                     Item::Type ft=item->next->type();
 					if(ft==Item::FIELD_ITEM)
 					{
 						Field *field =((Item_field *)item->next)->field;
@@ -6699,6 +6699,7 @@ int ha_scaledb::getOrderByPosition(const char* col_name, const char* col_alias, 
 					else
 					{
 						field_name="?";   //this is a count(*), anonymous types are treatedlike this
+						alias_name= item->name;
 						//no alias and not a field so do nothing.
 					}
 					break;
@@ -7355,7 +7356,7 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 						//this is a count(*)
 						col_name="?";
 						type=MYSQL_TYPE_LONG;
-
+						alias_name= item->name;
 					}
 				
 				}
