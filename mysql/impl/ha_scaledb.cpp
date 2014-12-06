@@ -4806,79 +4806,101 @@ bool ha_scaledb::conditionTreeToString( const COND* cond, unsigned char** buffer
 
 			for ( int i = 0; i < countArgs; i++ )
 			{
-				Item *subItem = ((Item_func*) cond)->arguments()[i];
+				Item*		pSubItem				= ( ( Item_func* ) cond )->arguments()[ i ];
+				Item::Type	typeItem				= pSubItem->type();
 
 				if ( !i )
 				{
 					offsetComperandData				= *nodeOffset;
 					pComperandData					= *buffer + offsetComperandData;
 				}
-			
-				if ( subItem->type() == Item::FIELD_ITEM )
-				{
-					// Visit field item
-					pField							= ( ( Item_field* ) subItem )->field;
 
-					if ( pField->flags				& 256 )
+				switch ( typeItem )
+				{
+					case Item::FIELD_ITEM:
 					{
-						return false;			//enum type--our check for satisfiability doesn't work for enums
-					}
+						// Visit field item
+						pField						= ( ( Item_field* ) pSubItem )->field;
+
+						if ( pField->flags			& 256 )
+						{
+							return false;			//enum type--our check for satisfiability doesn't work for enums
+						}
 
 #ifdef SDB_DEBUG
-					if ( isBetween				   || isIn )
-					{
-						if ( i )
+						if ( isBetween			   || isIn )
 						{
-							// Field operand should be first
-							SDBTerminateEngine( -1, "Unexpected ordering of operands", __FILE__, __LINE__ );
+							if ( i )
+							{
+								// Field operand should be first
+								SDBTerminateEngine( -1, "Unexpected ordering of operands", __FILE__, __LINE__ );
+							}
 						}
+#endif
+
+						if ( typeFunc			   == Item_func::UNKNOWN_FUNC )
+						{
+							// Determine the function type from the function name
+							switch ( *( ( Item_func_bit* ) cond )->func_name() )
+							{
+								case '&':
+									typeFunc		= Item_func::COND_AND_FUNC;
+									break;
+								case '|':
+									typeFunc		= Item_func::COND_OR_FUNC;
+									break;
+								case '^':
+									typeFunc		= Item_func::XOR_FUNC;
+									break;
+								default:
+									return false;
+							}
+						}
+
+						// Append the column item to the condition string
+						if ( !( conditionFieldToString( buffer, nodeOffset, pSubItem, pComperandItem, &offsetComperandData,
+														countArgs, typeFunc, DBID, TABID ) ) )
+						{
+							return false;
+						}
+
+						// end visit field item
+						break;
+					}
+
+#if	MYSQL_VERSION_ID >= 100014
+					case Item::FUNC_ITEM:
+					{
+						// Visit function item
+
+						// Append the function item to the condition string
+						if ( !( conditionFunctionToString( buffer, nodeOffset, ( Item_func* ) pSubItem, pComperandItem, &offsetComperandData,
+														   countArgs, typeFunc, DBID, TABID ) ) )
+						{
+							return false;
+						}
+
+						// End visit function item
+						break;
 					}
 #endif
 
-					if ( typeFunc				   == Item_func::UNKNOWN_FUNC )
+					default:
 					{
-						// Determine the function type from the function name
-						switch ( *( ( Item_func_bit* ) cond )->func_name() )
+						// Visit user data item
+						//	Append the constant value item to the condition string
+						if ( !( conditionConstantToString( buffer, nodeOffset, pSubItem, pComperandItem, &offsetComperandData ) ) )
 						{
-							case '&':
-								typeFunc			= Item_func::COND_AND_FUNC;
-								break;
-							case '|':
-								typeFunc			= Item_func::COND_OR_FUNC;
-								break;
-							case '^':
-								typeFunc			= Item_func::XOR_FUNC;
-								break;
-							default:
-								return false;
+							return false;
 						}
+
+						// end visit user data item
 					}
-
-					// Append the column item to the condition string
-					if ( !( conditionFieldToString( buffer, nodeOffset, subItem, pComperandItem, &offsetComperandData,
-													countArgs, typeFunc, DBID, TABID ) ) )
-					{
-						return false;
-					}
-
-					//end visit field item
-				}
-
-				else 
-				{
-					// Visit user data item
-					//	Append the constant value item to the condition string
-					if ( !( conditionConstantToString( buffer, nodeOffset, subItem, pComperandItem, &offsetComperandData ) ) )
-					{
-						return false;
-					}
-
-					//end visit user data item
 				}
 
 				if ( !i )
 				{
-					pComperandItem					= subItem;
+					pComperandItem					= pSubItem;
 					pComperandData					= *buffer + offsetComperandData;
 				}
 			}
@@ -4924,11 +4946,11 @@ bool ha_scaledb::conditionTreeToString( const COND* cond, unsigned char** buffer
 					*( *buffer + *nodeOffset + COMP_OP_OFFSET_OPERATION )	= ( unsigned char )( SDB_PUSHDOWN_OPERATOR_NE );		// This represents !=
 					break;
 				case Item_func::BETWEEN:
-					{
-						between_end=true;
+				{
+					between_end												= true;
 					*( *buffer + *nodeOffset + COMP_OP_OFFSET_OPERATION )	= ( unsigned char )( SDB_PUSHDOWN_OPERATOR_BETWEEN );	// This represents BETWEEN
 					break;
-					}
+				}
 				case Item_func::IN_FUNC:
 					*( *buffer + *nodeOffset + COMP_OP_OFFSET_OPERATION )	= ( unsigned char )( SDB_PUSHDOWN_OPERATOR_IN );		// This represents IN
 						break;
@@ -4942,13 +4964,14 @@ bool ha_scaledb::conditionTreeToString( const COND* cond, unsigned char** buffer
 					*( *buffer + *nodeOffset + LOGIC_OP_OFFSET_OPERATION )	= SDB_PUSHDOWN_OPERATOR_BITWISE_XOR;					// Bitwise XOR
 					break;
 				default:
-					*( *buffer + *nodeOffset + COMP_OP_OFFSET_OPERATION )	= ( unsigned char )( SDB_PUSHDOWN_UNKNOWN );			// Unsupported operator
+					*( *buffer + *nodeOffset + COMP_OP_OFFSET_OPERATION )	= ( unsigned char )( SDB_PUSHDOWN_NONE );				// Unsupported operator
 					return false;
 			}
 
 			*( bool* )( *buffer + *nodeOffset + COMP_OP_OFFSET_IS_NEGATED )	= isNegated;											// Operator result should [not] be negated
 
 			*nodeOffset							   += COMP_OP_NODE_LENGTH;
+
 			// end visit operator
 			if(between_end)
 			{				
@@ -5060,6 +5083,226 @@ bool ha_scaledb::conditionMultEqToString( unsigned char** pCondString, unsigned 
 		*( bool* )( *pCondString + *pCondOffset + LOGIC_OP_OFFSET_IS_NEGATED )				= false;											// Result should not be negated
 		*pCondOffset																	   += LOGIC_OP_NODE_LENGTH;
 	}
+
+	return true;
+}
+
+
+bool ha_scaledb::conditionFunctionToString( unsigned char** pCondString, unsigned int* pItemOffset, Item_func* pFuncItem,
+											Item* pComperandItem, unsigned int* pComperandDataOffset,
+											unsigned short countArgs, int typeOperation, unsigned short* pDbId, unsigned short* pTableId )
+{
+	unsigned short	countFuncParams	= pFuncItem->argument_count();
+	Item*			pFuncParam;
+	unsigned char	typeFuncItem;
+	unsigned char	typeResult;
+	int				typeFuncParam;
+	int				typeField;
+	int				resultExtension;
+
+	if ( countFuncParams		   != 1 )
+	{
+		// Only single operand functions are supported for now
+		return false;
+	}
+
+	// Determine function type
+#if	defined( SDB_WINDOWS ) || defined( __GXX_RTTI )										// typeid() is supported
+	if ( typeid( *pFuncItem )	   == typeid( Item_func_inet_aton ) )
+	{
+		typeFuncItem				= SDB_PUSHDOWN_FUNCTION_INET_ATON;
+		typeResult					= SDB_PUSHDOWN_LITERAL_DATA_TYPE_UNSIGNED_INTEGER;
+	}
+	else if ( typeid( *pFuncItem ) == typeid( Item_func_inet_ntoa ) )
+	{
+		typeFuncItem				= SDB_PUSHDOWN_FUNCTION_INET_NTOA;
+		typeResult					= SDB_PUSHDOWN_LITERAL_DATA_TYPE_CHAR;
+	}
+	else if ( typeid( *pFuncItem ) == typeid( Item_func_inet6_aton ) )
+	{
+		typeFuncItem				= SDB_PUSHDOWN_FUNCTION_INET6_ATON;
+		typeResult					= SDB_PUSHDOWN_LITERAL_DATA_TYPE_UNSIGNED_INTEGER;
+	}
+	else if ( typeid( *pFuncItem ) == typeid( Item_func_inet6_ntoa ) )
+	{
+		typeFuncItem				= SDB_PUSHDOWN_FUNCTION_INET6_NTOA;
+		typeResult					= SDB_PUSHDOWN_LITERAL_DATA_TYPE_CHAR;
+	}
+	else if ( typeid( *pFuncItem ) == typeid( Item_func_is_ipv4 ) )
+	{
+		typeFuncItem				= SDB_PUSHDOWN_FUNCTION_IS_IPV4;
+		typeResult					= SDB_PUSHDOWN_LITERAL_DATA_TYPE_BIT;
+	}
+	else if ( typeid( *pFuncItem ) == typeid( Item_func_is_ipv6 ) )
+	{
+		typeFuncItem				= SDB_PUSHDOWN_FUNCTION_IS_IPV6;
+		typeResult					= SDB_PUSHDOWN_LITERAL_DATA_TYPE_BIT;
+	}
+	else if ( typeid( *pFuncItem ) == typeid( Item_func_is_ipv4_compat ) )
+	{
+		typeFuncItem				= SDB_PUSHDOWN_FUNCTION_IS_IPV4_COMPAT;
+		typeResult					= SDB_PUSHDOWN_LITERAL_DATA_TYPE_BIT;
+	}
+	else if ( typeid( *pFuncItem ) == typeid( Item_func_is_ipv4_mapped ) )
+	{
+		typeFuncItem				= SDB_PUSHDOWN_FUNCTION_IS_IPV4_MAPPED;
+		typeResult					= SDB_PUSHDOWN_LITERAL_DATA_TYPE_BIT;
+	}
+	else
+	{
+		// Not a supported function type
+		return false;
+	}
+#else	// typeid() is not supported
+	const char*	pFuncName			= pFuncItem->func_name();
+
+	if ( *( pFuncName++ )		   != 'i' )
+	{
+		// Not a supported function type
+		return false;
+	}
+
+	if ( 0						   == strncmp( pFuncName, "net", 3 ) )
+	{
+		// INET...
+		pFuncName				   += 3;
+
+		if ( *pFuncName			   == '_' )
+		{
+			// INET_...
+			pFuncName++;
+
+			if ( 0				   == strcmp( pFuncName, "aton" ) )
+			{
+				typeFuncItem		= SDB_PUSHDOWN_FUNCTION_INET_ATON;
+				typeResult			= SDB_PUSHDOWN_LITERAL_DATA_TYPE_UNSIGNED_INTEGER;
+			}
+			else if ( 0			   == strcmp( pFuncName, "ntoa" ) )
+			{
+				typeFuncItem		= SDB_PUSHDOWN_FUNCTION_INET_NTOA;
+				typeResult			= SDB_PUSHDOWN_LITERAL_DATA_TYPE_CHAR;
+			}
+			else
+			{
+				// Not a supported function type
+				return false;
+			}
+		}
+		else if ( 0				   == strncmp( pFuncName, "6_", 2 ) )
+		{
+			// INET6_...
+			pFuncName			   += 2;
+
+			if ( 0				   == strcmp( pFuncName, "aton" ) )
+			{
+				typeFuncItem		= SDB_PUSHDOWN_FUNCTION_INET6_ATON;
+				typeResult			= SDB_PUSHDOWN_LITERAL_DATA_TYPE_UNSIGNED_INTEGER;
+			}
+			else if ( 0			   == strcmp( pFuncName, "ntoa" ) )
+			{
+				typeFuncItem		= SDB_PUSHDOWN_FUNCTION_INET6_NTOA;
+				typeResult			= SDB_PUSHDOWN_LITERAL_DATA_TYPE_CHAR;
+			}
+			else
+			{
+				// Not a supported function type
+				return false;
+			}
+		}
+		else
+		{
+			// Not a supported function type
+			return false;
+		}
+	}
+	else if ( 0					   == strncmp( pFuncName, "s_ipv", 5 ) )
+	{
+		// IS_IPV...
+		pFuncName				   += 5;
+
+		if ( 0					   == strcmp( pFuncName, "4" ) )
+		{
+			typeFuncItem			= SDB_PUSHDOWN_FUNCTION_IS_IPV4;
+			typeResult				= SDB_PUSHDOWN_LITERAL_DATA_TYPE_BIT;
+		}
+		else if ( 0				   == strncmp( pFuncName, "4_", 2 ) )
+		{
+			// IS_IPV4_...
+			pFuncName			   += 2;
+
+			if ( 0				   == strcmp( pFuncName, "compat" ) )
+			{
+				typeFuncItem		= SDB_PUSHDOWN_FUNCTION_IS_IPV4_COMPAT;
+				typeResult			= SDB_PUSHDOWN_LITERAL_DATA_TYPE_BIT;
+			}
+			else if ( 0			   == strcmp( pFuncName, "mapped" ) )
+			{
+				typeFuncItem		= SDB_PUSHDOWN_FUNCTION_IS_IPV4_MAPPED;
+				typeResult			= SDB_PUSHDOWN_LITERAL_DATA_TYPE_BIT;
+			}
+			else
+			{
+				// Not a supported function type
+				return false;
+			}
+		}
+		else if ( 0				   == strcmp( pFuncName, "6" ) )
+		{
+			typeFuncItem			= SDB_PUSHDOWN_FUNCTION_IS_IPV6;
+			typeResult				= SDB_PUSHDOWN_LITERAL_DATA_TYPE_BIT;
+		}
+	}
+	else
+	{
+		// Not a supported function type
+		return false;
+	}
+#endif	// typeid() is not supported
+
+	// Only single operand functions are supported for now
+	pFuncParam						= pFuncItem->arguments()[ 0 ];
+	typeFuncParam					= pFuncParam->type();
+
+	if ( typeFuncParam			   != Item::FIELD_ITEM )
+	{
+		// Only field parameters are supported for now
+		return false;
+	}
+
+	typeField						= ( ( ( Item_field* ) pFuncParam )->field )->type();
+
+	// Only string result types are supported for now
+	switch ( typeField )
+	{
+		case MYSQL_TYPE_STRING:
+			break;
+		default:
+			return false;
+	}
+
+	// Extend the condition string if necessary
+	resultExtension					= checkConditionStringSize( pCondString, pItemOffset, FUNC_OP_NODE_LENGTH );
+
+	if ( resultExtension			< 0 )
+	{
+		// Extension failed
+		return false;
+	}
+
+	// Append the parameter field item to the condition string
+	if ( !( conditionFieldToString( pCondString, pItemOffset, pFuncParam, pComperandItem, pComperandDataOffset, countArgs, typeOperation, pDbId, pTableId ) ) )
+	{
+		return false;
+	}
+
+	// Child visited
+	//	Append the function item to the condition string
+	*( unsigned short* )( *pCondString + *pItemOffset + FUNC_OP_OFFSET_CHILDCOUNT )	= ( unsigned short )( countFuncParams );	// # of function parameters
+	*( *pCondString + *pItemOffset + FUNC_OP_OFFSET_TYPE )							= typeFuncItem;								// function type
+	*( *pCondString + *pItemOffset + FUNC_OP_OFFSET_RESULT_TYPE )					= ( unsigned char ) typeResult;				// function result type
+
+	*pComperandDataOffset															= *pItemOffset;
+	*pItemOffset																   += FUNC_OP_NODE_LENGTH;
 
 	return true;
 }
@@ -5264,7 +5507,7 @@ bool ha_scaledb::conditionFieldToString( unsigned char** pCondString, unsigned i
 		case MYSQL_TYPE_VARCHAR:
 		case MYSQL_TYPE_VAR_STRING:
 		default:
-			*( *pCondString + *pItemOffset + ROW_DATA_OFFSET_ROW_TYPE )		= SDB_PUSHDOWN_UNKNOWN;								// unknown (row)
+			*( *pCondString + *pItemOffset + ROW_DATA_OFFSET_ROW_TYPE )		= SDB_PUSHDOWN_NONE;								// unknown (row)
 			return false;
 	}
 
@@ -5281,6 +5524,7 @@ bool ha_scaledb::conditionFieldToString( unsigned char** pCondString, unsigned i
 	switch ( fieldType )
 	{
 		case MYSQL_TYPE_STRING:
+		case MYSQL_TYPE_VARCHAR:
 			break;
 
 		default:
@@ -5598,8 +5842,32 @@ bool ha_scaledb::conditionConstantToString( unsigned char** pCondString, unsigne
 		case Item::INT_ITEM:
 		{
 			Item_field*		pField				= ( pConstItem->with_field ? ( ( Item_field* ) pConstItem )  : NULL );
-			Item_field*		pComperandField		= ( ( pComperandItem && pComperandItem->with_field )   ? ( ( Item_field* ) pComperandItem ) : NULL );
-			int				typeComperand		= ( pComperandItem ? pComperandItem->type() : 0 );
+			Item_field*		pComperandField;
+			int				typeComperand;
+			bool			isFunctionComperand;
+
+			if ( pComperandItem )
+			{
+				switch ( *( pComperandData + FUNC_OP_OFFSET_TYPE ) )
+				{
+					casePushdownFunction:												// ALL SUPPORTED PUSHDOWN FUNCTION TYPES
+						pComperandField			= NULL;
+						typeComperand			= ( int )( *( pComperandData + FUNC_OP_OFFSET_RESULT_TYPE ) );
+						isFunctionComperand		= true;
+						break;
+
+					default:
+						pComperandField			= ( ( pComperandItem && pComperandItem->with_field )   ? ( ( Item_field* ) pComperandItem ) : NULL );
+						typeComperand			= ( pComperandItem ? pComperandItem->type() : 0 );
+						isFunctionComperand		= false;
+				}
+			}
+			else
+			{
+				pComperandField					= NULL;
+				typeComperand					= 0;
+				isFunctionComperand				= false;
+			}
 
 			if ( typeComperand				   == Item::FUNC_ITEM )
 			{
@@ -5610,8 +5878,8 @@ bool ha_scaledb::conditionConstantToString( unsigned char** pCondString, unsigne
 			typeComperand						= ( pComperandField ? ( pComperandField->field )->type() : 0 );
 
 			bool			isUnsignedField		= ( pField ? ( ( pField->field->flags & UNSIGNED_FLAG )  ? true : false  ) : false );
-			bool			isUnsignedComperand	= ( ( typeComperand && pComperandField ) ?
-													( ( pComperandField->field->flags & UNSIGNED_FLAG )  ? true : false  ) : false );
+			bool			isUnsignedComperand	= ( isFunctionComperand ? true : ( ( typeComperand && pComperandField ) ?
+													( ( pComperandField->field->flags & UNSIGNED_FLAG )  ? true : false  ) : false ) );
 			long long		intValue			= ( ( Item_int* ) pConstItem )->value;
 
 			switch ( typeComperand )
@@ -5712,7 +5980,7 @@ bool ha_scaledb::conditionConstantToString( unsigned char** pCondString, unsigne
 					{
 						return false;
 					}
-					
+
 					*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_SIZE )									=  ( unsigned char )( 8 );		// max size in bytes of decimal
 					( *pItemOffset )																			   += USER_DATA_OFFSET_USER_DATA + 8;
 					break;
@@ -5927,40 +6195,59 @@ bool ha_scaledb::conditionConstantToString( unsigned char** pCondString, unsigne
 		case Item::STRING_ITEM:
 		{
 			int		temporalDataType;
+			bool	isFunctionComperand;
 
 			if ( pComperandItem )
 			{
-				temporalDataType			= ( ( ( Item_field* ) pComperandItem )->field )->type();
+				unsigned char	typeFunction	= *( pComperandData + FUNC_OP_OFFSET_TYPE );
 
-				switch ( temporalDataType )
+				switch ( *( pComperandData + FUNC_OP_OFFSET_TYPE ) )
 				{
-					case MYSQL_TYPE_TIMESTAMP:
-					case MYSQL_TYPE_TIME:
-					case MYSQL_TYPE_DATETIME:
-					case MYSQL_TYPE_DATE:
-					case MYSQL_TYPE_NEWDATE:
-					case MYSQL_TYPE_YEAR:
+					casePushdownFunction:												// ALL SUPPORTED PUSHDOWN FUNCTION TYPES
+						isFunctionComperand		= true;
 						break;
 					default:
-						temporalDataType	= 0;
+						isFunctionComperand		= false;
+				}
+
+				if ( isFunctionComperand )
+				{
+					temporalDataType			= 0;
+				}
+				else
+				{
+					temporalDataType			= ( ( ( Item_field* ) pComperandItem )->field )->type();
+
+					switch ( temporalDataType )
+					{
+						case MYSQL_TYPE_TIMESTAMP:
+						case MYSQL_TYPE_TIME:
+						case MYSQL_TYPE_DATETIME:
+						case MYSQL_TYPE_DATE:
+						case MYSQL_TYPE_NEWDATE:
+						case MYSQL_TYPE_YEAR:
+							break;
+						default:
+							temporalDataType	= 0;
+					}
 				}
 			}
 			else
 			{
-				temporalDataType			= 0;
+				temporalDataType				= 0;
 			}
 
 			if ( temporalDataType )
 			{
-				Item_field*		pField		= ( Item_field* ) pConstItem;
+				Item_field*		pField			= ( Item_field* ) pConstItem;
 #if MYSQL_VERSION_ID < 100014
-				const char*		pString		= ( ( ( Item_int* ) pConstItem )->str_value ).ptr();
-				unsigned int	stringSize	= ( ( ( Item_int* ) pConstItem )->str_value ).length();
+				const char*		pString			= ( ( ( Item_int* ) pConstItem )->str_value ).ptr();
+				unsigned int	stringSize		= ( ( ( Item_int* ) pConstItem )->str_value ).length();
 #else
-				const char*		pString		= ( ( ( Item* ) pConstItem )->val_str() )->ptr();
-				unsigned int	stringSize	= ( ( ( Item* ) pConstItem )->val_str() )->length();
+				const char*		pString			= ( ( ( Item* ) pConstItem )->val_str() )->ptr();
+				unsigned int	stringSize		= ( ( ( Item* ) pConstItem )->val_str() )->length();
 #endif
-				THD*			pMysqlThd	= ha_thd();
+				THD*			pMysqlThd		= ha_thd();
 				MYSQL_TIME		myTime;
 
 				// Convert the time string to a time value
@@ -5996,9 +6283,9 @@ bool ha_scaledb::conditionConstantToString( unsigned char** pCondString, unsigne
 				}
 
 				// Extend the condition string if necessary
-				resultExtension				= checkConditionStringSize( pCondString, pItemOffset, USER_DATA_OFFSET_USER_DATA + stringSize );
+				resultExtension					= checkConditionStringSize( pCondString, pItemOffset, USER_DATA_OFFSET_USER_DATA + stringSize );
 
-				if ( resultExtension		< 0 )
+				if ( resultExtension			< 0 )
 				{
 					// Extension failed
 					return false;
@@ -6008,7 +6295,7 @@ bool ha_scaledb::conditionConstantToString( unsigned char** pCondString, unsigne
 					// Condition string was extended
 					if ( pComperandDataOffset )
 					{
-						pComperandData		= *pCondString + *pComperandDataOffset;
+						pComperandData			= *pCondString + *pComperandDataOffset;
 					}
 				}
 #if MYSQL_VERSION_ID < 100014
@@ -6030,8 +6317,8 @@ bool ha_scaledb::conditionConstantToString( unsigned char** pCondString, unsigne
 			{
 			case MYSQL_TYPE_DECIMAL:
 			case MYSQL_TYPE_NEWDECIMAL:
-				*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_TYPE )	=  ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_DECIMAL );
-				*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_SIZE )	=  ( unsigned char )( 8 );		// max size in bytes of decimal
+				*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_TYPE )		=  ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_DECIMAL );
+				*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_SIZE )		=  ( unsigned char )( 8 );	// max size in bytes of decimal
 							
 				if ( pComperandItem )
 				{
@@ -6121,7 +6408,7 @@ bool ha_scaledb::conditionConstantToString( unsigned char** pCondString, unsigne
 
 		default:
 		{
-			*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_TYPE )	= ( unsigned char )( SDB_PUSHDOWN_UNKNOWN );
+			*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_TYPE )	= ( unsigned char )( SDB_PUSHDOWN_NONE );
 			*( ( long long* )( *pCondString + *pItemOffset + USER_DATA_OFFSET_USER_DATA ) )	= ( long long ) pConstItem->type();
 			( *pItemOffset ) += USER_DATA_OFFSET_USER_DATA + 8;
 			return false;
@@ -6304,7 +6591,7 @@ char ha_scaledb::getCASType(enum_field_types mysql_type, int flags)
 						}
 					default:
 						{
-						return  SDB_PUSHDOWN_UNKNOWN;								// unknown (row)
+						return  SDB_PUSHDOWN_NONE;									// unknown (row)
 						break;
 						}
 					}

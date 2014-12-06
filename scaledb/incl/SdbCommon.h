@@ -267,7 +267,7 @@ typedef enum SdbKeySearchDirection {
 // Condition pushdown operators and data types
 enum SdbConditionPushdownType:unsigned char
 {
-	SDB_PUSHDOWN_UNKNOWN,																					// PLACEHOLDER
+	SDB_PUSHDOWN_NONE,																						// PLACEHOLDER
 
 	// Operators
 	SDB_PUSHDOWN_OPERATOR_AND,																				// AND
@@ -286,6 +286,17 @@ enum SdbConditionPushdownType:unsigned char
 	SDB_PUSHDOWN_OPERATOR_IN,																				// IN
 	SDB_PUSHDOWN_OPERATOR_COND_RESULT,																		// Condition Result
 																											// ^^^^^^^^^^^^^^^^^^^^^^^ ADD NEW OPERATORS HERE
+
+	// Function types
+	SDB_PUSHDOWN_FUNCTION_INET_ATON,																		// INET_ATON
+	SDB_PUSHDOWN_FUNCTION_INET_NTOA,																		// INET_NTOA
+	SDB_PUSHDOWN_FUNCTION_INET6_ATON,																		// INET6_ATON
+	SDB_PUSHDOWN_FUNCTION_INET6_NTOA,																		// INET6_NTOA
+	SDB_PUSHDOWN_FUNCTION_IS_IPV4,																			// IS_IPV4
+	SDB_PUSHDOWN_FUNCTION_IS_IPV6,																			// IS_IPV6
+	SDB_PUSHDOWN_FUNCTION_IS_IPV4_COMPAT,																	// IS_IPV4_COMPAT
+	SDB_PUSHDOWN_FUNCTION_IS_IPV4_MAPPED,																	// IS_IPV4_MAPPED
+																											// ^^^^^^^^^^^^^^^^^^^^^^^ ADD NEW FUNCTION TYPES HERE
 
 	// Data Types
 	SDB_PUSHDOWN_COLUMN_DATA_TYPE_UNSIGNED_INTEGER,															// unsigned int		(row)
@@ -318,6 +329,17 @@ enum SdbConditionPushdownType:unsigned char
 																											// ^^^^^^^^^^^^^^^^^^^^^^^ ADD NEW SYONONYMS HERE
 };
 
+// Case for all supported function types: use in Switch with same action for all function types
+#define casePushdownFunction \
+		case SDB_PUSHDOWN_FUNCTION_INET_ATON:		\
+		case SDB_PUSHDOWN_FUNCTION_INET_NTOA:		\
+		case SDB_PUSHDOWN_FUNCTION_INET6_ATON:		\
+		case SDB_PUSHDOWN_FUNCTION_INET6_NTOA:		\
+		case SDB_PUSHDOWN_FUNCTION_IS_IPV4:			\
+		case SDB_PUSHDOWN_FUNCTION_IS_IPV6:			\
+		case SDB_PUSHDOWN_FUNCTION_IS_IPV4_COMPAT:	\
+		case SDB_PUSHDOWN_FUNCTION_IS_IPV4_MAPPED
+
 // Pushdown condition string offsets
 #define LOGIC_OP_OFFSET_CHILDCOUNT	0
 #define LOGIC_OP_OFFSET_OPERATION	(LOGIC_OP_OFFSET_CHILDCOUNT + 2)
@@ -328,6 +350,11 @@ enum SdbConditionPushdownType:unsigned char
 #define COMP_OP_OFFSET_OPERATION	(COMP_OP_OFFSET_CHILDCOUNT + 2)
 #define COMP_OP_OFFSET_IS_NEGATED	(COMP_OP_OFFSET_OPERATION + 1)
 #define COMP_OP_NODE_LENGTH			(COMP_OP_OFFSET_IS_NEGATED + 1)
+
+#define FUNC_OP_OFFSET_CHILDCOUNT	0
+#define FUNC_OP_OFFSET_TYPE			(FUNC_OP_OFFSET_CHILDCOUNT + 2)
+#define FUNC_OP_OFFSET_RESULT_TYPE	(FUNC_OP_OFFSET_TYPE + 1)
+#define FUNC_OP_NODE_LENGTH			(FUNC_OP_OFFSET_RESULT_TYPE + 1)
 
 #define ROW_DATA_OFFSET_CHILDCOUNT	0
 #define ROW_DATA_OFFSET_ROW_TYPE	(ROW_DATA_OFFSET_CHILDCOUNT + 2)

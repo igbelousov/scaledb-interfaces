@@ -37,6 +37,10 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 #include <mysql_version.h>
 #include "mysql_foreign_key.h"
 #include "sql_time.h"
+#include <typeinfo>
+#if MYSQL_VERSION_ID >= 100014
+#include "item_inetfunc.h"
+#endif
 #if MYSQL_VERSION_ID>=50515
 #include "sql_class.h"
 #include "sql_array.h"
@@ -586,9 +590,12 @@ public:
 	void saveConditionToString(const COND *cond);
 	bool conditionTreeToString(const COND *cond, unsigned char **start, unsigned int *place, unsigned short* DBID, unsigned short* TABID );
 	bool conditionMultEqToString( unsigned char** pCondString, unsigned int* pCondOffset, const COND* pCondMultEq );
+	bool conditionFunctionToString( unsigned char** pCondString, unsigned int* pItemOffset, Item_func* pFuncItem,
+									Item* pComperandItem, unsigned int* pComperandDataOffset,
+									unsigned short countArgs, int typeFunc, unsigned short* pDbId, unsigned short* pTableId );
 	bool conditionFieldToString( unsigned char** pCondString, unsigned int* pItemOffset, Item* pFieldItem,
 								 Item* pComperandItem, unsigned int* pComperandDataOffset,
-								 unsigned short countArgs, int typeFunc, unsigned short* pDbId, unsigned short* pTableId );
+								 unsigned short countArgs, int typeOperation, unsigned short* pDbId, unsigned short* pTableId );
 	bool conditionConstantToString( unsigned char** pCondString, unsigned int* pItemOffset, Item* pConstItem, Item* pComperandItem, unsigned int* pComperandDataOffset );
 
 	inline int checkConditionStringSize( unsigned char** pCondString, unsigned int* pStringLength, unsigned int additionalLength )
