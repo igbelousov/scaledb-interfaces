@@ -75,6 +75,9 @@ typedef enum SdbKeySearchDirection {
 #define METAINFO_BLOCK_SIZE  8192
 #define SMALL_VAR_FIELD_SIZE	2048
 
+// one byte can describe the data length if maxDataLength_ <= 0xff or 2 bytes can describe data length if maxDataLength_ <= 0xffff or else 4 bytes
+#define GET_BYTES_FOR_DATA_LENGTH(maxLength) (maxLength <= 0xff ? 1 : (maxLength <= 0xffff ? 2 : 4))
+
 // About 15 bytes for an IP address string, about 5 bytes for a port number string, plus 4 length bytes.
 // Hence one node ip+port takes about 24 bytes.
 #define MAX_NODE_DATA_BUFFER_LENGTH 2000

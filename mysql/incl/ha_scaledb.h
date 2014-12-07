@@ -146,6 +146,7 @@ struct GroupByAnalyticsHeader
 	uint   info_flag;
 	ushort numberColumns;
 	ushort numberInOrderby;
+	ushort offsetToAuxiliary;			// the offset to the auxilary field in the row
 };
 struct GroupByAnalyticsBody
 {

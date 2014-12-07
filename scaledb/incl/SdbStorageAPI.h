@@ -220,8 +220,8 @@ char* SDBGetTableCaseSensitiveNameByNumber(unsigned short userId, unsigned short
 unsigned short SDBGetColumnNumberByName(unsigned short dbId, unsigned short tableNumber, const char *columnName);
 unsigned short SDBGetColumnOffsetByNumber(unsigned short dbId, unsigned short tableNumber, unsigned short columnNumber);
 unsigned short SDBGetColumnSizeByNumber(unsigned short dbId, unsigned short tableNumber, unsigned short columnNumber);
-
-
+unsigned short SDBGetMaxColumnLength(unsigned short dbId, unsigned short tableNumber, unsigned short columnNumber);
+unsigned short SDBGetOffsetAuxiliary(unsigned short dbId, unsigned short tableNumber);
 
 bool SDBTableIsVirtual(const char *tableName);
 

@@ -7058,10 +7058,11 @@ int ha_scaledb::generateGroupConditionString(int cardinality, char* buf, int max
 	}
 	if(analytics_uses_count)		   {info |= ANALYTIC_FLAG_USES_COUNT;}
 
-	GroupByAnalyticsHeader* gbh= (GroupByAnalyticsHeader*)buf;
-	gbh->cardinality=cardinality;
-	gbh->limit=select_limit;
-	gbh->info_flag=info;
+	GroupByAnalyticsHeader* gbh = (GroupByAnalyticsHeader*)buf;
+	gbh->cardinality = cardinality;
+	gbh->limit = select_limit;
+	gbh->info_flag = info;
+	gbh->offsetToAuxiliary = SDBGetOffsetAuxiliary(dbid, tabid);	// this is the offset to the var char fields
 
 	pos=pos+sizeof(GroupByAnalyticsHeader);
 
@@ -7153,13 +7154,13 @@ return 0;
 		unsigned short columnNumber = SDBGetColumnNumberByName(dbid, tabid, col_name );
 		if(columnNumber==0 ) {return 0;}
 	
-		gab->field_offset=SDBGetColumnOffsetByNumber(dbid, tabid, columnNumber);
-		gab->columnNumber=columnNumber;
-		gab->length= SDBGetColumnSizeByNumber(dbid, tabid, columnNumber);
-		gab->type=castype;
-		gab->function=function;
-		gab->function_length=gab->length;
-		gab->orderByPosition=getOrderByPosition(col_name,alias_name,function,true); 
+		gab->field_offset = SDBGetColumnOffsetByNumber(dbid, tabid, columnNumber);
+		gab->columnNumber = columnNumber;
+		gab->length = SDBGetMaxColumnLength(dbid, tabid, columnNumber); //the length of data - SDBGetMaxColumnLength works for char and varchar
+		gab->type = castype;
+		gab->function = function;
+		gab->function_length = gab->length;
+		gab->orderByPosition = getOrderByPosition(col_name,alias_name,function,true); 
 		pos=pos+sizeof(GroupByAnalyticsBody);
     }
   
@@ -7230,16 +7231,21 @@ bool ha_scaledb::addSelectField(char* buf, int& pos, unsigned short dbid, unsign
 	else
 	{
 		unsigned short columnNumber = SDBGetColumnNumberByName(dbid, tabid, col_name );
-		if(columnNumber==0 ) {return false;}
-		sab2->field_offset=SDBGetColumnOffsetByNumber(dbid, tabid, columnNumber);;	//number of fields in operation
-		sab2->columnNumber=columnNumber;
-		sab2->length=SDBGetColumnSizeByNumber(dbid, tabid, columnNumber);		//the length of data
+
+		if(columnNumber==0 ) 
+		{
+			return false;
+		}
+
+		sab2->field_offset = SDBGetColumnOffsetByNumber(dbid, tabid, columnNumber);;	//number of fields in operation
+		sab2->columnNumber = columnNumber;
+		sab2->length = SDBGetMaxColumnLength(dbid, tabid, columnNumber);		//the length of data - SDBGetMaxColumnLength works for char and varchar
 		sab2->type = castype;				//the column type
-		sab2->precision=precision;
-		sab2->scale=scale;
-		sab2->result_precision=result_precision;
-		sab2->result_scale=result_scale;
-		sab2->orderByPosition=getOrderByPosition(col_name,alias_name,(function_type)function,order_by_field);		
+		sab2->precision = precision;
+		sab2->scale = scale;
+		sab2->result_precision = result_precision;
+		sab2->result_scale = result_scale;
+		sab2->orderByPosition = getOrderByPosition(col_name,alias_name,(function_type)function,order_by_field);		
 	}
 	sab2->function=function;		//this is operation to perform on the field
 
