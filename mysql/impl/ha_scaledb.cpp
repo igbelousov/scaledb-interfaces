@@ -7003,8 +7003,8 @@ int ha_scaledb::getOrderByPosition(const char* col_name, const char* col_alias, 
 
 		// if the column is in the order by so return the position (either 1,2,3 ...)
 		// if there is an alias, check the alias.
-		if(order_by_field)
-		{
+
+		
 			if(alias_name==NULL || col_alias == NULL)
 			{
 				if(field_name!= NULL && ( (strcmp( field_name, col_name ) == 0) )) 
@@ -7019,22 +7019,12 @@ int ha_scaledb::getOrderByPosition(const char* col_name, const char* col_alias, 
 					return pos;
 				}
 			}
-		}
-		else
-		{
-			//if it is not an orderby field then we only add if it was an alias, because mysql does not include the orderby field when there is an alias
-			//so the field will be in the projection liat
-			if(alias_name!=NULL && col_alias != NULL && strcmp( alias_name, col_alias ) == 0) 
-			{
-				return pos;
-			}
-		}
-
+		
     }
 
 	return 0;
 }
-int ha_scaledb::generateGroupConditionString(int cardinality, char* buf, int max_buf, unsigned short dbid, unsigned short tabid, char* select_buf)
+int ha_scaledb::generateGroupConditionString(int cardinality, int thread_count, char* buf, int max_buf, unsigned short dbid, unsigned short tabid, char* select_buf)
 {
 	SelectAnalyticsHeader* sah= (SelectAnalyticsHeader*)select_buf;
 	Item *item;
@@ -7060,6 +7050,7 @@ int ha_scaledb::generateGroupConditionString(int cardinality, char* buf, int max
 
 	GroupByAnalyticsHeader* gbh = (GroupByAnalyticsHeader*)buf;
 	gbh->cardinality = cardinality;
+	gbh->thread_count= ( unsigned short ) thread_count;
 	gbh->limit = select_limit;
 	gbh->info_flag = info;
 	gbh->offsetToAuxiliary = SDBGetOffsetAuxiliary(dbid, tabid);	// this is the offset to the var char fields
@@ -8162,13 +8153,14 @@ void ha_scaledb::generateAnalyticsString()
 
 			//only proceed if condition pushdown was successful
 			int  cardinality=SDBUtilFindCommentIntValue(thd->query(), "cardinality") ;
+			int  thread_count=SDBUtilFindCommentIntValue(thd->query(), "thread_count") ;
 
 
 			char	group_buf[ 2000 ];
 			char	select_buf[ 2000 ];
 			char	order_and_select_buf[ 2000 ];
 			analytics_uses_count=false;
-			int		len2		= generateSelectConditionString( select_buf, sizeof( select_buf ),sdbDbId_, sdbTableNumber_ );
+			int		len2		= generateSelectConditionString( select_buf, sizeof( select_buf ), sdbDbId_, sdbTableNumber_ );
 
 			if(len2>0)
 			{
@@ -8179,7 +8171,7 @@ void ha_scaledb::generateAnalyticsString()
 
 
 
-				int		len1		= generateGroupConditionString( cardinality, group_buf, sizeof( group_buf ), sdbDbId_, sdbTableNumber_, select_buf );
+				int		len1		= generateGroupConditionString( cardinality, thread_count, group_buf, sizeof( group_buf ), sdbDbId_, sdbTableNumber_, select_buf );
 				//check if analytics is enabled
 
 				//append the select buffer
