@@ -4536,9 +4536,11 @@ int ha_scaledb::index_read(uchar* buf, const uchar* key, uint key_len,
 // this function is called at the end of the query and can be used to clear state for that query
 int ha_scaledb::reset() {
 	print_header_thread_info("MySQL Interface: executing ha_scaledb::reset()");
-	SDBFreeQueryManagerBuffers(sdbQueryMgrId_);
-	// init the conditions stack 
-	SDBConditionStackClearAll(conditions_);
+	if ( SDBIsValidQueryManagerId(sdbQueryMgrId_, sdbUserId_) ) {
+		SDBFreeQueryManagerBuffers(sdbQueryMgrId_);
+		// init the conditions stack 
+		SDBConditionStackClearAll(conditions_);
+	}
 	return 0;
 }
 
@@ -7604,18 +7606,25 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 				if (sum->sum_func() == Item_sum::SUM_FUNC)
 				{				
 					function=FT_SUM;
-
-					Field *field =((Item_field *)item->next)->field;
-					col_name=field->field_name;
-                    type= field->type();
-					flag=field->flags;
-					if(type==MYSQL_TYPE_NEWDECIMAL)
-					{			
-						Field_new_decimal* fnd=(Field_new_decimal*)field;
-						precision=fnd->precision;
-						result_precision =item->decimal_precision();
-						scale=fnd->decimals();
-						result_scale = item->decimals;
+					Item::Type ft=item->next->type();
+					if(ft==Item::FIELD_ITEM)
+					{
+						Field *field =((Item_field *)item->next)->field;
+						col_name=field->field_name;
+						type= field->type();
+						flag=field->flags;
+						if(type==MYSQL_TYPE_NEWDECIMAL)
+						{			
+							Field_new_decimal* fnd=(Field_new_decimal*)field;
+							precision=fnd->precision;
+							result_precision =item->decimal_precision();
+							scale=fnd->decimals();
+							result_scale = item->decimals;
+						}
+					}
+					else
+					{
+						return 0; //unsupported so bail.
 					}
 				}
 				else if (sum->sum_func() == Item_sum::COUNT_FUNC)
@@ -7688,7 +7697,7 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 							item=NestedFunc(type,function,no_fields,name, ft, item, sum,  buf,  pos,  sab1, dbid, tabid, contains_analytics_function );
 							if(item==NULL) {return 0;}			//unsupported so bail		
 						}
-						else
+						else if(ft==Item::FIELD_ITEM)
 						{
 							Field *field =((Item_field *)item->next)->field;
 							col_name=field->field_name;
@@ -7704,6 +7713,10 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 								scale=fnd->decimals();
 							}
 						}
+						else
+						{
+							return 0; //bail
+						}
 
 				}
 				else if (sum->sum_func() == Item_sum::MAX_FUNC)
@@ -7718,7 +7731,7 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 							item=NestedFunc(type,function,no_fields,name, ft, item, sum,  buf,  pos,  sab1, dbid, tabid, contains_analytics_function );
 							if(item==NULL) {return 0;}			//unsupported so bail		
 						}
-						else
+						else if(ft==Item::FIELD_ITEM)
 						{
 							Field *field =((Item_field *)item->next)->field;
 							col_name=field->field_name;
@@ -7734,6 +7747,10 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 								scale=fnd->decimals();
 							}
 					
+						}
+						else
+						{
+							return 0; //bail
 						}
   					  
 				}
@@ -7765,7 +7782,7 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 							item=NestedFunc(type,function,no_fields,name, ft, item, sum,  buf,  pos,  sab1, dbid, tabid, contains_analytics_function );
 							if(item==NULL) {return 0;}			//unsupported so bail		
 						}
-						else
+						else if(ft==Item::FIELD_ITEM)
 						{
 							Field *field =((Item_field *)item->next)->field;
 							col_name=field->field_name;
@@ -7781,6 +7798,10 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 								scale=fnd->decimals();
 							}
 					
+						}
+						else
+						{
+							return 0; //bail
 						}
   					  
 				}
