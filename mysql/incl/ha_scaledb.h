@@ -158,6 +158,7 @@ struct GroupByAnalyticsBody
 		ushort function_length;  //the column type	
 		char  type;				//the column type
 		char orderByPosition;
+		char orderByDirection;
 };
 
 
@@ -185,6 +186,7 @@ struct SelectAnalyticsBody2
 		ushort result_scale;
 		char type;				//the column type
 		char orderByPosition;
+		char orderByDirection;
 };
 #pragma pack()
 #define  PROCESS_COUNT_DISTINCT
@@ -452,7 +454,7 @@ public:
 	}
 
 	void generateAnalyticsString();
-	int getOrderByPosition(const char* col_name, const char* col_alias, function_type ft, bool order_by_field);
+	int getOrderByPosition(const char* col_name, const char* col_alias, function_type ft, bool order_by_field, bool& ascending);
 	int numberInOrderBy();
 	int index_init(uint index, bool sorted); // this method is optional
 	int index_end(); // this method is optional

@@ -6948,7 +6948,36 @@ bool ha_scaledb::isInSelectList(SelectAnalyticsHeader* sah, char*  col_name, uns
 
 }
 
-int ha_scaledb::getOrderByPosition(const char* col_name, const char* col_alias, function_type ft, bool order_by_field)
+bool compareFunctionTypes(Item* item, function_type ft)
+{
+	Item::Type t= item->type();
+
+	switch(t)
+	{
+	case Item::FIELD_ITEM:
+		{
+			if (ft==FT_NONE) {return true;}
+			break;
+		}
+	case Item::SUM_FUNC_ITEM:
+		{	
+			Item_sum *sum = ((Item_sum *)item);
+			int stype=sum->sum_func();
+
+			if (stype == Item_sum::SUM_FUNC && ft==FT_SUM) {return true;}			
+			else if (stype == Item_sum::COUNT_FUNC && ft==FT_COUNT) {return true;}
+			else if (stype == Item_sum::COUNT_DISTINCT_FUNC  && ft==FT_COUNT_DISTINCT) {return true;}
+			else if (stype == Item_sum::MIN_FUNC && ft==FT_MIN) {return true;}
+			else if (stype == Item_sum::MAX_FUNC && ft==FT_MAX) {return true;}		
+
+				break;
+		}
+	}
+
+	return false;
+}
+
+int ha_scaledb::getOrderByPosition(const char* col_name, const char* col_alias, function_type ft, bool order_by_field, bool& ascending)
 {	
 	if(col_name==NULL) {return 0;}
 	int pos=0;
@@ -6956,10 +6985,11 @@ int ha_scaledb::getOrderByPosition(const char* col_name, const char* col_alias, 
 	ORDER *order;
 	const char* field_name=NULL;
 	const char* alias_name=NULL;
+	bool asc=true;
 	for (order = (ORDER *) lex->order_list.first; order;  order = order->next)
     {
         pos++;
-		
+		asc=order->asc;
 		Item* item=*order->item;
 
 		switch (item->type())
@@ -7009,15 +7039,17 @@ int ha_scaledb::getOrderByPosition(const char* col_name, const char* col_alias, 
 		
 			if(alias_name==NULL || col_alias == NULL)
 			{
-				if(field_name!= NULL && ( (strcmp( field_name, col_name ) == 0) )) 
+				if(field_name!= NULL &&  (strcmp( field_name, col_name ) == 0) && compareFunctionTypes(item,ft)  )
 				{
+					ascending=asc;
 					return pos;
 				}
 			}
 			else
 			{
-				if(strcmp( alias_name, col_alias ) == 0) 
+				if(strcmp( alias_name, col_alias ) == 0 && compareFunctionTypes(item,ft)) 
 				{
+					ascending=asc;
 					return pos;
 				}
 			}
@@ -7153,7 +7185,9 @@ return 0;
 		gab->type = castype;
 		gab->function = function;
 		gab->function_length = gab->length;
-		gab->orderByPosition = getOrderByPosition(col_name,alias_name,function,true); 
+		bool ascending=true;
+		gab->orderByPosition = getOrderByPosition(col_name,alias_name,function,true,ascending); 
+		gab->orderByDirection= ascending ? 1: 0;
 		pos=pos+sizeof(GroupByAnalyticsBody);
     }
   
@@ -7219,7 +7253,9 @@ bool ha_scaledb::addSelectField(char* buf, int& pos, unsigned short dbid, unsign
 		sab2->scale=scale;
 		sab2->result_precision=result_precision;
 		sab2->result_scale=result_scale;
-		sab2->orderByPosition=getOrderByPosition(col_name,alias_name,(function_type)function,order_by_field);		
+		bool ascending=true;
+		sab2->orderByPosition=getOrderByPosition(col_name,alias_name,(function_type)function,order_by_field,ascending);	
+		sab2->orderByDirection= ascending ? 1: 0;
 	}
 	else
 	{
@@ -7238,7 +7274,9 @@ bool ha_scaledb::addSelectField(char* buf, int& pos, unsigned short dbid, unsign
 		sab2->scale = scale;
 		sab2->result_precision = result_precision;
 		sab2->result_scale = result_scale;
-		sab2->orderByPosition = getOrderByPosition(col_name,alias_name,(function_type)function,order_by_field);		
+		bool ascending=true;
+		sab2->orderByPosition = getOrderByPosition(col_name,alias_name,(function_type)function,order_by_field,ascending);
+		sab2->orderByDirection= ascending ? 1: 0;
 	}
 	sab2->function=function;		//this is operation to perform on the field
 
