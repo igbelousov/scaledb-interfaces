@@ -7196,7 +7196,7 @@ return 0;
    {
           //there are NO group by so return analytics with col=0;
 	   gbh->numberColumns=0;
-	   gbh->numberInOrderby=0;
+	   gbh->numberInOrderby=numberInOrderBy();
 	   return sizeof(GroupByAnalyticsHeader);
    }
    else
