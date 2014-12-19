@@ -5783,6 +5783,34 @@ bool ha_scaledb::conditionFieldToString( unsigned char** pCondString, unsigned i
 						break;
 					}
 
+					case Item::CACHE_ITEM:
+					{
+						int				cacheType	= ( ( Item_cache_decimal* ) pComperandItem )->field_type();
+
+						switch ( cacheType )
+						{
+#if	MYSQL_VERSION_ID >= 100014
+						case MYSQL_TYPE_VAR_STRING:
+						case MYSQL_TYPE_STRING:
+						{
+							// Handle BINARY values used with INET functions
+							const char*	pString		= ( ( ( Item* ) pComperandItem )->val_str() )->ptr();
+							uint		stringSize	= ( ( ( Item* ) pComperandItem )->val_str() )->length();
+
+							if ( ( columnSize			!= stringSize ) &&													// not an IPV6 function
+								 ( ( columnSize != 16 ) || ( stringSize != 10 ) ) )											// not an IPV4 function
+							{
+								return false;
+							}
+						}
+#endif
+
+						default:
+							// Other types are currently unsupported
+							return false;
+						}
+					}
+
 					default:
 						// Other types are currently unsupported
 						return false;
@@ -6311,12 +6339,63 @@ bool ha_scaledb::conditionConstantToString( unsigned char** pCondString, unsigne
 			break;
 		}
 
-		case Item::CACHE_ITEM:		//negative int, decimal or double
-		{	
+		case Item::CACHE_ITEM:
+		{
 			int						cacheType	= ( ( Item_cache_decimal* ) pConstItem )->field_type();
 
 			switch ( cacheType )
 			{
+#if	MYSQL_VERSION_ID >= 100014
+			case MYSQL_TYPE_VAR_STRING:
+			case MYSQL_TYPE_STRING:
+			{
+				// Handle BINARY values used with INET functions
+				const char*			pString		= ( ( ( Item* ) pConstItem )->val_str() )->ptr();
+				unsigned int		stringSize	= ( ( ( Item* ) pConstItem )->val_str() )->length();
+
+				if ( stringSize					> 255 )
+				{
+					//	255 max string length since size is stored in 1 byte
+					return false;
+				}
+
+				if ( pComperandItem )
+				{
+					unsigned int	uiLength	= *( unsigned short* )( pComperandData + ROW_DATA_OFFSET_COLUMN_SIZE );
+
+					if ( ( uiLength			   != stringSize ) &&													// not an IPV6 function
+						 ( ( uiLength != 16 ) || ( stringSize != 10 ) ) )											// not an IPV4 function
+					{
+						return false;
+					}
+				}
+
+				*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_TYPE )	=  ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_CHAR );
+				*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_SIZE )	=  ( unsigned char )( stringSize );	// string length
+
+				// Extend the condition string if necessary
+				resultExtension					= checkConditionStringSize( pCondString, pItemOffset, USER_DATA_OFFSET_USER_DATA + stringSize );
+
+				if ( resultExtension			< 0 )
+				{
+					// Extension failed
+					return false;
+				}
+				if ( resultExtension )
+				{
+					// Condition string was extended
+					if ( pComperandDataOffset )
+					{
+						pComperandData			= *pCondString + *pComperandDataOffset;
+					}
+				}
+
+				memcpy( *pCondString + *pItemOffset + USER_DATA_OFFSET_USER_DATA, pString, stringSize );			//copy user data to string
+				( *pItemOffset )			   += USER_DATA_OFFSET_USER_DATA + stringSize;							//increment the length of condition string accordingly
+				break;
+			}
+#endif
+
 			case MYSQL_TYPE_DECIMAL:
 			case MYSQL_TYPE_NEWDECIMAL:
 				*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_TYPE )		=  ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_DECIMAL );
@@ -6969,7 +7048,7 @@ bool compareFunctionTypes(Item* item, function_type ft)
 			else if (stype == Item_sum::COUNT_DISTINCT_FUNC  && ft==FT_COUNT_DISTINCT) {return true;}
 			else if (stype == Item_sum::MIN_FUNC && ft==FT_MIN) {return true;}
 			else if (stype == Item_sum::MAX_FUNC && ft==FT_MAX) {return true;}		
-
+			else if (stype == Item_sum::AVG_FUNC && ft==FT_AVG) {return true;}		
 				break;
 		}
 	}
