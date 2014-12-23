@@ -75,6 +75,8 @@ typedef enum SdbKeySearchDirection {
 #define METAINFO_BLOCK_SIZE  8192
 #define SMALL_VAR_FIELD_SIZE	2048
 
+#define UTF8_RATIO	3
+
 // one byte can describe the data length if maxDataLength_ <= 0xff or 2 bytes can describe data length if maxDataLength_ <= 0xffff or else 4 bytes
 #define GET_BYTES_FOR_DATA_LENGTH(maxLength) (maxLength <= 0xff ? 1 : (maxLength <= 0xffff ? 2 : 4))
 
