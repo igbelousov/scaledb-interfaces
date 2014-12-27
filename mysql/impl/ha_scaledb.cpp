@@ -1561,6 +1561,10 @@ static int scaledb_commit(handlerton *hton, THD* thd, bool all) /* all=true if i
 Rollbacks a transaction or the latest SQL statement
 */
 static int scaledb_rollback(handlerton *hton, THD* thd, bool all) {
+
+		unsigned int userId;
+		unsigned int sqlCommand;
+
 		DBUG_ENTER("scaledb_rollback");
 
 		//SDBDebugStart();
@@ -1578,26 +1582,31 @@ static int scaledb_rollback(handlerton *hton, THD* thd, bool all) {
 		}
 #endif
 
-		// all = 1; rollback complete transaction
-		// all = 0; rollback last statement 
-
-		if (!all) {
-			rollback_last_stmt_trx(thd, hton);
-			DBUG_RETURN(0);
-		}
-
 		MysqlTxn* userTxn = (MysqlTxn *) *thd_ha_data(thd, hton);
-		if (userTxn != NULL) {
-			unsigned int userId = userTxn->getScaleDbUserId();
-			SDBRollBack(userId, NULL, 0, false);
-			userTxn->setActiveTrn(false);
-			unsigned int sqlCommand = thd_sql_command(thd);
 
-			// After calling commit(), lockCount_ should be 0 except ALTER TABLE, CREATE/DROP INDEX.
-			// In a single update statement after LOCK TABLES, MySQL may skip external_lock() 
-			// and call this method directly.
-			if (!ha_scaledb::isAlterCommand(sqlCommand))
-				userTxn->lockCount_ = 0;
+		if (userTxn != NULL) {
+			// all = 1; rollback complete transaction
+			// all = 0; rollback the current statement - i.e. it is Trans for current statement
+			// in both cases the Txn ends in the rollback 
+			userTxn->setActiveTrn(false);
+
+			if (all) 
+			{
+				userId = userTxn->getScaleDbUserId();
+				SDBRollBack(userId, NULL, 0, false);
+				sqlCommand = thd_sql_command(thd);
+				// After calling commit(), lockCount_ should be 0 except ALTER TABLE, CREATE/DROP INDEX.
+				// In a single update statement after LOCK TABLES, MySQL may skip external_lock() 
+				// and call this method directly.
+				if (!ha_scaledb::isAlterCommand(sqlCommand)) {
+					userTxn->lockCount_ = 0;
+				}
+			}
+			else
+			{
+				rollback_last_stmt_trx(thd, hton);
+			}
+			
 		} // else   TBD: issue an internal error message
 
 #ifdef SDB_DEBUG_LIGHT
@@ -2172,7 +2181,6 @@ int ha_scaledb::external_lock(THD* thd, /* handle to the user thread */
 				// issue startTransaction() only for the very first statement
 				if (pSdbMysqlTxn_->getActiveTxn() == false) {
 					sdbUserId_ = pSdbMysqlTxn_->getScaleDbUserId();
-
 					SDBStartTransaction( sdbUserId_, bAutocommit );
 					long txnId = SDBGetTransactionIdForUser(sdbUserId_);
 					pSdbMysqlTxn_->setScaleDbTxnId(txnId);
