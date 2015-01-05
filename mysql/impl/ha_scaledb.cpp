@@ -9371,7 +9371,7 @@ int ha_scaledb::create_dimension_table(TABLE *fact_table_arg,char * col_name, un
 	// 2. Add single field to the dimension_table - this field is the primary key (foreign key in the fact table )
 	int _sdbFieldId = SDBCreateField(sdbUserId_, sdbDbId_, dimensionTableNumber,
 		_pDimensionColName, col_type, col_size, 0, NULL,
-		false, 0, 2, NULL, true, false, true);
+		false, 0, 2, NULL, true, false, true, false);
 
 
 	// 3. Add primary key index on the field 
@@ -9686,7 +9686,7 @@ int ha_scaledb::create_multi_dimension_table(TABLE *fact_table_arg, char* index_
 	// 2. Add ALL fields to the dimension_table - this field is the primary key (foreign key in the fact table )
 		int _sdbFieldId = SDBCreateField(sdbUserId_, sdbDbId_, dimensionTableNumber,
 		(char*)col_name, col_type, col_size, 0, NULL,
-		false, 0, 2, NULL, true, false, true);
+		false, 0, 2, NULL, true, false, true, false);
 
 	}
 	//termiate the arrays
@@ -10903,7 +10903,7 @@ int ha_scaledb::add_columns_to_table(THD* thd, TABLE *table_arg, unsigned short 
 
 			sdbFieldId = SDBCreateField(sdbUserId_, sdbDbId_, sdbTableNumber_,
 				(char*) pField->field_name, sdbFieldType, sdbFieldSize, sdbMaxDataLength, NULL,
-				isAutoIncrField, ddlFlag, fieldFlag, rangekey ? stricmp(pField->field_name,rangekey)==0 : false, isMappedField, isInsertCascade, isStreamingKey);
+				isAutoIncrField, ddlFlag, fieldFlag, rangekey ? stricmp(pField->field_name,rangekey)==0 : false, isMappedField, isInsertCascade, isStreamingKey, false);
 
 #ifdef _HIDDEN_DIMENSION_TABLE // CREATE HIDDEN DIMENSION TABLE + INDEXES 
 			if ( isHashKey )

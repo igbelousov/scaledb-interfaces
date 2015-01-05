@@ -400,7 +400,8 @@ unsigned long  SDBGetRangeKey(unsigned short dbId, unsigned short tableId);
 unsigned short SDBCreateField(unsigned int userId, unsigned short dbId, unsigned short tableId, 
 							  char *fieldName, unsigned char fieldType, unsigned short fieldSize, 
 							  unsigned int maxDataLength, char *defaultValue, bool autoIncr, 
-							  unsigned short ddlFlag, unsigned short fieldFlag, bool isRangeKey, bool isMapped, bool isInsertCascade, bool isStreamingKey);
+							  unsigned short ddlFlag, unsigned short fieldFlag, bool isRangeKey, 
+							  bool isMapped, bool isInsertCascade, bool isStreamingKey, bool isAttributeValue);
 
 bool SDBIsFieldAutoIncrement(unsigned short dbId, unsigned short tableId, unsigned short fieldId);
 char* SDBGetFileDataField(unsigned short userId, unsigned short tableId, unsigned short fieldId);
