@@ -1801,6 +1801,9 @@ ha_scaledb::ha_scaledb(handlerton *hton, TABLE_SHARE *table_arg) :
 		print_header_thread_info("MySQL Interface: executing ha_scaledb::ha_scaledb(...) ");
 	}
 #endif
+	
+	isStreamingTable_=ST_UNKNOWN;
+	
 	indexKeyRangeStart_.key	= indexKeyRangeStartData_;
 	indexKeyRangeEnd_.key	= &( indexKeyRangeEndData_[ 0 ] );
 	temp_table=NULL;
@@ -1881,6 +1884,89 @@ void ha_scaledb::outputHandleAndThd() {
 	}
 
 }
+
+ulong ha_scaledb::index_flags(uint idx, uint part, bool all_parts) const
+	{
+
+		ulong flags;
+		
+		//if the table is loaded from FRM (ie. already exists), then need to lookup streaming state by opening the table.
+		//if the table is in the middle of create then the streaming state will be determined by the flag isStreamingTable_
+		//which gets set uring the parse (of create table options) note* this happens before the 'important index_flag calls happen (to determine what index to use)
+		//but after a lot of other calls.
+		//because of this the ST_UNKNOWN state is used to prevent repeated calls to check the streaming state
+
+		//two important cases
+		//1) table exists, then the call will return TRUE or FALSE, dependig on wether the table is a streaming table
+
+		//2) the table is being created, will initially return FALSE will will then return TRUE or FALSE,
+		// depending on if the table is really a streaming table.
+
+
+		if(this->isStreamingTable_==ST_UNKNOWN)
+		{
+
+			bool b=false;
+			unsigned short dbid	=sdbDbId_;
+			unsigned short tid=sdbTableNumber_;
+			THD* thd = ha_thd();
+			unsigned int sqlCommand = thd_sql_command(thd);
+
+			if( (sdbDbId_==0 || sdbTableNumber_==0)   && sqlCommand!=SQLCOM_CREATE_TABLE) //if we are in middle of create, then don't try to open,
+			{																			   //isStreamingTable_ will get set during parse.
+			
+				unsigned short userId = SDBGetNewUserId();
+				int retCode = ha_scaledb::openUserDatabase(table_share->db.str,table_share->db.str, dbid,userId,NULL);
+				SessionSharedMetaLock ot(dbid);
+				if(ot.lock()==true)
+				{
+				//a shared might be needed here SessionSharedMetaLock ot(dbid);
+				//before open, what is someone is dropping the table?
+				//but we might be in the middle of a create 
+					if(!retCode)
+					{		
+						char* name=table_share->table_name.str;
+						tid = SDBOpenTable(userId, dbid, (char *)name, 0, true);
+						SDBCommit(userId, false);
+					}
+
+				}
+				SDBRemoveUserById(userId);
+			}
+
+			if(dbid!=0 && tid !=0) 
+			{
+				b=SDBIsStreamingTable(dbid, tid); //table is open so can call.
+			}
+			
+			if(b==true) 
+			{
+				isStreamingTable_=ST_TRUE;
+			}
+			else
+			{
+				isStreamingTable_=ST_FALSE;
+			}
+		}
+		if(isStreamingTable_==ST_TRUE)
+		{
+			// to skip MIN/MAX  optimization we remove the order from streaming tables 
+			// As a result we also remove loose-index-scans but since on streaming tables we apply exact keys only - it does not matter at this point
+			// we keep the range reads and the point reads
+			//also order by ASC wont do an sort on normal indexes, but if a streaming table then we will force it by using the following flags.
+		
+			flags = (HA_READ_NEXT |               HA_READ_RANGE | HA_KEYREAD_ONLY);
+		}
+		else
+		{
+			// for general case: support all operations 
+			flags = (HA_READ_NEXT | HA_READ_PREV | HA_READ_ORDER | HA_READ_RANGE | HA_KEYREAD_ONLY);
+		}
+		
+		return flags ;
+
+		
+	}
 
 // initialize DB id and Table id.  Returns 0 if there is an error
 unsigned short ha_scaledb::initializeDbTableId(char* pDbName, char* pTblName, bool isFileName,
@@ -5141,22 +5227,22 @@ bool ha_scaledb::conditionFunctionToString( unsigned char** pCondString, unsigne
 	else if ( typeid( *pFuncItem ) == typeid( Item_func_is_ipv4 ) )
 	{
 		typeFuncItem				= SDB_PUSHDOWN_FUNCTION_IS_IPV4;
-		typeResult					= SDB_PUSHDOWN_LITERAL_DATA_TYPE_BIT;
+		typeResult					= SDB_PUSHDOWN_LITERAL_DATA_TYPE_UNSIGNED_INTEGER;
 	}
 	else if ( typeid( *pFuncItem ) == typeid( Item_func_is_ipv6 ) )
 	{
 		typeFuncItem				= SDB_PUSHDOWN_FUNCTION_IS_IPV6;
-		typeResult					= SDB_PUSHDOWN_LITERAL_DATA_TYPE_BIT;
+		typeResult					= SDB_PUSHDOWN_LITERAL_DATA_TYPE_UNSIGNED_INTEGER;
 	}
 	else if ( typeid( *pFuncItem ) == typeid( Item_func_is_ipv4_compat ) )
 	{
 		typeFuncItem				= SDB_PUSHDOWN_FUNCTION_IS_IPV4_COMPAT;
-		typeResult					= SDB_PUSHDOWN_LITERAL_DATA_TYPE_BIT;
+		typeResult					= SDB_PUSHDOWN_LITERAL_DATA_TYPE_UNSIGNED_INTEGER;
 	}
 	else if ( typeid( *pFuncItem ) == typeid( Item_func_is_ipv4_mapped ) )
 	{
 		typeFuncItem				= SDB_PUSHDOWN_FUNCTION_IS_IPV4_MAPPED;
-		typeResult					= SDB_PUSHDOWN_LITERAL_DATA_TYPE_BIT;
+		typeResult					= SDB_PUSHDOWN_LITERAL_DATA_TYPE_UNSIGNED_INTEGER;
 	}
 	else
 	{
@@ -5281,7 +5367,7 @@ bool ha_scaledb::conditionFunctionToString( unsigned char** pCondString, unsigne
 
 	typeField						= ( ( ( Item_field* ) pFuncParam )->field )->type();
 
-	// Only string result types are supported for now
+	// Only string parameter types are supported for now
 	switch ( typeField )
 	{
 		case MYSQL_TYPE_STRING:
@@ -7941,9 +8027,21 @@ int ha_scaledb::generateSelectConditionString(char* buf, int max_buf, unsigned s
 				{
 
   				   Item_func *func = ((Item_func *)item);
+			//	   Item* ii=func->arguments()[0];				
+				//   int yy=((Item_func*)(item->arg>args[0]))->type();
 
+				   /*
+				if((((Item_func*) func)->functype())=CHAR_TYPECAST_FUNC)
+				{
+					Item* ff=func->args;
 
-				
+					  if (type == DYN_COL_STRING &&
+          args[valpos]->type() == Item::FUNC_ITEM &&
+          ((Item_func *)args[valpos])->functype() == DYNCOL_FUNC)
+      {
+			//			DYNCOL_FUNC
+				}
+					*/
 //these are non-aggregate functions.
 //the storage node does not support so abort for now.
 					/*
@@ -9320,6 +9418,7 @@ int ha_scaledb::parseTableOptions( THD *thd, HA_CREATE_INFO *create_info, bool& 
 		}
 		if ( SDBUtilStrstrCaseInsensitive( opt->name.str, "STREAMING" ) && ( opt->parsed == true ) && SDBUtilStrstrCaseInsensitive( opt->value.str, "YES" ) )
 		{
+			isStreamingTable_=ST_TRUE;
 			streamTable=true;
 		}
 		if ( SDBUtilStrstrCaseInsensitive( opt->name.str, "DIMENSION" ) && ( opt->parsed == true ) && SDBUtilStrstrCaseInsensitive( opt->value.str, "YES" ) )

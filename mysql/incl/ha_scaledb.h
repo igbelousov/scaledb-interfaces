@@ -136,7 +136,12 @@ typedef struct SimpleCondContext{
 
 #define _HIDDEN_DIMENSION_TABLE
 
-
+enum streaming_state
+{
+  ST_UNKNOWN=0,
+  ST_TRUE=1,
+  ST_FALSE=2
+};
 //added because we can't include pushdown_condition.h
 #pragma pack(1)  //prevent padding of struct
 struct GroupByAnalyticsHeader
@@ -225,10 +230,10 @@ struct rangebounds
 class ha_scaledb: public handler
 {
 public:
-	ha_scaledb(handlerton *hton, TABLE_SHARE *table_arg);
+	ha_scaledb(handlerton *hton, TABLE_SHARE *table_arg);	
 	~ha_scaledb();
 
-
+	mutable streaming_state isStreamingTable_; //mutable needed because index_flags is a const function
 	void setEndRange(key_range* end)
 	{
 
@@ -318,25 +323,8 @@ public:
 			);
 	}
 
-	ulong index_flags(uint idx, uint part, bool all_parts) const
-	{
-		ulong flags;
-		
-		if(sdbDbId_!=0 && sdbTableNumber_ !=0 && SDBIsStreamingTable(sdbDbId_, sdbTableNumber_))
-		{
-			// to skip MIN/MAX  optimization we remove the order from streaming tables 
-			// As a result we also remove loose-index-scans but since on streaming tables we apply exact keys only - it does not matter at this point
-			// we keep the range reads and the point reads
-			flags = (HA_READ_NEXT |               HA_READ_RANGE | HA_KEYREAD_ONLY);
-		}
-		else
-		{
-			// for general case: support all operations 
-			flags = (HA_READ_NEXT | HA_READ_PREV | HA_READ_ORDER | HA_READ_RANGE | HA_KEYREAD_ONLY);
-		}
-		
-		return flags ;
-	}
+	ulong index_flags(uint idx, uint part, bool all_parts) const;
+	
 
 	void print_header_thread_info(const char *msg);
 
