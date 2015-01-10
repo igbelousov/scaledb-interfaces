@@ -136,7 +136,7 @@ unsigned short MysqlForeignKey::setKeyNumber(KEY* keyInfo, unsigned short numOfK
 
 	for (i = 0; i < numOfKeys; ++i) {
 		pKey = keyInfo + i;
-		if (SDBUtilCompareStrings(pForeignKeyName_, pKey->name, true)) {
+		if (SDBUtilCompareStrings(pForeignKeyName_, pKey->name, true) || SDBUtilCompareStrings(pForeignKeyName_, pKey->key_part->field->field_name,true)) { //check both the index name and the alias.
 			break;
 		}
 	}

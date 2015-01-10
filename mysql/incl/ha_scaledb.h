@@ -658,14 +658,20 @@ public:
 
 	static inline bool isAlterCommand(int sqlCommand) 
 	{
-		bool retVal =false;
+		bool retVal;
 		switch ( sqlCommand )
 		{
-		case SQLCOM_ALTER_TABLE:
-		case SQLCOM_CREATE_INDEX:
-		case SQLCOM_DROP_INDEX:
-			retVal =true;
+			case SQLCOM_ALTER_TABLE:
+			case SQLCOM_CREATE_INDEX:
+			case SQLCOM_DROP_INDEX:
+//			case SQLCOM_TRUNCATE:
+				retVal = true;
+				break;
+			default:
+				retVal = false;
+				break;
 		}
+
 		return retVal;
 	}
 
