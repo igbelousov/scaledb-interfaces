@@ -965,9 +965,9 @@ static group_by_handler *scaledb_create_group_by_handler(THD *thd,
 	//if there is a where cluase but was not extracted then cant use analytics (because storage node wont be able to filter results)
 	bool condition_ok=true;
 	if(cond!=NULL && scaledb->conditionStringLength()==0) {condition_ok=false;}
-
-
-	bool		doCreateGroupByHandler	= ( (isRangeReadQuery || cond==NULL)  && (scaledb->analyticsStringLength() && scaledb->analyticsSelectLength() && condition_ok)  );
+	// if cond==NULL && original_query_contains_condition==false, then mysql has optimized out the where clause, so dont use analytics
+//donot use the groupby handler is mysql optimizes out the where clause
+	bool		doCreateGroupByHandler	= ( (isRangeReadQuery || (cond==NULL && scaledb->original_query_contains_condition==false))  && (scaledb->analyticsStringLength() && scaledb->analyticsSelectLength() && condition_ok)  );
 
 	if ( !doCreateGroupByHandler )
 	{
@@ -1801,7 +1801,7 @@ ha_scaledb::ha_scaledb(handlerton *hton, TABLE_SHARE *table_arg) :
 		print_header_thread_info("MySQL Interface: executing ha_scaledb::ha_scaledb(...) ");
 	}
 #endif
-	
+	original_query_contains_condition=false;
 	isStreamingTable_=ST_UNKNOWN;
 	
 	indexKeyRangeStart_.key	= indexKeyRangeStartData_;
@@ -2116,8 +2116,19 @@ int ha_scaledb::external_lock(THD* thd, /* handle to the user thread */
 #endif
 	
 	bool is_streaming_table=SDBIsStreamingTable(sdbDbId_, sdbTableNumber_);
-	
-
+	//this code is used to determine if mysql has optimized out the where clause.
+	if(lock_type==F_RDLCK)
+	{
+		SELECT_LEX*  lex=  (((THD*) ha_thd())->lex)->select_lex.parent_lex->current_select;
+		if(lex->where!=NULL)
+		{
+			original_query_contains_condition=true;
+		}
+		else
+		{
+			original_query_contains_condition=false;
+		}
+	}
 	int retValue = 0;
 
 	placeSdbMysqlTxnInfo(thd);

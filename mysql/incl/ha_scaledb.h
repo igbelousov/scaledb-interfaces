@@ -897,6 +897,7 @@ public:
 	bool forceAnalytics_;
 	rangebounds rangeBounds;
 	void setConditionStringLength(unsigned int len) { conditionStringLength_=len;}
+	bool original_query_contains_condition;
 private:
 
 	THR_LOCK_DATA lock; ///< MySQL lock
@@ -905,7 +906,7 @@ private:
 	bool analytics_uses_count;
 	bool beginningOfScan_; // set to true only we begin scanning a table and have not fetched rows yet.
 	unsigned short sdbDbId_; // DbId used by ScaleDB
-	unsigned short sdbTableNumber_; // table number used by ScaleDB
+	unsigned short sdbTableNumber_; // table number used by ScaleDB	
 	unsigned short sdbPartitionId_;
 	unsigned int sdbUserId_; // user id assigned by ScaleDB storage engine
 	unsigned short sdbQueryMgrId_; // current query Manager ID
