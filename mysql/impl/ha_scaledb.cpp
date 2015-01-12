@@ -3527,15 +3527,24 @@ int ha_scaledb::delete_all_rows() {
 		sdbPartitionId_ = SDBGetPartitionId(sdbUserId_, sdbDbId_, partitionName, tblFsName);
 		FREE_MEMORY(name);
 	}
+
+	SessionExclusiveMetaLock ot(sdbDbId_,sdbUserId_);
+
 	int retValue = SDBCanTableBeDropped(sdbUserId_, sdbDbId_, tblName);
 	if (retValue == SUCCESS) {
 		THD* thd = ha_thd();
 		sqlCommand_ = thd_sql_command(thd);
 
-		if (SDBLockTable(sdbUserId_, sdbDbId_, sdbTableNumber_, sdbPartitionId_, REFERENCE_LOCK_EXCLUSIVE) == false) {
-			retValue = LOCK_TABLE_FAILED;
+		if(ot.lock()==false)
+		{
+
+			DBUG_RETURN(convertToMysqlErrorCode(LOCK_TABLE_FAILED));
 		}
-		else if (sqlCommand_ == SQLCOM_TRUNCATE) {
+
+		//all ok 
+
+
+		if (sqlCommand_ == SQLCOM_TRUNCATE) {
 			unsigned short stmtFlag = 0;						
 			retValue = SDBTruncateTable(sdbUserId_, sdbDbId_, tblName, sdbPartitionId_, stmtFlag);			
 		} else {
