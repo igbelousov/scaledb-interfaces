@@ -516,6 +516,10 @@ static int convertToMysqlErrorCode(int scaledbErrorCode) {
 			mysqlErrorCode = HA_ERR_GENERIC;
 			break;
 		}
+
+	case SDB_NO_DISK_SPACE:
+		mysqlErrorCode = HA_ERR_DISK_FULL;
+		break;
 		
 	default:
 		mysqlErrorCode = HA_ERR_GENERIC;
