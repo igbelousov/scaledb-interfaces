@@ -225,6 +225,13 @@ typedef enum SdbKeySearchDirection {
 #define BLOCK_REQUESTED_OUTSIDE_FILE_RANGE 59	// This list is copied to scaledb_error.h
 #define TABLE_IN_USE_ON_ANOTHER_NODE 60
 #define QUERY_ABORTED				61
+#define CAS_ACCESS_VIOLATION		62
+#define MISSING_STREAMING_TIME		63
+#define NO_RETURNED_VALUE			64
+#define TOO_MANY_THREADS_FOR_STREAMING 65
+#define SDB_IO_FAILURE			66
+
+
 #define CAS_FILE_IN_USE		 100
 
 #define ENGINE_INDEX_ERROR 201
