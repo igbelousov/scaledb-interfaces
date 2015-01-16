@@ -3352,12 +3352,17 @@ int ha_scaledb::iSstreamingRangeDeleteSupported(unsigned long long* delete_key, 
 		LEX* parse_tree=((THD*) ha_thd())->lex;
 		Item* item= parse_tree->select_lex.where;
 		*delete_all=true;
-
-		if(item!=NULL)
+		
+		if(item!=NULL && item->type()==Item::FUNC_ITEM)
 		{
 			*delete_all=false;
 			//contains a where clause
-			if( ((Item_func*) item)->functype()== Item_func::LT_FUNC)
+
+			Item_func *func = ((Item_func *)item);
+
+
+
+			if (func->functype()== Item_func::LT_FUNC)
 			{
 				//less than delete whare clause
 
@@ -3368,34 +3373,55 @@ int ha_scaledb::iSstreamingRangeDeleteSupported(unsigned long long* delete_key, 
 				//			9	ctime
 				char* col_name=NULL;
 
-
+		
 				int node=0;
-				Item* NEXT=item;
 				bool ok=true;
-				while(NEXT=NEXT->next)
+				while( ok==true )
 				{
-					if(NEXT->max_length==0) {continue;}
+					item=item->next;
+					if(item==NULL) {break;}
+					if(item->max_length==0) {continue;}
 					node++;
 					if(node==1)
 					{
-						switch(end_key_->length)
+						switch(item->type())
 						{
-						case 1: {	*delete_key=*(char*)end_key_->key; break;}
-						case 2: {	*delete_key=*(short*)end_key_->key; break;}
-						case 4: {	*delete_key=*(int*)end_key_->key; break;}
-						case 8: {	*delete_key=*(long long*)end_key_->key; break;}
-						default:
+						case Item::STRING_ITEM:
 							{
-								//something is wrong.
-								ok=false;
+								if(end_key_!=NULL)
+								{
+
+									switch(end_key_->length)
+									{
+									case 1: {	*delete_key=*(char*)end_key_->key; break;}
+									case 2: {	*delete_key=*(short*)end_key_->key; break;}
+									case 4: {	*delete_key=*(int*)end_key_->key; break;}
+									case 8: {	*delete_key=*(long long*)end_key_->key; break;}
+									default:
+										{
+											//something is wrong.
+											ok=false;
+											break;
+										}
+									}
+								}
+								else
+								{
+									ok=false;
+								}
+
 								break;
 							}
+						default:
+							{
+								ok=false;
+								break;
+							}	
 						}
-	
 					}
 					else if(node==2)
 					{
-						col_name=NEXT->name;
+						col_name=item->name;
 						*columnNumber = SDBGetColumnNumberByName(sdbDbId_, sdbTableNumber_, col_name);
 					}
 					else
@@ -9508,6 +9534,7 @@ int ha_scaledb::create_dimension_table(TABLE *fact_table_arg,char * col_name, un
 		(char*)_pDimensionPKName, _pkeyFields, keySizes, true, false, NULL, 0, 0,
 		INDEX_TYPE_IMPLICIT);
 
+///
 	// 4. commit the changes such that a different node would be able to read the updates.
 	SDBCommit(sdbUserId_, false);
 
@@ -9517,7 +9544,7 @@ int ha_scaledb::create_dimension_table(TABLE *fact_table_arg,char * col_name, un
 	if (errorNum) {
 		SDBRollBack(sdbUserId_, NULL, 0, false); // rollback new table record in transaction
 		DBUG_RETURN(convertToMysqlErrorCode(CREATE_TABLE_FAILED_IN_CLUSTER));
-	}
+	}///
 
 	// 6. Define FK for the fact table  
 	strcpy(_pFactFKName,col_name);
@@ -10244,8 +10271,13 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 	{
 		SDBSetErrorMessage( sdbUserId_, INVALID_STREAMING_OPERATION, "- Streaming table must contain a Streaming KEY." );
 		SDBRollBack(sdbUserId_, NULL, 0, true); // rollback new table record in transaction
+
+//		SDBRollBack(sdbUserId_, NULL, 0, false); // rollback new table record in transaction
 		SDBRemoveLocalTableInfo(sdbUserId_, sdbDbId_, sdbTableNumber_,false);
-		FREE_MEMORY(pCreateTableStmt);
+	
+//		int rrc=SDBDeleteTable(sdbUserId_,sdbDbId_,"sdb_dimension_t196_account_id_1",NULL,0,0);
+
+	FREE_MEMORY(pCreateTableStmt);
 		DBUG_RETURN(convertToMysqlErrorCode(HA_ERR_GENERIC));
 	}
 
