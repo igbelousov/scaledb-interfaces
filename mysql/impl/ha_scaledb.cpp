@@ -952,20 +952,23 @@ static group_by_handler *scaledb_create_group_by_handler(THD *thd,
 	}
 
 	ha_scaledb* scaledb					= (ha_scaledb*) (table_list->table->file);
-
+	scaledb->isStreamingHashIndex_=false;
 	scaledb->forceAnalytics_=SDBForceAnalyticsEngine(); //need to reset to default, because might have got set in the external lock
 
 	const COND* cond					= scaledb->cond_push( pWhere );
 
 #ifdef	SDB_USE_MDB_MRR
 	// Evaluate the indexes referenced in the WHERE clause to determine whether the query can be executed as a streaming range read
-	bool		isRangeReadQuery		= scaledb->isRangeRead( table_list );
+	bool is_streaming=false;
+	bool		isRangeReadQuery		= scaledb->isRangeRead( table_list ,&is_streaming);
 #else
 	// Parse the WHERE condition string to try and determine whether the query can be executed as a streaming range read
 	bool		isRangeReadQuery		= scaledb->getRangeKeys( scaledb->conditionString(), scaledb->conditionStringLength(),
 																 &scaledb->indexKeyRangeStart_, &scaledb->indexKeyRangeEnd_ );
 	if(isRangeReadQuery) {scaledb->setIsIndexedQuery();}
 #endif
+	bool isHashIndex= (isRangeReadQuery==false && scaledb->active_index>0 && is_streaming);
+	if(isHashIndex) {scaledb->isStreamingHashIndex_=true;}
 	scaledb->generateAnalyticsString();
 //if no where clause then still support streaming table because will do a sequential scan over implicit range index
 // so if cond==NULL, then use groupby handler
@@ -1811,7 +1814,7 @@ ha_scaledb::ha_scaledb(handlerton *hton, TABLE_SHARE *table_arg) :
 #endif
 	original_query_contains_condition=false;
 	isStreamingTable_=ST_UNKNOWN;
-	
+	isStreamingHashIndex_=false;
 	indexKeyRangeStart_.key	= indexKeyRangeStartData_;
 	indexKeyRangeEnd_.key	= &( indexKeyRangeEndData_[ 0 ] );
 	temp_table=NULL;
@@ -2198,7 +2201,7 @@ int ha_scaledb::external_lock(THD* thd, /* handle to the user thread */
 	{
 		DBUG_RETURN(HA_ERR_WRONG_COMMAND);
 	}
-
+	isStreamingHashIndex_=false;
 
 	if(lock_type == F_RDLCK && sdbCommandType_ == SDB_COMMAND_SELECT && is_streaming_table==true)
 	{
@@ -4640,6 +4643,20 @@ int ha_scaledb::index_read(uchar* buf, const uchar* key, uint key_len,
 	}
 #endif
 	int retValue = SUCCESS;
+
+	//if it is a streaming hash index and not a point lookup then FAIL it (we dont support)
+	if (false) //isStreamingHashIndex_&&find_flag!=HA_READ_KEY_EXACT)
+	{
+		conditionStringLength_	= 0;
+		analyticsStringLength_	= 0;
+		forceAnalytics_			= false;
+		isIndexedQuery_			= false;
+		SDBSetErrorMessage( sdbUserId_, INVALID_STREAMING_OPERATION, "- unsupported analytics query." );
+		retValue = HA_ERR_GENERIC;
+		retValue = convertToMysqlErrorCode(retValue);
+		DBUG_RETURN(retValue);
+	}
+
 
 	ha_statistic_increment(&SSV::ha_read_key_count);
 

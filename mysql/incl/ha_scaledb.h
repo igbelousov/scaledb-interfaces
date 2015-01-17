@@ -737,7 +737,7 @@ public:
 		return false;
 	}
 
-	inline bool isRangeRead( TABLE_LIST* pTableList )
+	inline bool isRangeRead( TABLE_LIST* pTableList , bool* is_streaming)
 	{
 		// Evaluate the indexes referenced in the WHERE clause to determine whether the query can be executed as a streaming range read
 		JOIN_TAB*		pJoinTab;
@@ -768,11 +768,12 @@ public:
 			return false;
 		}
 
-		if ( !( SDBIsStreamingTable( dbId, tableId ) ) )
+                *is_streaming=SDBIsStreamingTable( dbId, tableId );
+		if ( !(*is_streaming) )
 		{
 			return false;
 		}
-
+		
 		if ( !( pJoinTab				= pTable->reginfo.join_tab ) )
 		{
 			return false;
@@ -895,6 +896,7 @@ public:
 	key_range		indexKeyRangeStart_;
 	key_range		indexKeyRangeEnd_;
 	bool forceAnalytics_;
+	bool isStreamingHashIndex_;
 	rangebounds rangeBounds;
 	void setConditionStringLength(unsigned int len) { conditionStringLength_=len;}
 	bool original_query_contains_condition;
