@@ -4645,8 +4645,9 @@ int ha_scaledb::index_read(uchar* buf, const uchar* key, uint key_len,
 	int retValue = SUCCESS;
 
 	//if it is a streaming hash index and not a point lookup then FAIL it (we dont support)
-	if (false) //isStreamingHashIndex_&&find_flag!=HA_READ_KEY_EXACT)
+	if ( (isStreamingHashIndex_==true) && (find_flag!=HA_READ_KEY_EXACT) )
 	{
+		
 		conditionStringLength_	= 0;
 		analyticsStringLength_	= 0;
 		forceAnalytics_			= false;
@@ -4655,6 +4656,7 @@ int ha_scaledb::index_read(uchar* buf, const uchar* key, uint key_len,
 		retValue = HA_ERR_GENERIC;
 		retValue = convertToMysqlErrorCode(retValue);
 		DBUG_RETURN(retValue);
+		
 	}
 
 
