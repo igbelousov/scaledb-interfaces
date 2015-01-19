@@ -3389,6 +3389,46 @@ int ha_scaledb::iSstreamingRangeDeleteSupported(unsigned long long* delete_key, 
 					{
 						switch(item->type())
 						{
+						case Item::FUNC_ITEM:
+							{
+								Item_func* func= (Item_func*)item;
+
+								switch(func->functype())
+								{
+									 case Item_func::UNKNOWN_FUNC:
+										 {
+											 char* func_name = (char*) func->func_name();
+											 if(stricmp("date_add_interval",func_name)==0)
+											 {
+												 item=item->next->next->next;  //skip three arguments
+											 }
+											 else
+											 {
+												 ok=false;
+											 }
+											 break;
+										 }
+								case Item_func::NOW_FUNC:
+									{
+
+										break; //ok
+									}
+								default:
+									{
+											//
+											ok=false;
+											break;
+									}
+								}
+
+
+
+
+
+
+
+									break;
+							}
 						case Item::STRING_ITEM:
 							{
 								if(end_key_!=NULL)
@@ -3425,7 +3465,9 @@ int ha_scaledb::iSstreamingRangeDeleteSupported(unsigned long long* delete_key, 
 					else if(node==2)
 					{
 						col_name=item->name;
+			
 						*columnNumber = SDBGetColumnNumberByName(sdbDbId_, sdbTableNumber_, col_name);
+						if(*columnNumber==0) {ok=false;}
 					}
 					else
 					{
