@@ -3344,6 +3344,32 @@ int ha_scaledb::update_row(const unsigned char* old_row, unsigned char* new_row)
 	DBUG_RETURN(errorNum);
 }
 
+bool ha_scaledb::setDeleteKey(unsigned long long* delete_key)
+{
+	bool ok=true;
+	if(end_key_!=NULL)
+	{
+
+		switch(end_key_->length)
+		{
+		case 1: {	*delete_key=*(char*)end_key_->key; break;}
+		case 2: {	*delete_key=*(short*)end_key_->key; break;}
+		case 4: {	*delete_key=*(int*)end_key_->key; break;}
+		case 8: {	*delete_key=*(long long*)end_key_->key; break;}
+		default:
+			{
+				//something is wrong.
+				ok=false;
+				break;
+			}
+		}
+	}
+	else
+	{
+		ok=false;
+	}
+	return ok;
+}
 
 int ha_scaledb::iSstreamingRangeDeleteSupported(unsigned long long* delete_key, unsigned short* columnNumber, bool* delete_all)
 {
@@ -3400,7 +3426,8 @@ int ha_scaledb::iSstreamingRangeDeleteSupported(unsigned long long* delete_key, 
 											 char* func_name = (char*) func->func_name();
 											 if(stricmp("date_add_interval",func_name)==0)
 											 {
-												 item=item->next->next->next;  //skip three arguments
+												 ok=setDeleteKey(delete_key);
+												 item=item->next->next;  //skip three arguments
 											 }
 											 else
 											 {
@@ -3410,7 +3437,7 @@ int ha_scaledb::iSstreamingRangeDeleteSupported(unsigned long long* delete_key, 
 										 }
 								case Item_func::NOW_FUNC:
 									{
-
+										ok=setDeleteKey(delete_key);
 										break; //ok
 									}
 								default:
@@ -3431,27 +3458,7 @@ int ha_scaledb::iSstreamingRangeDeleteSupported(unsigned long long* delete_key, 
 							}
 						case Item::STRING_ITEM:
 							{
-								if(end_key_!=NULL)
-								{
-
-									switch(end_key_->length)
-									{
-									case 1: {	*delete_key=*(char*)end_key_->key; break;}
-									case 2: {	*delete_key=*(short*)end_key_->key; break;}
-									case 4: {	*delete_key=*(int*)end_key_->key; break;}
-									case 8: {	*delete_key=*(long long*)end_key_->key; break;}
-									default:
-										{
-											//something is wrong.
-											ok=false;
-											break;
-										}
-									}
-								}
-								else
-								{
-									ok=false;
-								}
+								 ok=setDeleteKey(delete_key);
 
 								break;
 							}

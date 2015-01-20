@@ -349,7 +349,7 @@ public:
 	int update_row(const unsigned char* old_row, unsigned char* new_row);
 	// This method deletes a record with row data pointed by buf 
 	int delete_row(const unsigned char* buf);
-
+	bool setDeleteKey(unsigned long long* delete_key);
     int iSstreamingRangeDeleteSupported(unsigned long long* delete_key, unsigned short* columnNumber, bool* delete_all);
 
 	// This method deletes all records of a ScaleDB table.
