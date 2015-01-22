@@ -433,7 +433,7 @@ void SDBSetStmtId(unsigned int userId);
 unsigned long long  SDBGetStmtId(unsigned int userId);
 
 void SDBSetIsolationLevel(unsigned int userId, unsigned short isolationLevel);
-void SDBCreateTableEndInSuccess(unsigned short userId, unsigned short dbId, unsigned short tableId);
+
 
 
 /*

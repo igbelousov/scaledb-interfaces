@@ -10428,8 +10428,7 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 	// CREATE TABLE: Primary node needs to release lockMetaInfo here after all nodes finish processing.
 	// ALTER TABLE: Primary node needs to release lockMetaInfo in the last step: delete_table .
 	SDBCommit(sdbUserId_, true);
-	
-	SDBCreateTableEndInSuccess(sdbUserId_, sdbDbId_, sdbTableNumber_);
+
 
 #ifdef SDB_DEBUG_LIGHT
 	if (mysqlInterfaceDebugLevel_ > 4) {
