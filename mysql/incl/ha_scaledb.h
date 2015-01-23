@@ -903,7 +903,7 @@ public:
 private:
 
 	THR_LOCK_DATA lock; ///< MySQL lock
-
+	bool isSafeFilename(char* s);
 	SCALEDB_SHARE *share; ///< Shared lock info
 	bool analytics_uses_count;
 	bool beginningOfScan_; // set to true only we begin scanning a table and have not fetched rows yet.

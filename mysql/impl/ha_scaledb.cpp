@@ -9964,6 +9964,42 @@ int ha_scaledb::create_multi_dimension_table(TABLE *fact_table_arg, char* index_
 }
 
 #endif //_HIDDEN_DIMENSION_TABLE -  UTIL FUNC IMPLEMENATION 
+
+
+/*
+  Safe characters:
+   '\0'  NULL
+   A..Z  capital letters,
+   a..z  small letters
+   0..9  digits
+   _     underscore
+*/
+static const char Filename_safe_char[128]=
+{
+  1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, /* ................ */
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, /* ................ */
+  0,0,0,1,0,0,0,0,0,0,0,0,0,1,1,0, /*  !"#$%&'()*+,-./ */
+  1,1,1,1,1,1,1,1,1,1,0,0,0,0,0,0, /* 0123456789:;<=>? */
+  0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, /* @ABCDEFGHIJKLMNO */
+  1,1,1,1,1,1,1,1,1,1,1,0,0,0,0,1, /* PQRSTUVWXYZ[\]^_ */
+  0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, /* `abcdefghijklmno */
+  1,1,1,1,1,1,1,1,1,1,1,0,0,0,0,0, /* pqrstuvwxyz{|}~. */
+};
+
+bool ha_scaledb::isSafeFilename(char* s)
+{
+	bool safe_tablename=true;
+	
+	for(int i=0;i<strlen(s);i++)
+	{
+		if(s[i]>127 || Filename_safe_char[s[i]]==0)
+		{
+			safe_tablename=false;
+			break;
+		}
+	}
+	return safe_tablename;
+}
 /*
  Create a table. You do not want to leave the table open after a call to
  this (the database will call ::open if it needs to).
@@ -9997,7 +10033,12 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 		DBUG_RETURN(0);
 	}
 #endif
-	
+	unsigned int errorNum = 0;
+	THD* thd = ha_thd();
+	unsigned int sqlCommand = thd_sql_command(thd);
+	placeSdbMysqlTxnInfo(thd);
+	unsigned short ddlFlag = 0;
+
 	// we don't support temp tables -- REJECT
 	if (create_info->options & HA_LEX_CREATE_TMP_TABLE) {
 		DBUG_RETURN( HA_ERR_UNSUPPORTED);
@@ -10044,6 +10085,15 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 	char* pTableName = table_arg->s->table_name.str; // points to user-defined table name.  This name is case sensitive
 	unsigned short numberOfPartitions = 0;
 	bool bIsAlterTableStmt = false;
+	
+	
+	if(!isSafeFilename(pTableName))
+	{
+//table name is not compatabile with file system , eg create table 't\4' , so going to fail it.
+		SDBRollBack(sdbUserId_, NULL, 0, false);
+		SDBSetErrorMessage( sdbUserId_, CREATE_TABLE_FAILED_IN_CLUSTER, "- table name is invalid." );
+		DBUG_RETURN(convertToMysqlErrorCode(HA_ERR_GENERIC));
+	}
 
 
 	if (table_arg->part_info) {
@@ -10071,11 +10121,7 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 		DBUG_RETURN(0);
 	}
 
-	unsigned int errorNum = 0;
-	THD* thd = ha_thd();
-	unsigned int sqlCommand = thd_sql_command(thd);
-	placeSdbMysqlTxnInfo(thd);
-	unsigned short ddlFlag = 0;
+	
 
 	// Because MySQL calls this method outside of a normal user transaction,
 	// hence we use a different user id to open database and table in order to avoid session lock issues.
