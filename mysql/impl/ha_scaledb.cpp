@@ -3427,7 +3427,15 @@ int ha_scaledb::iSstreamingRangeDeleteSupported(unsigned long long* delete_key, 
 											 if(stricmp("date_add_interval",func_name)==0)
 											 {
 												 ok=setDeleteKey(delete_key);
-												 item=item->next->next;  //skip three arguments
+												 //skip through the function arguments
+												 while(item=item->next)
+												 {
+													 if(item->next->type()==Item::FIELD_ITEM)
+													 {
+														 break;
+													 }
+												 }
+											
 											 }
 											 else
 											 {
