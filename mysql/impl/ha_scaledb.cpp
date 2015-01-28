@@ -3638,7 +3638,7 @@ int ha_scaledb::delete_all_rows() {
 		//all ok 
 
 
-		if (sqlCommand_ == SQLCOM_TRUNCATE) {
+		if (sqlCommand_ == SQLCOM_TRUNCATE || SDBIsStreamingTable(sdbDbId_, sdbTableNumber_)) {
 			unsigned short stmtFlag = 0;						
 			retValue = SDBTruncateTable(sdbUserId_, sdbDbId_, tblName, sdbPartitionId_, stmtFlag);			
 		} else {
