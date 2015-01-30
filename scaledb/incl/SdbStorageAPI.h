@@ -200,6 +200,7 @@ unsigned short SDBTruncateTable(unsigned int userId, unsigned short dbId, char* 
 // Can table be dropped?
 unsigned short SDBCanTableBeDropped(unsigned int userId, unsigned short dbId, char* tableName);
 
+unsigned short SDBCanTableBeTruncated(unsigned int userId, unsigned short dbId, char* tableName, unsigned short partitionId);
 
 unsigned short SDBGetNumberOfFieldsInTableByTableNumber(unsigned short dbId, unsigned short tableNumber);
 
