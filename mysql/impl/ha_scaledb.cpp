@@ -406,7 +406,7 @@ public:
 
 	bool lock()
 	{
-
+			    SDBCommit(userIdforOpen,true); //release any previously held locks
 
 				if (!ha_scaledb::lockDDL(userIdforOpen, dbid, 0, 0))
 				{
@@ -3623,17 +3623,23 @@ int ha_scaledb::delete_all_rows() {
 	}
 
 	SessionExclusiveMetaLock ot(sdbDbId_,sdbUserId_);
+	if(ot.lock()==false)
+	{
+		DBUG_RETURN(convertToMysqlErrorCode(LOCK_TABLE_FAILED));
+	}
 
-	int retValue = SDBCanTableBeDropped(sdbUserId_, sdbDbId_, tblName);
+	//for truncate, because we might be dropping the table files we need an exclusive lock
+	if (!lockDDL(sdbUserId_, sdbDbId_, sdbTableNumber_, 0)){
+		SDBRollBack(sdbUserId_, NULL, 0, false);
+		DBUG_RETURN(convertToMysqlErrorCode(LOCK_TABLE_FAILED));
+	}
+
+	int retValue = SDBCanTableBeTruncated(sdbUserId_, sdbDbId_, tblName,0);
 	if (retValue == SUCCESS) {
 		THD* thd = ha_thd();
 		sqlCommand_ = thd_sql_command(thd);
 
-		if(ot.lock()==false)
-		{
-
-			DBUG_RETURN(convertToMysqlErrorCode(LOCK_TABLE_FAILED));
-		}
+		
 
 		//all ok 
 
