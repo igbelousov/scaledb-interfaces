@@ -2195,7 +2195,6 @@ int ha_scaledb::external_lock(THD* thd, /* handle to the user thread */
 
 	if(is_streaming_table == true &&
 		( sdbCommandType_ == SDB_COMMAND_UPDATE
-		|| sdbCommandType_ == SDB_COMMAND_LOAD
 		|| sdbCommandType_ == SDB_COMMAND_ALTER_TABLE
 		|| sdbCommandType_ == SDB_COMMAND_MULTI_DELETE))
 	{
