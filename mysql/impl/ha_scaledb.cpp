@@ -71,6 +71,8 @@
 #define HANDLER_SOCKET_WRITE_INSERTS_COUNT(globalInsertsCounter) (globalInsertsCounter & HANDLER_SOCKET_WRITE_MASK)
 #define IS_HANDLER_SOCKET_WRITE_THREAD(thd) ( strcmp(thd->db,"handlersocket") == 0 )
 
+#define STREAMING_TABLE_LOAD_BATCH_SIZE 1000
+
 handlerton *scaledb_hton=NULL;
 unsigned char ha_scaledb::mysqlInterfaceDebugLevel_ = 0; // defines the debug level for Interface component
 SDBFieldType  ha_scaledb::mysqlToSdbType_[MYSQL_TYPE_GEOMETRY+1] = {NO_TYPE, };
@@ -2168,8 +2170,13 @@ int ha_scaledb::external_lock(THD* thd, /* handle to the user thread */
 		sdbCommandType_ = SDB_COMMAND_UPDATE;
 		break;
 	case SQLCOM_LOAD:
-		sdbCommandType_ = SDB_COMMAND_LOAD;
-		break;
+			sdbCommandType_ = SDB_COMMAND_LOAD;
+			if(lock_type==F_UNLCK)
+			{
+				//table load has finished. add whatever you need todo at end here
+				numOfInsertedRows_=0;
+			}
+			break;
 	case SQLCOM_CREATE_TABLE:
 		sdbCommandType_ = SDB_COMMAND_CREATE_TABLE;
 		break;
@@ -3129,7 +3136,18 @@ int ha_scaledb::write_row(unsigned char* buf) {
 		numOfInsertedRows_ =  HANDLER_SOCKET_WRITE_INSERTS_COUNT(pSdbMysqlTxn_->incGlobalInsertsCount());
 	}
 #endif
+
+	if (sqlCommand_==SQLCOM_LOAD)
+	{
+		numOfBulkInsertRows_=STREAMING_TABLE_LOAD_BATCH_SIZE;
+		if(numOfInsertedRows_==STREAMING_TABLE_LOAD_BATCH_SIZE)
+		{
+			numOfInsertedRows_=0;
+		}
+
+	}
 	
+
 	if (!ha_scaledb::lockDML(sdbUserId_, sdbDbId_, sdbTableNumber_, 0)) {
 		DBUG_RETURN(convertToMysqlErrorCode(LOCK_TABLE_FAILED));
 	}
@@ -11082,8 +11100,11 @@ int ha_scaledb::add_columns_to_table(THD* thd, TABLE *table_arg, unsigned short 
 		if (sdbFieldType ) { // there is a field 
 			// API bug fix - the UTF8 size is calculated in the storage engine , remove the reduandent calculation of UTF8 in MySQL
 			// CURRENT SDB API only VARCHAR is reduandent 
-			if ( tableCharSet == SDB_UTF8 && !(pField->flags & (ENUM_FLAG | SET_FLAG)) && reduceSizeOfString ) 
+			const char* charsetName = pField->charset()->name;
+
+			if ( (strcmp(charsetName, "utf8_general_ci") == 0) && !(pField->flags & (ENUM_FLAG | SET_FLAG)) && reduceSizeOfString ) 
 			{
+
 #ifdef SDB_DEBUG_LIGHT
 				if ( sdbMaxDataLength && sdbMaxDataLength % 3 ) {
 					SDBTerminateEngine(1, "MAX Column size of UTF8 is not a multiple of 3", __FILE__,__LINE__);
@@ -11097,6 +11118,7 @@ int ha_scaledb::add_columns_to_table(THD* thd, TABLE *table_arg, unsigned short 
 				}
 #endif
 				sdbFieldSize = sdbFieldSize /3;
+
 			}
 
 			if(rangekey!=NULL && strcmp(rangekey,(char*) pField->field_name)==0)
