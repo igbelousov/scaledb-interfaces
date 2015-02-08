@@ -1041,6 +1041,122 @@ private:
 		return tableCharSet;
 	}
 
+	inline bool conditionFunctionItemToString( unsigned char** pCondString, unsigned int* pItemOffset, Item* pItem, Item* pComperandItem, unsigned int* pComperandDataOffset )
+	{
+		unsigned char*	pComperandData	= ( pComperandDataOffset ? ( *pCondString + *pComperandDataOffset ) : NULL );
+		int				resultExtension;
+		int				temporalDataType;
+
+		if ( pComperandItem )
+		{
+			temporalDataType			= ( ( ( Item_field* ) pComperandItem )->field )->type();
+
+			switch ( temporalDataType )
+			{
+				case MYSQL_TYPE_TIMESTAMP:
+				case MYSQL_TYPE_TIME:
+				case MYSQL_TYPE_DATETIME:
+				case MYSQL_TYPE_DATE:
+				case MYSQL_TYPE_NEWDATE:
+				case MYSQL_TYPE_YEAR:
+					break;
+				default:
+					return false;
+			}
+		}
+		else
+		{
+			temporalDataType			= 0;
+		}
+
+		switch ( ( ( Item_func* ) pItem )->functype() )
+		{
+			case Item_func::GUSERVAR_FUNC:
+				break;
+			default:
+				return false;
+		}
+
+		switch ( ( ( Item_func_get_user_var* ) pItem )->result_type() )
+		{
+			case STRING_RESULT:
+			case INT_RESULT:
+				break;
+			default:
+				return false;
+		}
+
+		*( unsigned short* )( *pCondString + *pItemOffset + USER_DATA_OFFSET_CHILDCOUNT )	= ( unsigned short )( 0 );	// # of children
+
+		if ( STRING_RESULT			   == ( ( Item_func_get_user_var* ) pItem )->result_type() )
+		{
+			const uint		maxTimeStringSize( 255 );	// Maximum length of a time string
+			THD*			pMysqlThd	= ha_thd();
+			Item_field*		pField		= ( Item_field* ) pItem;
+
+			// Extend the condition string if necessary
+			resultExtension				= checkConditionStringSize( pCondString, pItemOffset, USER_DATA_OFFSET_USER_DATA + maxTimeStringSize );
+
+			if ( resultExtension		< 0 )
+			{
+				// Extension failed
+				return false;
+			}
+			if ( resultExtension )
+			{
+				// Condition string was extended
+				if ( pComperandDataOffset )
+				{
+					pComperandData		= *pCondString + *pComperandDataOffset;
+				}
+			}
+
+			String			stringValue( ( char* )( *pCondString + *pItemOffset + USER_DATA_OFFSET_USER_DATA ), maxTimeStringSize, pMysqlThd->charset() );
+			const char*		pString;
+			unsigned int	stringSize;
+
+			// Copy the time string
+			( ( Item_func_get_user_var* ) pItem )->val_str( &stringValue );
+			pString						= stringValue.ptr();
+			stringSize					= stringValue.length();
+
+			if ( stringSize				> maxTimeStringSize )
+			{
+				return false;
+			}
+
+			if ( temporalDataType )
+			{
+				// Convert the time string to a time constant
+				convertTimeStringToTimeConstant( pMysqlThd, pItem, pString, stringSize, temporalDataType,
+													*pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_TYPE,
+													*pCondString + *pItemOffset + USER_DATA_OFFSET_USER_DATA );
+
+				*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_SIZE )	= ( unsigned char )( 8 );
+				( *pItemOffset )	   += USER_DATA_OFFSET_USER_DATA + 8;
+			}
+			else
+			{
+				// Temporarily designate the time string as the data value
+				*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_TYPE )	= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_CHAR );
+				*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_SIZE )	= ( unsigned char )( stringSize );
+				( *pItemOffset )	   += USER_DATA_OFFSET_USER_DATA + stringSize;		// increment the length of condition string accordingly
+			}
+		}
+		else
+		{
+			// Function result type INT_RESULT
+			long long		intValue	= ( ( Item_func_get_user_var* ) pItem )->val_int();
+
+			*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_TYPE )		= ( unsigned char )( SDB_PUSHDOWN_COLUMN_DATA_TYPE_SIGNED_INTEGER );
+			*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_SIZE )		= ( unsigned char )( 8 );
+			*( ( long long* )( *pCondString + *pItemOffset + USER_DATA_OFFSET_USER_DATA ) )	= intValue;
+			( *pItemOffset )		   += USER_DATA_OFFSET_USER_DATA + 8;
+		}
+
+		return true;
+	}
+
 	inline static void convertTimeStringToTimeConstant( THD* pMysqlThd, Item* pItem, const char* pString, unsigned int stringSize,
 														int temporalDataType, unsigned char* pDataType, unsigned char* pDataValue )
 	{

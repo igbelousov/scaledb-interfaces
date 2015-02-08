@@ -4956,13 +4956,16 @@ bool ha_scaledb::conditionTreeToString( const COND* cond, unsigned char** buffer
 
 			// All children visited. Write current node info to buffer
 			*( unsigned short* )( *buffer + *nodeOffset + LOGIC_OP_OFFSET_CHILDCOUNT )	= ( unsigned short )( childCount );	// # of children
-			bool and_cond=false;
+
+			bool	and_cond					= false;
+
 			switch ( ( ( Item_cond* ) cond )->functype() )
 			{
 				case Item_func::COND_AND_FUNC:
 					{
 						*( *buffer + *nodeOffset + LOGIC_OP_OFFSET_OPERATION )	= SDB_PUSHDOWN_OPERATOR_AND;	// & for AND
-						and_cond=true;
+						and_cond				= true;
+
 						if(rangeBounds.endSet==true && rangeBounds.endRange==0)
 						{
 							rangeBounds.endRange=*nodeOffset;
@@ -5173,7 +5176,9 @@ bool ha_scaledb::conditionTreeToString( const COND* cond, unsigned char** buffer
 
 			//Children visited. Write current node info to buffer
 			*( unsigned short* )( *buffer + *nodeOffset + COMP_OP_OFFSET_CHILDCOUNT )	= ( unsigned short )( countArgs );			// # of children
-			bool between_end=false;
+
+			bool	between_end						= false;
+
 			switch ( typeFunc )
 			{
 				case Item_func::EQ_FUNC:
@@ -5341,6 +5346,12 @@ bool ha_scaledb::conditionFunctionToString( unsigned char** pCondString, unsigne
 											Item* pComperandItem, unsigned int* pComperandDataOffset,
 											unsigned short countArgs, int typeOperation, unsigned short* pDbId, unsigned short* pTableId )
 {
+	if ( pFuncItem->functype()	   == Item_func::GUSERVAR_FUNC )
+	{
+		// Handle user-defined variables in the condition
+		return conditionFunctionItemToString( pCondString, pItemOffset, pFuncItem, pComperandItem, pComperandDataOffset );
+	}
+
 	unsigned short	countFuncParams	= pFuncItem->argument_count();
 	Item*			pFuncParam;
 	unsigned char	typeFuncItem;
@@ -5659,7 +5670,7 @@ bool ha_scaledb::conditionFieldToString( unsigned char** pCondString, unsigned i
 		//this is the start of a range specification
 		if(rangeBounds.startSet==false)
 		{	
-			rangeBounds.startSet=true;		
+			rangeBounds.startSet=true;
 			rangeBounds.startRange=*pItemOffset;
 		}
 		else
@@ -5671,7 +5682,7 @@ bool ha_scaledb::conditionFieldToString( unsigned char** pCondString, unsigned i
 			}
 			else
 			{
-			//must be the end of range.
+				//must be the end of range.
 				rangeBounds.valid=true;
 				rangeBounds.endSet=true;
 			
@@ -5688,7 +5699,6 @@ bool ha_scaledb::conditionFieldToString( unsigned char** pCondString, unsigned i
 		}
 
 	}
-	
 
 
 	unsigned short	columnSize		= SDBGetColumnSizeByNumber( dbId, tableId, columnId );
@@ -5782,6 +5792,8 @@ bool ha_scaledb::conditionFieldToString( unsigned char** pCondString, unsigned i
 				return false;
 			}
 	}
+
+	bool	bytesComperandShifted	= 0;
 
 	// Patch the comperand entry
 	switch ( fieldType )
@@ -5957,6 +5969,7 @@ bool ha_scaledb::conditionFieldToString( unsigned char** pCondString, unsigned i
 						// Move the current entry to its new position in the condition string
 						memmove( *pCondString + *pItemOffset - diffSize, *pCondString + *pItemOffset, ROW_DATA_NODE_LENGTH );
 						( *pItemOffset )			   -= diffSize;
+						bytesComperandShifted			= diffSize;
 					}
 
 					if ( isFromString )
@@ -6079,6 +6092,16 @@ bool ha_scaledb::conditionFieldToString( unsigned char** pCondString, unsigned i
 				*( double* )( pComperandData + USER_DATA_OFFSET_USER_DATA )				= dValue;
 			}
 			break;
+	}
+
+	if ( bytesComperandShifted )
+	{
+		if ( rangeBounds.startSet && !( rangeBounds.endSet ) )
+		{
+			// Patch the start position of a range specification
+			//	Condition is of the form: <value> <operator> <field>
+			rangeBounds.startRange	= *pComperandDataOffset;
+		}
 	}
 
 	*pItemOffset				   += ROW_DATA_NODE_LENGTH;
@@ -6360,112 +6383,11 @@ bool ha_scaledb::conditionConstantToString( unsigned char** pCondString, unsigne
 
 		case Item::FUNC_ITEM:
 		{
-			int				temporalDataType;
-
-			if ( pComperandItem )
+			if ( !( conditionFunctionItemToString( pCondString, pItemOffset, pConstItem, pComperandItem, pComperandDataOffset ) ) )
 			{
-				temporalDataType			= ( ( ( Item_field* ) pComperandItem )->field )->type();
-
-				switch ( temporalDataType )
-				{
-					case MYSQL_TYPE_TIMESTAMP:
-					case MYSQL_TYPE_TIME:
-					case MYSQL_TYPE_DATETIME:
-					case MYSQL_TYPE_DATE:
-					case MYSQL_TYPE_NEWDATE:
-					case MYSQL_TYPE_YEAR:
-						break;
-					default:
-						return false;
-				}
-			}
-			else
-			{
-				temporalDataType			= 0;
+				return false;
 			}
 
-			switch ( ( ( Item_func* ) pConstItem )->functype() )
-			{
-				case Item_func::GUSERVAR_FUNC:
-					break;
-				default:
-					return false;
-			}
-
-			switch ( ( ( Item_func_get_user_var* ) pConstItem )->result_type() )
-			{
-				case STRING_RESULT:
-				case INT_RESULT:
-					break;
-				default:
-					return false;
-			}
-
-			if ( STRING_RESULT			   == ( ( Item_func_get_user_var* ) pConstItem )->result_type() )
-			{
-				const uint		maxTimeStringSize( 255 );	// Maximum length of a time string
-				THD*			pMysqlThd	= ha_thd();
-				Item_field*		pField		= ( Item_field* ) pConstItem;
-
-				// Extend the condition string if necessary
-				resultExtension				= checkConditionStringSize( pCondString, pItemOffset, USER_DATA_OFFSET_USER_DATA + maxTimeStringSize );
-
-				if ( resultExtension		< 0 )
-				{
-					// Extension failed
-					return false;
-				}
-				if ( resultExtension )
-				{
-					// Condition string was extended
-					if ( pComperandDataOffset )
-					{
-						pComperandData		= *pCondString + *pComperandDataOffset;
-					}
-				}
-
-				String			stringValue( ( char* )( *pCondString + *pItemOffset + USER_DATA_OFFSET_USER_DATA ), maxTimeStringSize, pMysqlThd->charset() );
-				const char*		pString;
-				unsigned int	stringSize;
-
-				// Copy the time string
-				( ( Item_func_get_user_var* ) pConstItem )->val_str( &stringValue );
-				pString						= stringValue.ptr();
-				stringSize					= stringValue.length();
-
-				if ( stringSize				> maxTimeStringSize )
-				{
-					return false;
-				}
-
-				if ( temporalDataType )
-				{
-					// Convert the time string to a time constant
-					convertTimeStringToTimeConstant( pMysqlThd, pConstItem, pString, stringSize, temporalDataType,
-													 *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_TYPE,
-													 *pCondString + *pItemOffset + USER_DATA_OFFSET_USER_DATA );
-
-					*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_SIZE )	= ( unsigned char )( 8 );
-					( *pItemOffset )	   += USER_DATA_OFFSET_USER_DATA + 8;
-				}
-				else
-				{
-					// Temporarily designate the time string as the data value
-					*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_TYPE )	= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_CHAR );
-					*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_SIZE )	= ( unsigned char )( stringSize );
-					( *pItemOffset )	   += USER_DATA_OFFSET_USER_DATA + stringSize;		// increment the length of condition string accordingly
-				}
-			}
-			else
-			{
-				// Function result type INT_RESULT
-				long long		intValue	= ( ( Item_func_get_user_var* ) pConstItem )->val_int();
-
-				*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_TYPE )		= ( unsigned char )( SDB_PUSHDOWN_COLUMN_DATA_TYPE_SIGNED_INTEGER );
-				*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_SIZE )		= ( unsigned char )( 8 );
-				*( ( long long* )( *pCondString + *pItemOffset + USER_DATA_OFFSET_USER_DATA ) )	= intValue;
-				( *pItemOffset )		   += USER_DATA_OFFSET_USER_DATA + 8;
-			}
 			break;
 		}
 
