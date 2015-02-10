@@ -3465,6 +3465,23 @@ int ha_scaledb::iSstreamingRangeDeleteSupported(unsigned long long* delete_key, 
 										ok=setDeleteKey(delete_key);
 										break; //ok
 									}
+								case Item_func::GUSERVAR_FUNC:
+									{
+										switch ( ( ( Item_func_get_user_var* ) item )->result_type() )
+										{
+										case STRING_RESULT:
+											{
+												ok=setDeleteKey(delete_key);
+												break;
+											}
+										default:
+											{
+												ok=false;
+												break;
+											}
+										}
+										break;
+									}
 								default:
 									{
 											//
