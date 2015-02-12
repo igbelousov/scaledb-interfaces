@@ -10388,8 +10388,21 @@ int ha_scaledb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 		//this is necessary because the current SQL might not be a valid create table, could be a 
 		//create from select or a create if dont exist which will fail the init_from_sql_statement_string
 
-////		int errorNum=table_arg->s->init_from_sql_statement_string(thd, true,thd->query(), thd->query_length());
-		int errorNum=init_from_sql_statement_string(table_arg,thd, true,thd->query(), thd->query_length());
+//donot allow creation of partition table with engine specified
+
+		
+		if(thd->lex->create_info.used_fields & HA_CREATE_USED_ENGINE && thd->work_part_info)
+		{
+			//we donot support ceation ofpartition tables when engine specified, so return an error.
+			SDBRollBack(sdbUserId_, NULL, 0, true); // rollback new table record in transaction
+			SDBRemoveLocalTableInfo(sdbUserId_, sdbDbId_, sdbTableNumber_,false);
+			FREE_MEMORY(pCreateTableStmt);
+			SDBSetErrorMessage( sdbUserId_, CREATE_TABLE_FAILED_IN_CLUSTER, "- Partition tables only work with default storage engine (remove the engine specification)." );
+			DBUG_RETURN(convertToMysqlErrorCode(HA_ERR_GENERIC));
+
+		}
+		
+		int errorNum=init_from_sql_statement_string(table_arg,thd, true,thd->query(), thd->query_length());		
 		if(errorNum!=SUCCESS)
 		{
 			//there is a problem with the create table, probably a create select into, try generating the SQL from the
