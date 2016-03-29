@@ -60,6 +60,10 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 #include "mysql/plugin.h"         // this must come third
 #endif //_MARIA_DB
 
+#if MYSQL_VERSION_ID >=	100108
+#define NEW_GROUPBY_HANDLER
+#endif
+#include <list>
 #define _ENABLE_READ_RANGE
 
 #define DEFAULT_CHAIN_LENGTH 512
@@ -87,9 +91,8 @@ Version for file format.
 1 - Initial Version. That is, the version when the metafile was introduced.
 */
 #if MYSQL_VERSION_ID >= 100011  //only enable for montys branch
-#define USE_GROUP_BY_HANDLER
-#define SDB_USE_MDB_MRR			// Use MariaDB multi-range-read functionality to determine whether the WHERE clause includes conditions on indexed columns
-								// Disable this to instead parse the WHERE condition string to try and determine this
+
+
 #endif
 
 
@@ -99,11 +102,15 @@ Version for file format.
 #define ANALYTIC_FLAG_USES_COUNT 4
 //#define GH_ANOTHER_FLAG                 8       /* add as required */
 
+// Bit positions for select analytics column description flags
+#define SDB_FLAG_STREAMING_KEY							0x1
+#define SDB_FLAG_RANGE_KEY								0x2
+#define SDB_FLAG_USER_TIME_KEY							0x4
+
 
 #define SCALEDB_VERSION 1
 #if defined(MARIADB_BASE_VERSION) && MYSQL_VERSION_ID >= 100000
-#define _MARIA_SDB_10
-#define _USE_NEW_MARIADB_DISCOVERY
+
 #include "sql_show.h"
 bool parse_sql(THD *thd, Parser_state *parser_state,
                Object_creation_ctx *creation_ctx, bool do_pfs_digest=false);
@@ -142,81 +149,46 @@ enum streaming_state
   ST_TRUE=1,
   ST_FALSE=2
 };
-//added because we can't include pushdown_condition.h
-#pragma pack(1)  //prevent padding of struct
-struct GroupByAnalyticsHeader
-{
-	uint   cardinality;
-	uint   limit;
-	uint   info_flag;
-	ushort thread_count;
-	ushort numberColumns;
-	ushort numberInOrderby;
-	ushort offsetToAuxiliary;			// the offset to the auxilary field in the row
-};
-struct GroupByAnalyticsBody
-{
-		ushort field_offset;		//the position in table row
-		ushort columnNumber;     //this is the column number
-		ushort length;			//the length of data 
-		ushort function;			//this is operation to perform
-		ushort function_length;  //the column type	
-		char  type;				//the column type
-		char orderByPosition;
-		char orderByDirection;
-};
 
-
-struct SelectAnalyticsHeader
-{
-	ushort numberColumns;
-};
-
-struct SelectAnalyticsBody1
-{
-		ushort numberFields;		//the number of fields in column	
-		ushort function;	
-};
-
-	
-struct SelectAnalyticsBody2
-{
-		ushort field_offset;			//the position in table row
-		ushort columnNumber;                 //this is the column number
-		ushort length;			//the length of data 
-		ushort precision;
-		ushort scale;
-		ushort function;			//this is operation to perform
-		ushort result_precision;
-		ushort result_scale;
-		char type;				//the column type
-		char orderByPosition;
-		char orderByDirection;
-};
-#pragma pack()
 #define  PROCESS_COUNT_DISTINCT
-enum function_type { FT_NONE=0, FT_MIN=1, FT_MAX=2, FT_SUM=3, FT_COUNT=4, FT_AVG=5, FT_COUNT_DISTINCT=6,  FT_STREAM_COUNT=17, FT_DATE=18, FT_HOUR=19, FT_MAX_CONCAT=20, FT_CHAR=21, FT_UNSUPPORTED=22 };
+enum function_type { FT_NONE=0, FT_MIN=1, FT_MAX=2, FT_SUM=3, FT_COUNT=4, FT_AVG=5, FT_COUNT_DISTINCT=6,  FT_DATE=7, FT_HOUR=9, FT_MAX_CONCAT=20, FT_CHAR=21, FT_UNSUPPORTED=22, FT_DAY=8, FT_MINUTE=10, FT_YEAR=11, FT_MONTH=12, FT_SECOND=13, FT_INET4_TOA=14, FT_INET6_TOA=15,FT_TIME=16, FT_COUNT_FIELD=17, FT_TIMESTAMP=18  };
 
 
 struct rangebounds
 {
-	public:
-	void clear()
+	inline void clear()
 	{
-		startRange=0;
-		endRange=0;
-		startSet=false;
-		endSet=false;
-		valid=false;
+		startRange	=
+		endRange	=
+		rangeParent	= 0;
+		columnId	=
+		childCount	= 0;
+		opType		= 0;
+		startSet	=
+		endSet		=
+		valid		= false;
 	}
-	int startRange;
-	int endRange;
-	bool startSet;
-	bool endSet;
-	bool valid;
-	bool isValid()
+
+	unsigned int	startRange;
+	unsigned int	endRange;
+	unsigned int	rangeParent;
+	unsigned short	columnId;
+	unsigned short	childCount;
+	unsigned char	opType;
+	bool			startSet;
+	bool			endSet;
+	bool			valid;
+
+	inline bool isValid()
 	{
-		if(valid ==true && startSet==true && endSet==true && endRange>0)
+#ifdef	SDB_DEBUG
+		if ( valid && startSet && endSet && ( endRange <= startRange ) )
+		{
+			SDBTerminateEngine( 0, "Invalid range key bounds", __FILE__, __LINE__ );
+		}
+#endif
+
+		if ( valid && startSet && endSet && endRange )
 		{
 			return true;
 		}
@@ -227,12 +199,39 @@ struct rangebounds
 	}
 };
 
+struct conditionResultNode
+{
+	conditionResultNode()
+	{
+		clear();
+	}
+
+	~conditionResultNode()
+	{
+	}
+
+	inline void clear()
+	{
+		*( unsigned short* ) pConditionResultNode				= CONDTRUE;										// Result value
+		*( pConditionResultNode + LOGIC_OP_OFFSET_OPERATION )	= ( char ) SDB_PUSHDOWN_OPERATOR_COND_RESULT;	// Operator type
+		*( pConditionResultNode + LOGIC_OP_OFFSET_IS_NEGATED )	= 0;											// isNegated (N/A)
+	}
+
+	inline char* getPointer()
+	{
+		return pConditionResultNode;
+	}
+
+	char pConditionResultNode[ LOGIC_OP_NODE_LENGTH ];
+};
+
 class ha_scaledb: public handler
 {
 public:
 	ha_scaledb(handlerton *hton, TABLE_SHARE *table_arg);	
 	~ha_scaledb();
 
+	bool is_delayed_insert;
 	mutable streaming_state isStreamingTable_; //mutable needed because index_flags is a const function
 	void setEndRange(key_range* end)
 	{
@@ -259,7 +258,7 @@ public:
 
 	// convert mysql many types of fields to SDB 4 types of fields: numeric, char, varchar, blob
 	static SDBFieldType  mysqlToSdbType_[MYSQL_TYPE_GEOMETRY+1];
-
+	
 	static unsigned char mysqlInterfaceDebugLevel_; // defines the debug level for Interface component
 	// You need to set up debug level in parameter 'debug_string' in scaledb.ini
 	// Any positive debug level means all printouts from level 1 up to the specified level.
@@ -311,15 +310,17 @@ public:
 			//			HA_PRIMARY_KEY_IN_READ_INDEX |			// Bug 532
 			// TODO: Without primary key, we can still call position().
 			//			HA_PRIMARY_KEY_REQUIRED_FOR_POSITION |
-
+			HA_CAN_INSERT_DELAYED |
 			HA_BINLOG_ROW_CAPABLE |
 			HA_BINLOG_STMT_CAPABLE |
 			HA_CAN_GEOMETRY |
 			HA_TABLE_SCAN_ON_INDEX |
 			HA_FILE_BASED |
 //			HA_STATS_RECORDS_IS_EXACT |
-			HA_HAS_RECORDS 
-
+			HA_HAS_RECORDS
+#if MYSQL_VERSION_ID >= 100108
+			| HA_CAN_TABLE_CONDITION_PUSHDOWN
+#endif
 			);
 	}
 
@@ -349,9 +350,9 @@ public:
 	int update_row(const unsigned char* old_row, unsigned char* new_row);
 	// This method deletes a record with row data pointed by buf 
 	int delete_row(const unsigned char* buf);
-	bool setDeleteKey(unsigned long long* delete_key);
-    int iSstreamingRangeDeleteSupported(unsigned long long* delete_key, unsigned short* columnNumber, bool* delete_all);
-
+	bool setDeleteKey( long long* delete_key );
+    int isStreamingRangeDeleteSupported( long long* delete_key, unsigned short* columnNumber, bool* delete_all );
+	int getPrecision(Item *item);
 	// This method deletes all records of a ScaleDB table.
 	int delete_all_rows();
 	bool getRangeKeys( unsigned char * string, unsigned int length, key_range* key_start, key_range* key_end );
@@ -417,6 +418,19 @@ public:
 	}
 #endif // _ENABLE_READ_RANGE
 
+   int index_read_map(uchar * buf, const uchar * key,
+                             key_part_map keypart_map,
+                             enum ha_rkey_function find_flag)
+   {
+       uint key_len= calculate_key_len(table, active_index, key, keypart_map);
+       int rc= index_read(buf, key, key_len, find_flag);
+
+	   if (rc==HA_ERR_END_OF_FILE)
+	   {
+			rc= HA_ERR_KEY_NOT_FOUND; //mysql expects this to be returned, otherwise it wont do a sequential scan
+	   }
+	  return rc;
+   }
 	//This method returns the first key value in index
 	int index_first(uchar* buf);
 	//This method returns the last key value in index
@@ -440,8 +454,8 @@ public:
 	{
 		return read_time(index,ranges,rows);
 	}
-
-	void generateAnalyticsString();
+	bool isValidAnalyticType(enum_field_types type);
+	bool generateAnalyticsString(List<Item>* fields);
 	int getOrderByPosition(const char* col_name, const char* col_alias, function_type ft, bool order_by_field, bool& ascending);
 	int numberInOrderBy();
 	int index_init(uint index, bool sorted); // this method is optional
@@ -456,36 +470,36 @@ public:
 	int rnd_pos(uchar* buf, uchar* pos); ///< required
 	// This method is called after each call to rnd_next() if the data needs to be ordered.
 	void position(const uchar *record); ///< required
-#ifdef _MARIA_SDB_10
+
 	static int scaledb_discover_table(handlerton *hton, THD* thd, TABLE_SHARE *share);
-#endif
+
 	int scaledb_discover(handlerton *hton, THD* thd, const char *db,
 		const char *name,
 		uchar **frmblob,
 		size_t *frmlen);
-	int scaledb_table_exists(handlerton *hton, THD* thd, const char *db,
+	int scaledb_table_exists(handlerton *hton, const char *db,
 		const char *name);
 
 
 	int info(uint); ///< required
 
-	int addOrderByToList(char* buf, int& pos, SelectAnalyticsHeader* sah,unsigned short dbid, unsigned short tabid);
 	bool isInSelectList(SelectAnalyticsHeader* sah, char*  col_name, unsigned short dbid, unsigned short tabid, function_type ft);
 
+
+
+
 	// create a user table.
-	int parseTableOptions( THD *thd, HA_CREATE_INFO *create_info, bool& streamTable, bool& dimensionTable, unsigned long long&  dimensionSize, char** rangekey);
+	int parseTableOptions( THD *thd, TABLE * table, HA_CREATE_INFO *create_info, bool& streamTable, bool& dimensionTable, unsigned long long&  dimensionSize, char** rangekey, char** streamTime,  int* streamStart, unsigned short* streamInterval, bool create_from_like);
+
 
 	char getCASType(enum_field_types mysql_type, int flags);
 	int getSDBSize(enum_field_types fieldType, Field* field) ;
+	int addGroupBy(char* buf, unsigned short dbid, unsigned short tabid, enum_field_types type, int flag, int pos,    const char* col_name, const char* alias_name, enum function_type function);
 	int generateGroupConditionString(int cardinality, int thread_count, char* buf, int max_buf, unsigned short dbid, unsigned short tabid, char* select_buf);
-	int generateSelectConditionString(char* buf, int max_buf, unsigned short dbid, unsigned short tabid);
-	int generateOrderByConditionString(char* buf, int max_buf, unsigned short dbid, unsigned short tabid, char* select_buf);
 	bool checkFunc(char* name, char* my_function);
+	bool compareFunctionTypes(Item* item, function_type ft);
 	bool checkNestedFunc(char* name, char* my_func1, char* my_func2);
-	Item* NestedFunc(enum_field_types& type, function_type& function, int& no_fields, char* name, Item::Type ft, Item *item, Item_sum* sum, char* buf, int& pos, SelectAnalyticsBody1* sab1,unsigned short dbid, unsigned short tabid, bool& contains_analytics_function );
-#ifdef  PROCESS_COUNT_DISTINCT
-	Item* multiArgumentFunction(function_type funct, enum_field_types& type, function_type& function, int& no_fields, char* name, Item::Type ft, Item *item, Item_sum* sum, char* buf, int& pos, SelectAnalyticsBody1* sab1,unsigned short dbid, unsigned short tabid, bool& contains_analytics_function );
-#endif // PROCESS_COUNT_DISTINCT
+
 	bool addSelectField(char* buf, int& pos, unsigned short dbid, unsigned short tabid, enum_field_types type, short function,  const char* col_name, bool& contains_analytics, short precison, short scale, int flag, short result_precision, short result_scale , char* alias_name, bool is_orderby_field);
 #ifdef _HIDDEN_DIMENSION_TABLE // UTIL FUNC DECLERATION  
 	char * getDimensionTableName(char* table_name, char* col_name, char* dimension_table_name);
@@ -498,7 +512,7 @@ public:
 #endif // _HIDDEN_DIMENSION_TABLE 
 	int init_from_sql_statement_string(TABLE *table_arg, THD *thd, bool write, const char *sql, size_t sql_length);
 	int create(const char* name, TABLE *form, HA_CREATE_INFO *create_info); ///< required
-	int add_columns_to_table(THD* thd, TABLE *table_arg, unsigned short ddlFlag,unsigned short tableCharSet, char* rangekey, int& number_streaming_keys, int& number_streaming_attributes,bool dimensionTable,SdbDynamicArray * fkInfoArray);
+	int add_columns_to_table(THD* thd, bool isAlter, TABLE *table_arg, unsigned short ddlFlag,unsigned short tableCharSet, char* rangekey, char* streamTime, int& number_streaming_keys, int& number_streaming_attributes,bool dimensionTable,SdbDynamicArray * fkInfoArray, bool create_from_like, unsigned short	userTimeUnit);
 	int add_indexes_to_table(THD* thd, TABLE *table_arg, char* tblName, unsigned short ddlFlag,
 		SdbDynamicArray* fkInfoArray, char* pCreateTableStmt);
 	int create_fks(THD* thd, TABLE *table_arg, char* tblName, SdbDynamicArray* fkInfoArray, char* pCreateTableStmt,
@@ -579,16 +593,18 @@ public:
 	// Engine condition pushdown
 	const COND* cond_push(const COND *cond);
 	void cond_pop();
-	void saveConditionToString(const COND *cond);
-	bool conditionTreeToString(const COND *cond, unsigned char **start, unsigned int *place, unsigned short* DBID, unsigned short* TABID );
-	bool conditionMultEqToString( unsigned char** pCondString, unsigned int* pCondOffset, const COND* pCondMultEq );
+	unsigned short getTableIDfromNameOrAlias(TABLE_LIST* table_list, unsigned short userId, unsigned short dbId,const char* table_name);
+	void saveConditionToString(const COND *cond, TABLE_LIST* table_list);
+	bool conditionTreeToString(const COND *cond, unsigned char **start, unsigned int *place, unsigned short* DBID, unsigned short* TABID, TABLE_LIST* table_list );
+	bool conditionMultEqToString( unsigned char** pCondString, unsigned int* pCondOffset, const COND* pCondMultEq,TABLE_LIST* table_list );
 	bool conditionFunctionToString( unsigned char** pCondString, unsigned int* pItemOffset, Item_func* pFuncItem,
 									Item* pComperandItem, unsigned int* pComperandDataOffset,
-									unsigned short countArgs, int typeFunc, unsigned short* pDbId, unsigned short* pTableId );
-	bool conditionFieldToString( unsigned char** pCondString, unsigned int* pItemOffset, Item* pFieldItem,
-								 Item* pComperandItem, unsigned int* pComperandDataOffset,
-								 unsigned short countArgs, int typeOperation, unsigned short* pDbId, unsigned short* pTableId );
-	bool conditionConstantToString( unsigned char** pCondString, unsigned int* pItemOffset, Item* pConstItem, Item* pComperandItem, unsigned int* pComperandDataOffset );
+									unsigned short countArgs, int typeFunc, unsigned short* pDbId, unsigned short* pTableId,TABLE_LIST* table_list );
+	unsigned short conditionFieldToString( unsigned char** pCondString, unsigned int* pItemOffset, Item* pFieldItem,
+										   Item* pComperandItem, unsigned int* pComperandDataOffset,
+										   unsigned short countArgs, int typeOperation, unsigned short* pDbId, unsigned short* pTableId,TABLE_LIST* table_list );
+	bool conditionConstantToString( unsigned char** pCondString, unsigned int* pItemOffset, Item* pConstItem, Item* pComperandItem, unsigned int* pComperandDataOffset,
+									unsigned short* pDbId, unsigned short* pTableId,TABLE_LIST* table_list );
 
 	inline int checkConditionStringSize( unsigned char** pCondString, unsigned int* pStringLength, unsigned int additionalLength )
 	{
@@ -630,7 +646,7 @@ public:
 	// 0 rows means a lot 
 	void start_bulk_insert(ha_rows rows);
 	virtual void start_bulk_insert(ha_rows rows, uint flags);
-
+	virtual int end_bulk_insert();
 
 	// This method is used both inside and outside of a user transaction.  
 	// inside - It opens a user database and saves value in sdbDbId_.
@@ -638,16 +654,12 @@ public:
 	// It does not open individual table files.
 	static unsigned short openUserDatabase(char* pDbName, char *pDbFsName, unsigned short & dbId, unsigned short nonTxnUserId, MysqlTxn* pSdbMysqlTxn);
 
+	void removeLocalInfo();
+
 	static bool lockDDL(unsigned short userId, unsigned short dbId, unsigned short tableId, unsigned short partitionId) {
 		bool retVal = false;
 		if ( SDBSessionLock(userId, dbId, tableId, partitionId, 0, REFERENCE_LOCK_EXCLUSIVE) ) {
-			if ( tableId ) {
-				if ( SDBSessionLock(userId, dbId, 0, 0, 0, REFERENCE_LOCK_EXCLUSIVE)) {
-					retVal = true;
-				}
-			}else { // lock only database 
-				retVal = true;
-			}
+				retVal = true;		
 		}
 		return retVal;
 	}
@@ -679,10 +691,22 @@ public:
 	{
 		return isIndexedQuery_;
 	}
+
 	inline void setIsIndexedQuery()
 	{
-		 isIndexedQuery_=true;
+		 isIndexedQuery_			= true;
 	}
+
+	inline bool isUserTimeIndexQuery()
+	{
+		return isUserTimeIndexQuery_;
+	}
+
+	inline void setIsUserTimeIndexQuery()
+	{
+		isUserTimeIndexQuery_		= true;
+	}
+
 	inline void	setQueryEvaluation()
 	{
 		isQueryEvaluation_			= true;
@@ -727,6 +751,16 @@ public:
 		return false;
 	}
 
+	inline bool isDateDesignator()
+	{
+		if ( sdbDbId() && sdbTableNumber() && sdbDesignatorId() )
+		{
+			return ( ( sdbDesignatorId() == ( unsigned short ) SDBGetDateKey( sdbDbId(), sdbTableNumber() ) ) ? true : false );
+		}
+
+		return false;
+	}
+
 	inline bool hasRangeDesignator()
 	{
 		if ( sdbDbId() && sdbTableNumber() )
@@ -751,24 +785,28 @@ public:
 			return false;
 		}
 
-		if ( !( pTable				= pTableList->table ) )
+		if ( !( pTable					= pTableList->table ) )
 		{
 			return false;
 		}
 
-		pszDbName					= SDBUtilDuplicateString( pTable->s->db.str );
-		dbId						= SDBGetDatabaseNumberByName( sdbUserId_, pszDbName );
+		pszDbName						= SDBUtilDuplicateString( pTable->s->db.str );
+		dbId							= SDBGetDatabaseNumberByName( sdbUserId_, pszDbName );
 
 		FREE_MEMORY( pszDbName );
 
-		tableId						= SDBGetTableNumberByName( sdbUserId_, dbId, pTable->s->table_name.str );
+		char to[512];
+		uint n=tablename_to_filename( pTable->s->table_name.str, to, sizeof(to));
+
+		tableId							= SDBGetTableNumberByName( sdbUserId_, dbId, to);
 
 		if ( !tableId )
 		{
 			return false;
 		}
 
-                *is_streaming=SDBIsStreamingTable( dbId, tableId );
+		*is_streaming					= SDBIsStreamingTable( dbId, tableId );
+
 		if ( !(*is_streaming) )
 		{
 			return false;
@@ -873,16 +911,20 @@ public:
 		indexKeyRangeEnd_.length		= pKeyRange->length;
 		indexKeyRangeEnd_.keypart_map	= pKeyRange->keypart_map;
 	}
+
 #define MAX_ANALYTICS_LITERAL_BUFFER 1000
-        char analytics_literal[MAX_ANALYTICS_LITERAL_BUFFER]; 
-        int literal_buffer_offset;
+	char analytics_literal[MAX_ANALYTICS_LITERAL_BUFFER]; 
+	int literal_buffer_offset;
+
 	unsigned short analyticsStringLength() {return analyticsStringLength_;}
 	unsigned short analyticsSelectLength() {return analyticsSelectLength_;}
+
 	void resetAnalyticsString()
 	{
 		analyticsSelectLength_=0;
 		analyticsStringLength_=0;
 	}
+
 	unsigned char* conditionString() {return conditionString_;}
 	unsigned int   conditionStringLength() {return conditionStringLength_;}
 
@@ -896,10 +938,14 @@ public:
 	key_range		indexKeyRangeStart_;
 	key_range		indexKeyRangeEnd_;
 	bool forceAnalytics_;
+	bool optimizeWhere_;
 	bool isStreamingHashIndex_;
 	rangebounds rangeBounds;
-	void setConditionStringLength(unsigned int len) { conditionStringLength_=len;}
+	conditionResultNode	conditionResultNode_;
 	bool original_query_contains_condition;
+
+	void setConditionStringLength(unsigned int len) { conditionStringLength_=len;}
+
 private:
 
 	THR_LOCK_DATA lock; ///< MySQL lock
@@ -909,6 +955,8 @@ private:
 	bool beginningOfScan_; // set to true only we begin scanning a table and have not fetched rows yet.
 	unsigned short sdbDbId_; // DbId used by ScaleDB
 	unsigned short sdbTableNumber_; // table number used by ScaleDB	
+	std::list<unsigned short> dimension_list;  
+	std::list<unsigned short> parent_list;  //list of parent tables that need to be closed
 	unsigned short sdbPartitionId_;
 	unsigned int sdbUserId_; // user id assigned by ScaleDB storage engine
 	unsigned short sdbQueryMgrId_; // current query Manager ID
@@ -932,6 +980,7 @@ private:
 
 	// True if the current query is executed using an index traversal
 	bool	isIndexedQuery_;
+	bool	isUserTimeIndexQuery_;
 	bool	isQueryEvaluation_;
 	bool	isRangeKeyEvaluation_;
 
@@ -1041,33 +1090,45 @@ private:
 		return tableCharSet;
 	}
 
-	inline bool conditionFunctionItemToString( unsigned char** pCondString, unsigned int* pItemOffset, Item* pItem, Item* pComperandItem, unsigned int* pComperandDataOffset )
+	inline static int determineFieldType( Item* pFieldItem, Item_field** ppField )
 	{
-		unsigned char*	pComperandData	= ( pComperandDataOffset ? ( *pCondString + *pComperandDataOffset ) : NULL );
-		int				resultExtension;
-		int				temporalDataType;
+		Item_field*			pField;
+		int					typeField;
 
-		if ( pComperandItem )
+		if ( pFieldItem )
 		{
-			temporalDataType			= ( ( ( Item_field* ) pComperandItem )->field )->type();
+			pField								= ( pFieldItem->with_field ? ( ( Item_field* ) pFieldItem ) : NULL );
 
-			switch ( temporalDataType )
+			if ( pField )
 			{
-				case MYSQL_TYPE_TIMESTAMP:
-				case MYSQL_TYPE_TIME:
-				case MYSQL_TYPE_DATETIME:
-				case MYSQL_TYPE_DATE:
-				case MYSQL_TYPE_NEWDATE:
-				case MYSQL_TYPE_YEAR:
-					break;
-				default:
-					return false;
+				typeField						= pField->field->type();
+			}
+			else
+			{
+				typeField						= pFieldItem->type();
 			}
 		}
 		else
 		{
-			temporalDataType			= 0;
+			pField								= NULL;
+			typeField							= -1;
 		}
+
+		if ( ppField )
+		{
+			*ppField							= pField;
+		}
+
+		return typeField;
+	}
+
+	inline bool conditionFunctionItemToString( unsigned char** pCondString, unsigned int* pItemOffset, Item* pItem, Item* pComperandItem, unsigned int* pComperandDataOffset,
+											   unsigned short* pDbId, unsigned short* pTableId,TABLE_LIST* table_list )
+	{
+		unsigned char*	pComperandData	= ( pComperandDataOffset ? ( *pCondString + *pComperandDataOffset ) : NULL );
+		int				resultExtension;
+		int				temporalDataType;
+		bool			isUnsignedValue;
 
 		switch ( ( ( Item_func* ) pItem )->functype() )
 		{
@@ -1086,11 +1147,69 @@ private:
 				return false;
 		}
 
+		if ( pComperandItem )
+		{
+			temporalDataType			= ( ( ( Item_field* ) pComperandItem )->field )->type();
+
+			switch ( temporalDataType )
+			{
+				// Temporal types
+				case MYSQL_TYPE_TIMESTAMP:
+				case MYSQL_TYPE_TIME:
+				case MYSQL_TYPE_DATETIME:
+				case MYSQL_TYPE_DATE:
+				case MYSQL_TYPE_NEWDATE:
+				case MYSQL_TYPE_YEAR:
+					isUnsignedValue		= false;
+					break;
+
+				// Integer types
+				case MYSQL_TYPE_TINY:
+				case MYSQL_TYPE_SHORT:
+				case MYSQL_TYPE_INT24:
+				case MYSQL_TYPE_LONG:
+				case MYSQL_TYPE_LONGLONG:
+					temporalDataType	= 0;
+					isUnsignedValue		= ( ( ( ( ( Item_field* ) pComperandItem )->field )->flags & UNSIGNED_FLAG ) ? true : false );
+					break;
+
+				// String types
+				case MYSQL_TYPE_STRING:
+					temporalDataType	= 0;
+					isUnsignedValue		= false;
+					break;
+
+				// Variable length string types
+#ifdef	VAR_STREAM
+				case MYSQL_TYPE_VAR_STRING:
+#endif
+				case MYSQL_TYPE_VARCHAR:
+					temporalDataType	= 0;
+					isUnsignedValue		= false;
+#ifdef	VAR_STREAM
+					if ( SDBIsStreamingTable( *pDbId, *pTableId ) )
+					{
+						break;
+					}
+#endif
+					// Fall through ...
+
+				// All other types are unsupported for now
+				default:
+					return false;
+			}
+		}
+		else
+		{
+			temporalDataType			= 0;
+			isUnsignedValue				= false;
+		}
+
 		*( unsigned short* )( *pCondString + *pItemOffset + USER_DATA_OFFSET_CHILDCOUNT )	= ( unsigned short )( 0 );	// # of children
 
 		if ( STRING_RESULT			   == ( ( Item_func_get_user_var* ) pItem )->result_type() )
 		{
-			const uint		maxTimeStringSize( 255 );	// Maximum length of a time string
+			const uint		maxTimeStringSize( 65535 );	// Maximum length of a time string
 			THD*			pMysqlThd	= ha_thd();
 			Item_field*		pField		= ( Item_field* ) pItem;
 
@@ -1115,12 +1234,12 @@ private:
 			const char*		pString;
 			unsigned int	stringSize;
 
-			// Copy the time string
+			// Copy the string
 			( ( Item_func_get_user_var* ) pItem )->val_str( &stringValue );
 			pString						= stringValue.ptr();
 			stringSize					= stringValue.length();
 
-			if ( stringSize				> maxTimeStringSize )
+			if ( stringSize			   >= maxTimeStringSize )
 			{
 				return false;
 			}
@@ -1128,19 +1247,24 @@ private:
 			if ( temporalDataType )
 			{
 				// Convert the time string to a time constant
-				convertTimeStringToTimeConstant( pMysqlThd, pItem, pString, stringSize, temporalDataType,
-													*pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_TYPE,
-													*pCondString + *pItemOffset + USER_DATA_OFFSET_USER_DATA );
+				if ( !( convertTimeStringToTimeConstant( pMysqlThd, pItem, pString, stringSize, temporalDataType,
+														 *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_TYPE,
+														 *pCondString + *pItemOffset + USER_DATA_OFFSET_USER_DATA,
+														 false, 0, 0 ) ) )
+				{
+					// Time conversion error
+					return false;
+				}
 
-				*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_SIZE )	= ( unsigned char )( 8 );
-				( *pItemOffset )	   += USER_DATA_OFFSET_USER_DATA + 8;
+				*( unsigned short* )( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_SIZE )	= ( unsigned short )( 8 );
+				( *pItemOffset )																   += USER_DATA_OFFSET_USER_DATA + 8;
 			}
 			else
 			{
-				// Temporarily designate the time string as the data value
-				*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_TYPE )	= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_CHAR );
-				*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_SIZE )	= ( unsigned char )( stringSize );
-				( *pItemOffset )	   += USER_DATA_OFFSET_USER_DATA + stringSize;		// increment the length of condition string accordingly
+				// Designate the string as the data value
+				*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_TYPE )						= ( unsigned char  )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_CHAR );
+				*( unsigned short* )( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_SIZE )	= ( unsigned short )( stringSize );
+				( *pItemOffset )																   += USER_DATA_OFFSET_USER_DATA + stringSize;		// increment the length of condition string accordingly
 			}
 		}
 		else
@@ -1148,17 +1272,44 @@ private:
 			// Function result type INT_RESULT
 			long long		intValue	= ( ( Item_func_get_user_var* ) pItem )->val_int();
 
-			*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_TYPE )		= ( unsigned char )( SDB_PUSHDOWN_COLUMN_DATA_TYPE_SIGNED_INTEGER );
-			*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_SIZE )		= ( unsigned char )( 8 );
-			*( ( long long* )( *pCondString + *pItemOffset + USER_DATA_OFFSET_USER_DATA ) )	= intValue;
-			( *pItemOffset )		   += USER_DATA_OFFSET_USER_DATA + 8;
+			if ( isUnsignedValue )
+			{
+				unsigned
+				long long	uintValue	= ( unsigned long long ) intValue;
+
+#ifdef	SDB_PUSHDOWN_CHECK_INTEGER_LIMITS
+				if ( pComperandData )
+				{
+					checkUIntLimits( pComperandData, uintValue );
+				}
+#endif
+
+				*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_TYPE )						= ( unsigned char  )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_UNSIGNED_INTEGER );
+				*( ( unsigned
+					 long long* )( *pCondString + *pItemOffset + USER_DATA_OFFSET_USER_DATA ) )		= uintValue;
+			}
+			else
+			{
+#ifdef	SDB_PUSHDOWN_CHECK_INTEGER_LIMITS
+				if ( pComperandData )
+				{
+					checkIntLimits( pComperandData, intValue );
+				}
+#endif
+
+				*( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_TYPE )						= ( unsigned char  )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_SIGNED_INTEGER );
+				*( ( long long* )( *pCondString + *pItemOffset + USER_DATA_OFFSET_USER_DATA ) )		= intValue;
+			}
+			*( unsigned short* )( *pCondString + *pItemOffset + USER_DATA_OFFSET_DATA_SIZE )		= ( unsigned short )( 8 );
+			( *pItemOffset )																	   += USER_DATA_OFFSET_USER_DATA + 8;
 		}
 
 		return true;
 	}
 
-	inline static void convertTimeStringToTimeConstant( THD* pMysqlThd, Item* pItem, const char* pString, unsigned int stringSize,
-														int temporalDataType, unsigned char* pDataType, unsigned char* pDataValue )
+	inline bool convertTimeStringToTimeConstant( THD* pMysqlThd, Item* pItem, const char* pString, unsigned int stringSize,
+												 int temporalDataType, unsigned char* pDataType, unsigned char* pDataValue,
+												 bool doTruncateTimeValue, unsigned short dbId, unsigned short tableId )
 	{
 		MYSQL_TIME		myTime;
 		long long		timestamp;
@@ -1178,7 +1329,19 @@ private:
 					if ( uiError )
 					{
 						// Timestamp conversion error
-						timestamp	= 0;
+						//	Try to convert an over limit time value to a valid timestamp that expresses the same limit
+						if ( !( convertTimeValueBeyondTimestampLimit( &myTime, timestamp ) ) )
+						{
+							// Unable to convert the time value to a valid timestamp
+							SDBSetErrorMessage( sdbUserId_, INVALID_STREAMING_OPERATION, "- invalid temporal value in WHERE clause." );
+							return false;
+						}
+					}
+
+					if ( doTruncateTimeValue )
+					{
+						// Adjust the user time value according to the table's time interval type
+						timestamp	= SDBTruncateUserTimeValue( dbId, tableId, timestamp );
 					}
 
 					*pDataType		= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_TIMESTAMP );
@@ -1189,19 +1352,35 @@ private:
 				case MYSQL_TYPE_TIME:
 				{
 					// Convert the time value to its stored format
-					timestamp		= convertTimeStructToTimeType( &myTime );
+#if	( MYSQL_VERSION_ID >= 100108 ) && defined( _SUPPORT_MYSQL_56_DATE )
+					long		lBuffer;
 
-					*pDataType		= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_TIME );
-					*( ( long long* ) pDataValue ) = timestamp;
+					timestamp						= TIME_to_longlong_time_packed( &myTime );
+					my_time_packed_to_binary( timestamp, ( unsigned char* )( &lBuffer ), 0 );
+					*( ( long long* ) pDataValue )	= ( long long ) mi_uint3korr( &lBuffer );			// Convert to little endian for doing comparisons
+#else
+					timestamp						= convertTimeStructToTimeType( &myTime );
+					*( ( long long* ) pDataValue )	= timestamp;
+#endif
+
+					*pDataType						= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_TIME );
 					break;
 				}
 
 				case MYSQL_TYPE_DATETIME:
 				{
-					datetime		= TIME_to_ulonglong_datetime( &myTime );
+#if	( MYSQL_VERSION_ID >= 100108 ) && defined( _SUPPORT_MYSQL_56_DATE )
+					long long	i64Buffer;
 
-					*pDataType		= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_DATETIME );
-					*( ( ulonglong* ) pDataValue ) = datetime;
+					timestamp						= TIME_to_longlong_datetime_packed( &myTime );
+					my_datetime_packed_to_binary( timestamp, ( unsigned char* )( &i64Buffer ), 0 );
+					*( ( long long* ) pDataValue )	= mi_uint5korr( &i64Buffer );						// Convert to little endian for doing comparisons
+#else
+					datetime						= TIME_to_ulonglong_datetime( &myTime );
+					*( ( ulonglong* ) pDataValue )	= datetime;
+#endif
+
+					*pDataType						= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_DATETIME );
 					break;
 				}
 
@@ -1217,7 +1396,7 @@ private:
 
 				case MYSQL_TYPE_YEAR:
 				{
-					datetime		= convertYearToStoredFormat( ( ( Item_int* ) pItem )->val_int() );
+					datetime		= convertYearToStoredFormat( ( ( Item_int* ) pItem )->val_int(),0 );
 
 					*pDataType		= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_YEAR );
 					*( ( ulonglong* ) pDataValue ) = datetime;
@@ -1228,29 +1407,14 @@ private:
 		else
 		{
 			// Time conversion error
-			switch ( temporalDataType )
-			{
-				case MYSQL_TYPE_TIMESTAMP:
-					*pDataType		= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_TIMESTAMP );
-					*( ( long long* ) pDataValue ) = 0;
-					break;
-				case MYSQL_TYPE_TIME:
-					*pDataType		= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_TIME );
-					*( ( long long* ) pDataValue ) = 0;
-					break;
-				case MYSQL_TYPE_DATETIME:
-					*pDataType		= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_DATETIME );
-					*( ( ulonglong* ) pDataValue ) = 0;
-					break;
-				default:
-					*pDataType		= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_UNSIGNED_INTEGER );
-					*( ( ulonglong* ) pDataValue ) = 0;
-					break;
-			}
+			SDBSetErrorMessage( sdbUserId_, INVALID_STREAMING_OPERATION, "- invalid temporal value in WHERE clause." );
+			return false;
 		}
+
+		return true;
 	}
 
-	inline static bool convertStringToTime( THD* pMysqlThd, const char* pString, unsigned int stringSize, int temporalDataType, MYSQL_TIME* pMyTime )
+	inline static bool convertStringToTime( THD* pMysqlThd, const char* pString, unsigned int stringSize, int temporalDataType, MYSQL_TIME* pMyTime, bool isWarningOk = true )
 	{
 #ifdef	SDB_INTERNAL_CONVERT_STRING_TO_DATETIME
 		if ( pMysqlThd->charset()->state		& MY_CS_NONASCII )
@@ -1398,13 +1562,9 @@ private:
 		pMyTime->time_type						= MYSQL_TIMESTAMP_DATETIME;
 #else
 		unsigned long long	flags;
-#ifdef	_MARIA_SDB_10
+
 		bool				returnValue;
 		MYSQL_TIME_STATUS	timeStatus;
-#else	// MARIADB 5
-		timestamp_type		returnValue;
-		int					timeStatus;
-#endif	// MARIADB 5
 
 		switch ( temporalDataType )
 		{
@@ -1416,11 +1576,7 @@ private:
 				break;
 			case MYSQL_TYPE_DATE:
 			case MYSQL_TYPE_NEWDATE:
-#ifdef	_MARIA_SDB_10
 				flags							= sql_mode_for_dates( pMysqlThd );
-#else	// MARIADB 5
-				flags							= TIME_FUZZY_DATE | ( pMysqlThd->variables.sql_mode & ( MODE_NO_ZERO_DATE | MODE_INVALID_DATES ) ) | MODE_NO_ZERO_IN_DATE;
-#endif	// MARIADB 5
 				break;
 			default:
 				flags							= ( pMysqlThd->variables.sql_mode & MODE_NO_ZERO_DATE ) | MODE_NO_ZERO_IN_DATE;
@@ -1432,6 +1588,8 @@ private:
 			case MYSQL_TYPE_YEAR:
 				memset( pMyTime, 0, sizeof( MYSQL_TIME ) );
 				pMyTime->time_type				= MYSQL_TIMESTAMP_NONE;
+				timeStatus.warnings				= 0;
+				returnValue						= false;
 				break;
 			case MYSQL_TYPE_TIME:
 				returnValue						= str_to_time    ( pMysqlThd->charset(), pString, stringSize, pMyTime, flags, &timeStatus );
@@ -1440,28 +1598,56 @@ private:
 				returnValue						= str_to_datetime( pMysqlThd->charset(), pString, stringSize, pMyTime, flags, &timeStatus );
 		}
 
-#ifdef	_MARIA_SDB_10
 		if ( returnValue )
-#else	// MARIADB 5
-		if ( timeStatus )
-#endif	// MARIADB 5
 		{
 			// Time conversion error
+			return false;
+		}
+
+		if ( ( !isWarningOk )				   && ( timeStatus.warnings ) )
+		{
+			// Time conversion warning
 			return false;
 		}
 #endif
 
 		return true;
 	}
-	
-#ifdef	_MARIA_SDB_10
+
 	inline static bool getTimeCachedResult( THD* pMysqlThd, Item* pItem, int temporalDataType, MYSQL_TIME* pMyTime )
 	{
 		return ( ( Item_cache_temporal* ) pItem )->get_date_result( pMyTime, sql_mode_for_dates( pMysqlThd ) );
 	}
-#endif	// MARIADB 10
 
-	inline static void convertTimeToType( THD* pMysqlThd, Item* pItem, int temporalDataType, MYSQL_TIME* pMyTime, unsigned char* pDataType, unsigned char* pDataValue )
+	inline static int getCurrentTimestamp( THD* pMysqlThd )
+	{
+#ifdef NEW_GROUPBY_HANDLER
+		Item_func_now_local*	pCurrentTime	= new( pMysqlThd->mem_root ) Item_func_now_local( pMysqlThd,0 );	// MySQL will do cleanup later
+#else
+		Item_func_now_local*	pCurrentTime	= new( pMysqlThd->mem_root ) Item_func_now_local( 0 );	// MySQL will do cleanup later
+#endif
+		MYSQL_TIME				myTime;
+		long long				currentTimestamp;
+		unsigned int			uiError;
+
+		// Get the cached value of the current time
+		pCurrentTime->fix_length_and_dec();
+		getTimeCachedResult( pMysqlThd, pCurrentTime, MYSQL_TYPE_TIMESTAMP, &myTime );
+
+		// Convert the time value to a timestamp
+		currentTimestamp						= TIME_to_timestamp( pMysqlThd, &myTime, &uiError );
+
+		if ( uiError )
+		{
+			// Timestamp conversion error
+			currentTimestamp					= 0;
+		}
+
+		return ( int ) currentTimestamp;
+	}
+
+	inline bool convertTimeToType( THD* pMysqlThd, Item* pItem, int temporalDataType, MYSQL_TIME* pMyTime, unsigned char* pDataType, unsigned char* pDataValue,
+								   bool doTruncateTimeValue, unsigned short dbId, unsigned short tableId )
 	{
 		long long			timestamp;
 		ulonglong			datetime;
@@ -1473,10 +1659,23 @@ private:
 			{
 				// Convert the time value  to a timestamp
 				timestamp						= TIME_to_timestamp( pMysqlThd, pMyTime, &uiError );
+
 				if ( uiError )
 				{
 					// Timestamp conversion error
-					timestamp					= 0;
+					//	Try to convert an over limit time value to a valid timestamp that expresses the same limit
+					if ( !( convertTimeValueBeyondTimestampLimit( pMyTime, timestamp ) ) )
+					{
+						// Unable to convert the time value to a valid timestamp
+						SDBSetErrorMessage( sdbUserId_, INVALID_STREAMING_OPERATION, "- invalid temporal value in WHERE clause." );
+						return false;
+					}
+				}
+
+				if ( doTruncateTimeValue )
+				{
+					// Adjust the user time value according to the table's time interval type
+					timestamp					= SDBTruncateUserTimeValue( dbId, tableId, timestamp );
 				}
 
 				*pDataType						= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_TIMESTAMP );
@@ -1486,19 +1685,35 @@ private:
 			case MYSQL_TYPE_TIME:
 			{
 				// Convert the time value to its stored format
+#if	( MYSQL_VERSION_ID >= 100108 ) && defined( _SUPPORT_MYSQL_56_DATE )
+				long		lBuffer;
+
+				timestamp						= TIME_to_longlong_time_packed( pMyTime );
+				my_time_packed_to_binary( timestamp, ( unsigned char* )( &lBuffer ), 0 );
+				*( ( long long* ) pDataValue )	= ( long long ) mi_uint3korr( &lBuffer );			// Convert to little endian for doing comparisons
+#else
 				timestamp						= convertTimeStructToTimeType( pMyTime );
+				*( ( long long* ) pDataValue )	= timestamp;
+#endif
 
 				*pDataType						= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_TIME );
-				*( ( long long* ) pDataValue )	= timestamp;
 				break;
 			}
 
 			case MYSQL_TYPE_DATETIME:
 			{
+#if	( MYSQL_VERSION_ID >= 100108 ) && defined( _SUPPORT_MYSQL_56_DATE )
+				long long	i64Buffer;
+
+				timestamp						= TIME_to_longlong_datetime_packed( pMyTime );
+				my_datetime_packed_to_binary( timestamp, ( unsigned char* )( &i64Buffer ), 0 );
+				*( ( long long* ) pDataValue )	= mi_uint5korr( &i64Buffer );						// Convert to little endian for doing comparisons
+#else
 				datetime						= TIME_to_ulonglong_datetime( pMyTime );
+				*( ( ulonglong* ) pDataValue )	= datetime;
+#endif
 
 				*pDataType						= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_DATETIME );
-				*( ( ulonglong* ) pDataValue )	= datetime;
 				break;
 			}
 
@@ -1514,13 +1729,15 @@ private:
 
 			case MYSQL_TYPE_YEAR:
 			{
-				datetime						= convertYearToStoredFormat( ( ( Item_int* ) pItem )->val_int() );
+				datetime						= convertYearToStoredFormat( ( ( Item_int* ) pItem )->val_int(),0 );
 
 				*pDataType						= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_YEAR );
 				*( ( ulonglong* ) pDataValue )	= datetime;
 				break;
 			}
 		}
+
+		return true;
 	}
 
 	inline static unsigned int convertTimeStructToDateType( MYSQL_TIME* pMyTime )
@@ -1539,9 +1756,20 @@ private:
 		return dateValue;
 	}
 
-	inline static unsigned char convertYearToStoredFormat( long long year )
+	inline static unsigned char convertYearToStoredFormat( long long year , unsigned int field_length)
 	{
 		// Store number of years since 1900
+
+		//https://dev.mysql.com/doc/refman/5.5/en/two-digit-years.html
+		//For DATETIME, DATE, and TIMESTAMP types, MySQL interprets dates specified with ambiguous year values using these rules:
+		//Year values in the range 00-69 are converted to 2000-2069.
+		//Year values in the range 70-99 are converted to 1970-1999.
+		if(field_length==2)
+		{
+			if(year>=0 && year<=69) {year= 2000+year;}
+			if(year>=70 && year <=99){year=1900+year;}
+		}
+
 		return ( unsigned char )( year - 1900 );
 	}
 
@@ -1558,32 +1786,270 @@ private:
 		return timeValue;
 	}
 
-	inline static void handleTimeConversionError( int temporalDataType, unsigned char* pDataType, unsigned char* pDataValue )
+	inline static bool convertTimeValueBeyondTimestampLimit( const MYSQL_TIME* pMyTime, long long& convertedTimestamp )
 	{
-		switch ( temporalDataType )
+		bool				isConverted			= false;
+
+		convertedTimestamp						= 0;
+
+		if ( pMyTime->year						> TIMESTAMP_MAX_YEAR )
 		{
-			case MYSQL_TYPE_TIMESTAMP:
-				*pDataType						= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_TIMESTAMP );
-				*( ( long long* ) pDataValue )	= 0;
+			convertedTimestamp					= TIMESTAMP_MAX_VALUE;
+			isConverted							= true;
+		}
+		else if ( pMyTime->year				   == TIMESTAMP_MAX_YEAR )
+		{
+			if ( ( pMyTime->month > 1 )		   || ( pMyTime->day > 19 ) )
+			{
+				convertedTimestamp				= TIMESTAMP_MAX_VALUE;
+				isConverted						= true;
+			}
+		}
+		else if ( pMyTime->year					< TIMESTAMP_MIN_YEAR )
+		{
+			convertedTimestamp					= TIMESTAMP_MIN_VALUE;
+			isConverted							= true;
+		}
+		else if ( pMyTime->year				   == TIMESTAMP_MIN_YEAR )
+		{
+			if ( ( pMyTime->month < 12 )	   || ( pMyTime->day < 31 ) )
+			{
+				convertedTimestamp				= TIMESTAMP_MIN_VALUE;
+				isConverted						= true;
+			}
+		}
+
+		return isConverted;
+	}
+
+	inline static bool convertDecimalToPrecisionAndScale( Item* pFieldItem, unsigned char* pFieldData, Item* pConstItem, unsigned char* pConstData, int* pMoveSize )
+	{
+		my_decimal			dValue;
+
+		Item_field*			pField				= ( Item_field* ) pFieldItem;
+		my_decimal*			pValue				= ( my_decimal* )( ( Item_decimal* ) pConstItem )->val_decimal( &dValue );
+		unsigned char*		pBinary				= ( unsigned char* )( pConstData + USER_DATA_OFFSET_USER_DATA );
+		int					iPrecision			= pField->decimal_precision();
+		int					iScale				= pField->decimals;
+		int					iConstScale			= pValue->frac;
+		int					iLength				= *( unsigned short* )( pFieldData + ROW_DATA_OFFSET_COLUMN_SIZE );
+		bool				doMoveFieldData		= ( pMoveSize ? true : false );
+		int					moveSize;
+		int					retValue;
+
+		if ( iLength							> 65535 )
+		{
+			// Decimal values longer than 65535 bytes are not yet supported
+			return false;
+		}
+
+		if ( iLength							< sizeof( long long ) )
+		{
+			iLength								= sizeof( long long );
+		}
+
+		if ( iLength						   == sizeof( long long ) )
+		{
+			memset( pBinary, '\0', sizeof( long long ) );
+			moveSize							= 0;
+		}
+		else
+		{
+			if ( doMoveFieldData )
+			{
+				// Move the field entry to its new position in the condition string
+				moveSize						= iLength - sizeof( long long );
+				memmove( pFieldData - moveSize, pFieldData, ROW_DATA_NODE_LENGTH );
+			}
+			else
+			{
+				moveSize						= 0;
+			}
+		}
+
+		if ( iScale								< iConstScale )
+		{
+			// Round up the constant value
+			retValue							= decimal_round( pValue, pValue, iScale, CEILING );
+
+			if ( retValue )
+			{
+				// Rounding failed
+				return false;
+			}
+
+			if ( pValue->intg					> ( iPrecision - iScale ) )
+			{
+				// Constant cannot be converted to the precision and scale of the field
+				return false;
+			}
+		}
+
+		retValue								= my_decimal2binary( E_DEC_FATAL_ERROR & ~E_DEC_OVERFLOW,
+																	 pValue, pBinary, iPrecision, iScale );
+
+		if ( retValue						   && ( retValue != E_DEC_TRUNCATED ) )		// Truncation is OK since the constant might have a higher scale than the field
+		{
+			return false;
+		}
+
+		*( pConstData + USER_DATA_OFFSET_DATA_TYPE )					=  ( unsigned char  )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_DECIMAL );
+		*( unsigned short* )( pConstData + USER_DATA_OFFSET_DATA_SIZE )	=  ( unsigned short )( iLength );
+
+		if ( pMoveSize )
+		{
+			*pMoveSize							= moveSize;
+		}
+
+		return true;
+	}
+
+	inline static void convertIntegerToType( Item* pFieldItem, unsigned char* pFieldData, Item* pConstItem, unsigned char* pConstData )
+	{
+		Item_field*			pField;
+		int					typeField			= determineFieldType( pFieldItem, &pField );
+
+		bool				isUnsignedField		= ( ( ( typeField >= 0 ) && pField ) ?
+													( ( pField->field->flags & UNSIGNED_FLAG )  ? true : false  ) : false );
+		long long			intValue			= ( ( Item_cache_int* ) pConstItem )->val_int();
+
+		if ( isUnsignedField )
+		{
+			unsigned
+			long long		uintValue			= ( unsigned long long ) intValue;
+
+#ifdef	SDB_PUSHDOWN_CHECK_INTEGER_LIMITS
+			if ( pFieldData )
+			{
+				checkUIntLimits( pFieldData, uintValue );
+			}
+#endif
+
+			*( pConstData + USER_DATA_OFFSET_DATA_TYPE )							= ( unsigned char  )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_UNSIGNED_INTEGER );
+			*( ( unsigned long long* )( pConstData + USER_DATA_OFFSET_USER_DATA ) )	= uintValue;
+		}
+		else
+		{
+#ifdef	SDB_PUSHDOWN_CHECK_INTEGER_LIMITS
+			if ( pFieldData )
+			{
+				checkIntLimits( pFieldData, intValue );
+			}
+#endif
+
+			*( pConstData + USER_DATA_OFFSET_DATA_TYPE )							= ( unsigned char  )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_SIGNED_INTEGER );
+			*( ( long long*          )( pConstData + USER_DATA_OFFSET_USER_DATA ) )	= intValue;
+		}
+
+		*( unsigned short* )( pConstData + USER_DATA_OFFSET_DATA_SIZE )				= ( unsigned short )( 8 );	// size in bytes of int
+	}
+
+	inline static bool checkIntLimits( unsigned char* pColumnData, long long& llValue )
+	{
+		unsigned short		byteLength			= *( unsigned short* )( pColumnData + ROW_DATA_OFFSET_COLUMN_SIZE );
+		bool				isAdjusted			= false;
+
+		switch ( byteLength )
+		{
+			case 8:
 				break;
-			case MYSQL_TYPE_TIME:
-				*pDataType						= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_TIME );
-				*( ( long long* ) pDataValue )	= 0;
+			case 4:
+				if ( llValue					> SDB_INT_MAX )
+				{
+					llValue						= SDB_INT_MAX;
+					isAdjusted					= true;
+				}
+				else if ( llValue				< SDB_INT_MIN )
+				{
+					llValue						= SDB_INT_MIN;
+					isAdjusted					= true;
+				}
 				break;
-			case MYSQL_TYPE_DATETIME:
-				*pDataType						= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_DATETIME );
-				*( ( ulonglong* ) pDataValue )	= 0;
+			case 3:
+				if ( llValue					> SDB_SMALLINT_MAX )
+				{
+					llValue						= SDB_SMALLINT_MAX;
+					isAdjusted					= true;
+				}
+				else if ( llValue				< SDB_SMALLINT_MIN )
+				{
+					llValue						= SDB_SMALLINT_MIN;
+					isAdjusted					= true;
+				}
 				break;
-			default:
-				*pDataType						= ( unsigned char )( SDB_PUSHDOWN_LITERAL_DATA_TYPE_UNSIGNED_INTEGER );
-				*( ( ulonglong* ) pDataValue )	= 0;
+			case 2:
+				if ( llValue					> SDB_SHORT_MAX )
+				{
+					llValue						= SDB_SHORT_MAX;
+					isAdjusted					= true;
+				}
+				else if ( llValue				< SDB_SHORT_MIN )
+				{
+					llValue						= SDB_SHORT_MIN;
+					isAdjusted					= true;
+				}
+				break;
+			case 1:
+				if ( llValue					> SDB_CHAR_MAX )
+				{
+					llValue						= SDB_CHAR_MAX;
+					isAdjusted					= true;
+				}
+				else if ( llValue				< SDB_CHAR_MIN )
+				{
+					llValue						= SDB_CHAR_MIN;
+					isAdjusted					= true;
+				}
 				break;
 		}
+
+		return isAdjusted;
+	}
+
+	inline static bool checkUIntLimits( unsigned char* pColumnData, unsigned long long& ullValue )
+	{
+		unsigned short		byteLength			= *( unsigned short* )( pColumnData + ROW_DATA_OFFSET_COLUMN_SIZE );
+		bool				isAdjusted			= false;
+
+		switch ( byteLength )
+		{
+			case 8:
+				break;
+			case 4:
+				if ( ullValue					> SDB_UINT_MAX )
+				{
+					ullValue					= SDB_UINT_MAX;
+					isAdjusted					= true;
+				}
+				break;
+			case 3:
+				if ( ullValue					> SDB_USMALLINT_MAX )
+				{
+					ullValue					= SDB_USMALLINT_MAX;
+					isAdjusted					= true;
+				}
+				break;
+			case 2:
+				if ( ullValue					> SDB_USHORT_MAX )
+				{
+					ullValue					= SDB_USHORT_MAX;
+					isAdjusted					= true;
+				}
+				break;
+			case 1:
+				if ( ullValue					> SDB_UCHAR_MAX )
+				{
+					ullValue					= SDB_UCHAR_MAX;
+					isAdjusted					= true;
+				}
+				break;
+		}
+
+		return isAdjusted;
 	}
 };
 
-#ifdef USE_GROUP_BY_HANDLER
-//disable the following to enable index lookup
+
 //#define _USE_GROUPBY_SEQUENTIAL
 
 class ha_scaledb_groupby: public group_by_handler
@@ -1595,7 +2061,16 @@ private:
 	bool					first_;
 
 public:
-
+#ifdef NEW_GROUPBY_HANDLER
+	ha_scaledb_groupby(THD *thd_arg, Query* query, handlerton *ht_arg)
+		: group_by_handler(thd_arg, ht_arg)
+	{
+		first_			= true;
+		my_table_list_	= query->from;
+		temp_table_		= NULL;
+		pJoinTab_		= my_table_list_->table->reginfo.join_tab;
+	}
+#else
 	ha_scaledb_groupby(THD *thd_arg,
 					   SELECT_LEX *select_lex_arg,
 					   List<Item> *fields_arg,
@@ -1611,7 +2086,8 @@ public:
 
 		pJoinTab_		= my_table_list_->table->reginfo.join_tab;
 	}
-	
+
+#endif //NEW_GROUPBY_HANDLER	
 	virtual ~ha_scaledb_groupby() {}
 
 	/*
@@ -1627,13 +2103,17 @@ public:
 	  This is becasue we can't revert back the old having and order_by elements.
 	  */
 
+#ifdef NEW_GROUPBY_HANDLER
+
+#else
 	virtual bool init(TABLE *temporary_table, Item *having_arg,
 					  ORDER *order_by_arg)
 	{
-		group_by_handler::init(temporary_table,having_arg,order_by_arg);
-		temp_table_	= temporary_table;
-		return 0;
-	}
+			group_by_handler::init(temporary_table,having_arg,order_by_arg);
+			temp_table_	= temporary_table;
+			return 0;
+		}
+#endif	
 
 	/*
 	  Functions to scan data. All these returns 0 if ok, error code in case
@@ -1647,20 +2127,26 @@ public:
 	*/
 	virtual int init_scan()
 	{
-#ifdef _USE_GROUPBY_SEQUENTIAL
-		ha_scaledb* scaledb= (ha_scaledb*) (my_table_list_->table->file);
-		int rc=scaledb->rnd_init(true);
-		return rc;
-#else
+
 		ha_scaledb* scaledb= (ha_scaledb*) (my_table_list_->table->file);
 	
 
 		if ( scaledb->isIndexedQuery() )
 		{
+			int	range_index;
 
-			int range_index=SDBGetRangeKey(scaledb->sdbDbId(), scaledb->sdbTableNumber()) ;
-			int index_id=SDBGetIndexExternalId(scaledb->sdbDbId(), range_index);
-			int rc=scaledb->ha_index_init(index_id, 1);  //need to patch in the range key
+			if ( scaledb->isUserTimeIndexQuery() )
+			{
+				range_index	= SDBGetDateKey ( scaledb->sdbDbId(), scaledb->sdbTableNumber() );
+			}
+			else
+			{
+				range_index	= SDBGetRangeKey( scaledb->sdbDbId(), scaledb->sdbTableNumber() );
+			}
+
+			int	index_id	= SDBGetIndexExternalId( scaledb->sdbDbId(), range_index );
+			int	rc			= scaledb->ha_index_init( index_id, 1 );	//need to patch in the range key
+
 			return rc;
 		}
 		else
@@ -1670,7 +2156,7 @@ public:
 		}
 
 
-#endif
+
 	}
 
 	/*
@@ -1682,15 +2168,15 @@ public:
 	{
 		ha_scaledb* scaledb= (ha_scaledb*) (my_table_list_->table->file);
 
-#ifdef _USE_GROUPBY_SEQUENTIAL
-		scaledb->setTempTable( temp_table_ );
-		int rc			= scaledb->rnd_next( temp_table_->record[ 0 ]);
-		return rc;
+#ifdef NEW_GROUPBY_HANDLER
+		scaledb->setTempTable( table );
+		temp_table_=table;
 #else
 		scaledb->setTempTable( temp_table_ );
+#endif
 		int rc	= 0;
 	
-#ifdef	SDB_USE_MDB_MRR
+
 		if ( scaledb->isIndexedQuery() )
 		{
 			if ( first_ )
@@ -1718,39 +2204,10 @@ public:
 
 			rc			= scaledb->rnd_next( temp_table_->record[ 0 ] );
 		}
-#else
-		if ( scaledb->isIndexedQuery() )
-		{
-			if ( first_ )
-			{
-				if ( scaledb->indexKeyRangeEnd_.key )
-				{
-					scaledb->setEndRange( &( scaledb->indexKeyRangeEnd_ ) );
-				}
 
-				rc			= scaledb->index_read( temp_table_->record[ 0 ],
-					( const uchar* ) scaledb->indexKeyRangeStart_.key, scaledb->indexKeyRangeStart_.length, scaledb->indexKeyRangeStart_.flag );
-				first_		= false;
-			}
-			else
-			{
-				rc			= scaledb->index_next( temp_table_->record[ 0 ] );
-			}
-		}
-		else
-		{
-			if ( first_ )
-			{
-				first_	= false;
-			}
-
-			rc			= scaledb->rnd_next( temp_table_->record[ 0 ] );
-		}
-
-#endif
 	
 		return rc;
-#endif
+
 	}
 
 	/* End scanning */
@@ -1758,9 +2215,7 @@ public:
 	{
 		ha_scaledb* scaledb= (ha_scaledb*) (my_table_list_->table->file);
 
-#ifdef _USE_GROUPBY_SEQUENTIAL
-		int rc=scaledb->rnd_end();
-#else
+
 		int rc=0;
 		if (scaledb->isIndexedQuery() )
 		{
@@ -1770,7 +2225,7 @@ public:
 		{
 			rc=scaledb->rnd_end();
 		}
-#endif
+
 		
 		scaledb->setTempTable(NULL);
 		return rc;
@@ -1781,8 +2236,12 @@ public:
 	{
 	 return 0;
 	}
-
-
+/*	
+	uint flags() 
+	{
+		return GROUP_BY_ORDER_BY;
+	}
+*/	
 	void print_error(int error, myf errflag)
 	{
 
@@ -1808,6 +2267,6 @@ public:
 	};
 
 
-#endif //USE_GROUP_BY_HANDLER
+
 
 #endif	// SDB_MYSQL
