@@ -29,6 +29,28 @@
 #define _SDB_COMMON_H
 
 #define SDB_PUSH_DOWN
+//#define _SUPPORT_MYSQL_56_DATE
+
+#include <limits.h>
+
+// Limits: MAX integer values
+#define SDB_CHAR_MAX			SCHAR_MAX
+#define SDB_UCHAR_MAX			UCHAR_MAX
+#define SDB_SHORT_MAX			SHRT_MAX
+#define SDB_USHORT_MAX			USHRT_MAX
+#define SDB_SMALLINT_MAX		0x7fffff
+#define SDB_USMALLINT_MAX		0xffffff
+#define SDB_INT_MAX				INT_MAX
+#define SDB_UINT_MAX			UINT_MAX
+#define SDB_LLONG_MAX			0x7fffffffffffffffLL
+#define SDB_ULLONG_MAX			0xffffffffffffffffULL
+
+// Limits: MIN signed integer values
+#define SDB_CHAR_MIN			SCHAR_MIN
+#define SDB_SHORT_MIN			SHRT_MIN
+#define SDB_SMALLINT_MIN		(-8388607 - 1)
+#define SDB_INT_MIN				INT_MIN
+#define SDB_LLONG_MIN			LLONG_MIN
 
 // We define if to test the size of malloced data 
 // the define is in this file so it will be used by both the engine and the interface modules  
@@ -43,6 +65,74 @@
 #ifndef SDB_MASTER_DBID
 #define SDB_MASTER_DBID 1
 #endif
+
+#define TIMESTAMP_1_1_2000			946713600			// number of seconds from 1.1.1970 to 1.1.2000 GMT
+#define UT_CODED_MAX_UNIQUE_VALUES	10000000			// maximum number of unique values handled in a user time index with interval type CODED
+
+#pragma pack(1)
+struct GroupByAnalyticsHeader
+{
+		unsigned int cardinality;
+		unsigned int limit;
+		unsigned int info_flag;
+		unsigned short thread_count;
+		unsigned short numberColumns;
+		unsigned short numberInOrderby;
+		unsigned short offsetToAuxiliary;			// the offset to the auxilary field in the row
+};
+struct GroupByAnalyticsBody
+{
+		unsigned short gBfieldOffset;				//the position of the column in table row
+		unsigned short columnNumber;                 //this is the column number
+		unsigned short gBfieldLength;				//the length of column 	
+		unsigned short gBFunction;				    //this is operation to perform
+		unsigned short gBOutputFunctionLength;       //the length needed for the output when function is applied
+		char   gBfieldType;					//the column type
+		char   gBorderPosition;
+		char gBorderDirection;
+};
+
+
+struct SelectAnalyticsHeader
+{
+	    unsigned short numberOutputFields;		
+};
+
+struct SelectAnalyticsBody1
+{
+		unsigned short numberOfFieldsInFunction;		//the number of fields in column	
+		unsigned short analyticFunction;	
+};
+	
+struct SelectAnalyticsBody2
+{
+		unsigned short fieldOffset;			//the position in table row
+		unsigned short columnNumber;                 //this is the column number
+		unsigned short fieldLength;			//the length of data 
+		unsigned short precision;
+		unsigned short scale;
+		unsigned short function;			//this is operation to perform
+		unsigned short result_precision;
+		unsigned short result_scale;
+		char fieldType;				//the column type
+		char flags;
+		char gBorderPosition;
+		char gBorderDirection;
+};
+#pragma pack()
+
+enum stream_interval
+{
+	SI_NO_TYPE			= 0,
+	SI_CODED			= 1,
+	SI_SECOND			= 2,
+	SI_MINUTE			= 3,
+	SI_HOUR				= 4,
+	SI_DAY				= 5,
+	SI_WEEK				= 6,
+	SI_MONTH			= 7,
+	SI_YEAR				= 8
+};
 
 typedef enum SdbTableInfo {
 	SDB_STATS_INFO_FILE_RECORDS				= 1,		// the number of rows in a table
@@ -74,6 +164,38 @@ typedef enum SdbKeySearchDirection {
 #define METAINFO_MAX_KEY_FIELDS 10
 #define METAINFO_BLOCK_SIZE  8192
 #define SMALL_VAR_FIELD_SIZE	2048
+
+#define VAR_STREAM
+#define TRACK_STORAGE_FAILURE
+
+
+// definitions for the row part 
+
+#define COLUMN_OFFSET_TO_VAR_DATA 0	 // location (in the column) with offset to the block location with all var fields of the row
+#define COLUMN_OFFSET_TO_VAR_FIELD (COLUMN_OFFSET_TO_VAR_DATA + sizeof(short)) // location (in the column) with offset to the block location with the particular field info
+
+#define STREAMING_COLUMN_LENGTH (COLUMN_OFFSET_TO_VAR_FIELD +  sizeof(short)) // the size of the var column inside the structured row
+
+#define GET_LOCATION_OF_VAR_DATA(ptrToColumn) *(unsigned short *)(ptrToColumn)
+#define GET_LOCATION_OF_VAR_FIELD(ptrToColumn) *(unsigned short *)(ptrToColumn + sizeof(short))
+
+
+// definitions for the variable part
+
+#define VAR_STREAM_UNSTRUCTURED_LENGTH 0			// offset for the length of the unstructured data
+#define VAR_STREAM_UNSTRUCTURED_HEADER (VAR_STREAM_UNSTRUCTURED_LENGTH + sizeof(short))
+
+#define VAR_STREAM_FIELD_LENGTH		   0			// offset of the particular var field length
+#define VAR_STREAM_FIELD_ID		(VAR_STREAM_FIELD_LENGTH + sizeof(short))			// offset of the particular var field id
+#define VAR_STREAM_FIELD_TYPE	(VAR_STREAM_FIELD_ID + sizeof(short))	   		// offset of the particular var field type
+#define VAR_STREAM_FIELD_HEADER_LENGTH (VAR_STREAM_FIELD_TYPE + sizeof(char))
+
+#define VAR_STREAM_TYPE_UNSTRUCTURED 1
+#define VAR_STREAM_TYPE_SEMISTRUCTURED 2
+
+#define GET_VAR_STREAM_FIELD_LENGTH(ptrToFieldHeader) *(unsigned short *)(ptrToFieldHeader + VAR_STREAM_FIELD_LENGTH)
+#define GET_VAR_STREAM_FIELD_ID(ptrToFieldHeader) *(unsigned short *)(ptrToFieldHeader + VAR_STREAM_FIELD_ID)
+#define GET_VAR_STREAM_FIELD_TYPE(ptrToFieldHeader) *(unsigned short *)(ptrToFieldHeader + VAR_STREAM_FIELD_TYPE)
 
 #define UTF8_RATIO	3
 
@@ -229,8 +351,22 @@ typedef enum SdbKeySearchDirection {
 #define MISSING_STREAMING_TIME		63
 #define NO_RETURNED_VALUE			64
 #define TOO_MANY_THREADS_FOR_STREAMING 65
-#define SDB_IO_FAILURE			66
-
+#define SDB_IO_FAILURE				66
+#define STORAGE_TABLE_NOT_OPEN		67
+#define CHANGE_TO_SMALL_SCAN		68
+#define ANALYTIC_QUERY_FAILURE		69
+#define INCONSISTENT_CODE_VERSION	70
+#define PARENT_TABLE_IN_USE			71
+#define CHILD_TABLE_IN_USE			72
+#define NEW_DBMS_UPDATED			73
+#define SDB_KEY_VALUE_OUT_OF_RANGE	74
+#define SDB_FAILD_TO_CONNECT_TO_CLUSTER 75
+#define SDB_TOO_MANY_OPEN_FILES		76
+#define SDB_INTERNAL_ERROR			77
+#define SLM_FAILED_DURING_TRAN		78
+#define DECIMAL_OVERFLOW_IN_ANALYTICS 79
+#define UNSUPPORTED_ANALYTICS_QUERY     80
+#define SCALEDB_GENERIC_ERROR		0xffff
 
 #define CAS_FILE_IN_USE		 100
 
@@ -294,9 +430,11 @@ enum SdbConditionPushdownType:unsigned char
 	SDB_PUSHDOWN_OPERATOR_LT,																				// LT
 	SDB_PUSHDOWN_OPERATOR_GT,																				// GT
 	SDB_PUSHDOWN_OPERATOR_NE,																				// NE
+	SDB_PUSHDOWN_OPERATOR_ISNULL,																			// IS[NOT]NULL
 	SDB_PUSHDOWN_OPERATOR_BETWEEN,																			// BETWEEN
 	SDB_PUSHDOWN_OPERATOR_IN,																				// IN
 	SDB_PUSHDOWN_OPERATOR_COND_RESULT,																		// Condition Result
+	SDB_PUSHDOWN_OPERATOR_LIKE,																				// Like
 																											// ^^^^^^^^^^^^^^^^^^^^^^^ ADD NEW OPERATORS HERE
 
 	// Function types
@@ -321,6 +459,8 @@ enum SdbConditionPushdownType:unsigned char
 	SDB_PUSHDOWN_COLUMN_DATA_TYPE_DATETIME,																	// datetime			(row)
 	SDB_PUSHDOWN_COLUMN_DATA_TYPE_YEAR,																		// year				(row)
 	SDB_PUSHDOWN_COLUMN_DATA_TYPE_TIMESTAMP,																// timestamp		(row)
+	SDB_PUSHDOWN_COLUMN_DATA_TYPE_USER_TIMESTAMP,															// user timestamp	(row)
+	SDB_PUSHDOWN_COLUMN_DATA_TYPE_BINARY,																	// binary			(row)
 	SDB_PUSHDOWN_COLUMN_DATA_TYPE_CHAR,																		// char				(row)
 	SDB_PUSHDOWN_COLUMN_DATA_TYPE_VARCHAR,																	// varchar			(row)
 	SDB_PUSHDOWN_LITERAL_DATA_TYPE_UNSIGNED_INTEGER,														// unsigned int		(user)
@@ -330,6 +470,7 @@ enum SdbConditionPushdownType:unsigned char
 	SDB_PUSHDOWN_LITERAL_DATA_TYPE_DECIMAL,																	// binary decimal	(user)
 	SDB_PUSHDOWN_LITERAL_DATA_TYPE_DATETIME,																// datetime			(user)
 	SDB_PUSHDOWN_LITERAL_DATA_TYPE_TIMESTAMP,																// timestamp		(user)
+	SDB_PUSHDOWN_LITERAL_DATA_TYPE_BINARY,																	// binary			(user)
 	SDB_PUSHDOWN_LITERAL_DATA_TYPE_CHAR,																	// char				(user)
 	SDB_PUSHDOWN_LITERAL_DATA_TYPE_VARCHAR,																	// varchar			(user)
 																											// ^^^^^^^^^^^^^^^^^^^^^^^ ADD NEW DATA TYPES HERE
@@ -352,40 +493,50 @@ enum SdbConditionPushdownType:unsigned char
 		case SDB_PUSHDOWN_FUNCTION_IS_IPV4_COMPAT:	\
 		case SDB_PUSHDOWN_FUNCTION_IS_IPV4_MAPPED
 
-// Pushdown condition string offsets
+//------------------------------------
+// Pushdown condition string nodes
+//------------------------------------
+
+// Logical operator node, such as AND, OR, XOR
 #define LOGIC_OP_OFFSET_CHILDCOUNT	0
 #define LOGIC_OP_OFFSET_OPERATION	(LOGIC_OP_OFFSET_CHILDCOUNT + 2)
 #define LOGIC_OP_OFFSET_IS_NEGATED	(LOGIC_OP_OFFSET_OPERATION + 1)
 #define LOGIC_OP_NODE_LENGTH		(LOGIC_OP_OFFSET_IS_NEGATED + 1)
 
+// Comparison operator node, such EQ, GT, LT
 #define COMP_OP_OFFSET_CHILDCOUNT	0
 #define COMP_OP_OFFSET_OPERATION	(COMP_OP_OFFSET_CHILDCOUNT + 2)
 #define COMP_OP_OFFSET_IS_NEGATED	(COMP_OP_OFFSET_OPERATION + 1)
 #define COMP_OP_NODE_LENGTH			(COMP_OP_OFFSET_IS_NEGATED + 1)
 
+// Function operator node, such as INET_ATON, INET6_NTOA, IS_IPV6
 #define FUNC_OP_OFFSET_CHILDCOUNT	0
 #define FUNC_OP_OFFSET_TYPE			(FUNC_OP_OFFSET_CHILDCOUNT + 2)
 #define FUNC_OP_OFFSET_RESULT_TYPE	(FUNC_OP_OFFSET_TYPE + 1)
 #define FUNC_OP_NODE_LENGTH			(FUNC_OP_OFFSET_RESULT_TYPE + 1)
 
-#define ROW_DATA_OFFSET_CHILDCOUNT	0
-#define ROW_DATA_OFFSET_ROW_TYPE	(ROW_DATA_OFFSET_CHILDCOUNT + 2)
-#define ROW_DATA_OFFSET_DATABASE_NUMBER (ROW_DATA_OFFSET_ROW_TYPE + 1)
-#define ROW_DATA_OFFSET_TABLE_NUMBER (ROW_DATA_OFFSET_DATABASE_NUMBER + 2)
-#define ROW_DATA_OFFSET_COLUMN_NUMBER (ROW_DATA_OFFSET_TABLE_NUMBER + 2)
-#define ROW_DATA_OFFSET_COLUMN_OFFSET (ROW_DATA_OFFSET_COLUMN_NUMBER + 2)
-#define ROW_DATA_OFFSET_COLUMN_SIZE (ROW_DATA_OFFSET_COLUMN_OFFSET + 2)
-#define ROW_DATA_NODE_LENGTH (ROW_DATA_OFFSET_COLUMN_SIZE + 2)
+// Column descriptor node
+#define ROW_DATA_OFFSET_CHILDCOUNT		0
+#define ROW_DATA_OFFSET_ROW_TYPE		(ROW_DATA_OFFSET_CHILDCOUNT + 2)
+#define ROW_DATA_OFFSET_DATABASE_NUMBER	(ROW_DATA_OFFSET_ROW_TYPE + 1)
+#define ROW_DATA_OFFSET_TABLE_NUMBER	(ROW_DATA_OFFSET_DATABASE_NUMBER + 2)
+#define ROW_DATA_OFFSET_COLUMN_NUMBER	(ROW_DATA_OFFSET_TABLE_NUMBER + 2)
+#define ROW_DATA_OFFSET_COLUMN_OFFSET	(ROW_DATA_OFFSET_COLUMN_NUMBER + 2)
+#define ROW_DATA_OFFSET_COLUMN_SIZE		(ROW_DATA_OFFSET_COLUMN_OFFSET + 2)
+#define ROW_DATA_NODE_LENGTH			(ROW_DATA_OFFSET_COLUMN_SIZE + 2)
 
+// Constant value node
 #define USER_DATA_OFFSET_CHILDCOUNT 0
 #define USER_DATA_OFFSET_DATA_TYPE	(USER_DATA_OFFSET_CHILDCOUNT + 2)
 #define USER_DATA_OFFSET_DATA_SIZE	(USER_DATA_OFFSET_DATA_TYPE + 1)
-#define USER_DATA_OFFSET_USER_DATA	(USER_DATA_OFFSET_DATA_SIZE + 1)
+#define USER_DATA_OFFSET_USER_DATA	(USER_DATA_OFFSET_DATA_SIZE + 2)
 
+// Condition result node: Replaces a range key subclause of the WHERE clause with boolean TRUE
 #define COND_RESULT_OFFSET_VALUE	0																	// Same offset as child count in other node types
 #define COND_RESULT_OFFSET_TYPE		(COND_RESULT_OFFSET_VALUE + 2)
 #define COND_RESULT_NODE_LENGTH		(COND_RESULT_OFFSET_TYPE + 1)
 
-enum condBool	{ CONDFALSE, CONDTRUE, CONDMAYBE };
+// Condition evaluation result: FALSE, TRUE, MAYBE
+enum CondBool	{ CONDFALSE, CONDTRUE, CONDMAYBE };
 
 #endif //_SDB_COMMON_H
