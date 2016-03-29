@@ -163,14 +163,19 @@ unsigned int SDBUSerSQLStatmentEnd(unsigned short userId) ;
 void SDBOpenFile(unsigned short userId, unsigned short dbId, unsigned short tableId);
 // When we close a table, we also remove table information from metadata cache
 void SDBCloseTable(unsigned short userId, unsigned short dbId, unsigned short tableId, unsigned short partitionId);
+unsigned short SDBCloseTableAndChildrenTables(unsigned int userId, unsigned short dbId, unsigned short tableId,  bool metadataOnly,bool bLockTable, bool bNeedToCommit);
+
+
+unsigned short SDBCloseTableCascade(bool main,unsigned short userId, unsigned short dbId, char *pTableName, unsigned short partitionId, bool bLockTable, bool bNeedToCommits, bool isTableFlush,bool removeLocal);
+unsigned int SDBFlushStreamingInsert(unsigned short userId, unsigned short dbId, unsigned short tableId, unsigned short partitionId);
 
 // Initialize Database Table
 unsigned short SDBValidateInitDatabaseTable(const char *dbName, const char *tableName);
 
 // Create new user table. Return newly created table id
 unsigned short SDBCreateTable(unsigned int userId, unsigned short dbId, char* tableName, unsigned long long autoIncrBaseValue,
-							  char *tableFsName=0, char *tableCsName=0, bool virtualTable = false, bool hasOverflow = false, bool streamTable =false, bool dimensionTable =false,unsigned long long dimensionSize=0,
-							  unsigned short tableCharSet=0, unsigned short ddlFlag=0);
+							  char *tableFsName=0, char *tableCsName=0, bool virtualTable = false, bool hasOverflow = false, bool streamTable =false, bool dimensionTable =false,unsigned long long dimensionSize = 0,
+							  unsigned short tableCharSet = 0, unsigned short ddlFlag = 0, int userTimeStreamStart = 0, unsigned short userTimeUnit = 0);
 
 //Add partition info into meta tables
 unsigned short SDBAddPartitions(unsigned short userId, unsigned short dbId, unsigned short tableId, char* name, unsigned short partitionId,  bool parIdAvailable);
@@ -205,12 +210,18 @@ unsigned short SDBCanTableBeTruncated(unsigned int userId, unsigned short dbId, 
 unsigned short SDBGetNumberOfFieldsInTableByTableNumber(unsigned short dbId, unsigned short tableNumber);
 
 // open the table with specified table file name.  This method returns the table id.
-unsigned short SDBOpenTable(unsigned short userId, unsigned short dbId, char *pTableFsName, unsigned short partitionId, bool openTableMetaDataOnly);
+unsigned short SDBOpenTable(unsigned short userId, unsigned short dbId, char *pTableFsName, unsigned short partitionId, bool openTableMetaDataOnly, bool doCommit=true);
 
 // close an open table based on table name (not its file-system-safe name)
 // the calling method needs to decide if we need to lock table before closing it.
 unsigned short SDBCloseTable(unsigned short userId, unsigned short dbId, char *pTableName, unsigned short partitionId, bool bLockTable, bool bNeedToCommits, bool isTableFlush,bool removeLocal);
 unsigned short SDBCloseParentTables(unsigned short userId, unsigned short dbId, char* pTableFsName);
+
+void* SDBallocTableNamesArray(short userId);
+void SDBFreeTableNamesArray(short userId, void* p);
+char* SDBgetNextTable(short userId, int i, void* p);
+unsigned short SDBgetTableNamesByDbmsName(unsigned short userId, void *p, char *dbmsName);
+
 
 int SDBNumberShards(unsigned short dbId, unsigned short tableNumber);
 unsigned short SDBGetTableNumberByName(unsigned short userId, unsigned short dbId, const char *tableName);
@@ -228,7 +239,8 @@ bool SDBTableIsVirtual(const char *tableName);
 
 bool SDBLockTable(unsigned short userId, unsigned short dbId, unsigned short tableId, unsigned short partitionId, unsigned char lockLevel);
 bool SDBSessionLock(unsigned short userId, unsigned short dbId, unsigned short tableId, unsigned short partitionId, unsigned long long resourceId, unsigned char lockLevel);
-
+void SDBStartDDL(unsigned short userId);
+bool SDBCheckEndDDL(unsigned short userId);
 char* SDBstat_getMonitorStatistics();
 long long SDBstat_getMemoryUsage();
 int SDBstat_getBlockName(char *buf, int len);
@@ -377,17 +389,26 @@ unsigned short SDBGetLastUserErrorNumber(unsigned short userId);
 unsigned short SDBGetLastIndexError(unsigned short userId);
 char *SDBGetLastUserErrorMessageGeneric(unsigned short userId);
 char *SDBGetLastUserErrorMessageDetail(unsigned short userId);
+char *SDBGetLastWarningMessage(unsigned short userId);
+bool	      SDBErrorExists(unsigned short userId);
+unsigned short SDBResetErrorMessage(unsigned short userId);
 unsigned short SDBGetErrorMessage(unsigned short userId, char *buff, unsigned short buffLength) ;
 unsigned short SDBGetLastIndexError(unsigned short userId);
 unsigned short SDBGetLastIndexPositionInTable(unsigned short dbId, unsigned int indexId);
 unsigned short SDBIsStreamingTable(unsigned short dbId, unsigned short tableNumber);
 unsigned short SDBIsDimensionTable(unsigned short dbId, unsigned short tableNumber);
 unsigned short SDBIsNonUniqueIndex(unsigned short dbId, unsigned int indexId);
-unsigned short SDBStreamingDelete(unsigned short userId, unsigned short dbId, unsigned short tableNumber, unsigned short partitionId,unsigned long long key, unsigned short column, bool delete_all, unsigned long long queryId);
+unsigned short SDBStreamingDelete(unsigned short userId, unsigned short dbId, unsigned short tableNumber, unsigned short partitionId, long long key, unsigned short column, bool delete_all, unsigned long long queryId);
 unsigned short SDBSetErrorMessage(unsigned short userId,  unsigned short sdb_error_code, char *buff);
 unsigned short SDBGetSystemLevelIndexType();
+unsigned long  SDBGetStreamingKeyFieldID(unsigned short dbId, unsigned short tableId);
 unsigned long  SDBGetRangeKeyFieldID(unsigned short dbId, unsigned short tableId);
 unsigned long  SDBGetRangeKey(unsigned short dbId, unsigned short tableId);
+unsigned long  SDBGetUserTimeKeyFieldID(unsigned short dbId, unsigned short tableId);
+bool           SDBIsUserTimeKey(unsigned short dbId, unsigned short tableId, unsigned short fieldId);
+long long SDBTruncateUserTimeValue(unsigned short dbId, unsigned short tableId, long long timestamp);
+unsigned long  SDBGetDateKey(unsigned short dbId, unsigned short tableId);
+bool           SDBIsStreamingHashKey( unsigned short dbId, unsigned short designator );
 
 /*
 //////////////////////////////////////////////////////////////////////////////
@@ -401,8 +422,8 @@ unsigned long  SDBGetRangeKey(unsigned short dbId, unsigned short tableId);
 unsigned short SDBCreateField(unsigned int userId, unsigned short dbId, unsigned short tableId, 
 							  char *fieldName, unsigned char fieldType, unsigned short fieldSize, 
 							  unsigned int maxDataLength, char *defaultValue, bool autoIncr, 
-							  unsigned short ddlFlag, unsigned short fieldFlag, bool isRangeKey, 
-							  bool isMapped, bool isInsertCascade, bool isStreamingKey, bool isAttributeValue);
+							  unsigned short ddlFlag, unsigned short fieldFlag, bool isRangeKey,
+							  bool isMapped, bool isInsertCascade, bool isStreamingKey,  bool isStreamTime, int streamStart, unsigned short streamInterval);
 
 bool SDBIsFieldAutoIncrement(unsigned short dbId, unsigned short tableId, unsigned short fieldId);
 char* SDBGetFileDataField(unsigned short userId, unsigned short tableId, unsigned short fieldId);
@@ -435,7 +456,7 @@ unsigned long long  SDBGetStmtId(unsigned int userId);
 
 void SDBSetIsolationLevel(unsigned int userId, unsigned short isolationLevel);
 
-
+unsigned short releaseAllUsersSessionLocks(unsigned short userId, unsigned short dbmsId, unsigned short tableId);
 
 /*
 //////////////////////////////////////////////////////////////////////////////
@@ -444,7 +465,7 @@ void SDBSetIsolationLevel(unsigned int userId, unsigned short isolationLevel);
 //
 //////////////////////////////////////////////////////////////////////////////
 */
-unsigned int SDBInsertRow(unsigned short userId, unsigned short dbId, unsigned short tableId, 
+unsigned int SDBInsertRow(unsigned short userId, bool isdelayed, unsigned short dbId, unsigned short tableId, 
 						  unsigned char* rowData, unsigned short partitionId, unsigned short source, 
 						  unsigned long long queryId=0);
 
@@ -456,7 +477,7 @@ unsigned int SDBUpdateRow(unsigned short userId, unsigned short dbId, unsigned s
 						  unsigned char* oldRowData, unsigned char* newRowData, unsigned short partitionId, 
 						  unsigned long long queryId=0);
 
-unsigned int SDBInsertRowAPI(unsigned short userId, unsigned short dbmsId, unsigned short tableId, unsigned short partitionId , unsigned long long numOfBulkInsertRows, unsigned long long numOfInsertedRows,
+unsigned int SDBInsertRowAPI(unsigned short userId, bool isdelayed, unsigned short dbmsId, unsigned short tableId, unsigned short partitionId , unsigned long long numOfBulkInsertRows, unsigned long long numOfInsertedRows,
 							 unsigned long long queryId=0, unsigned short sdbCommandType=0);
 
 unsigned int SDBUpdateRowAPI(unsigned short userId, unsigned short dbmsId, unsigned short tableId, unsigned short partitionId, unsigned long long rowId ,
@@ -501,8 +522,8 @@ typedef struct SDBFieldTemplate{
 	unsigned char * nullByte_;					// 2a. mark as null in bitmap   
 	unsigned char   nullBit_;					// 2b. offset to mark in bitmap 
 	unsigned short  offset_;					// 3.  offset in output row 
-	unsigned char * varLength_;					// 4a. where to copy real SDB  data size - NULL if no copy is needed 
-	unsigned short  varLengthBytes_;			// 4b. how many bytes the SDB data size is composed of  
+	unsigned short  varLengthOffset_;			// 4a. offset to where to copy real SDB data size - varLengthBytes_ is 0 if no copy is needed
+	unsigned short  varLengthBytes_;			// 4b. how many bytes the SDB data size is composed of
 	SDBCopyDataType  copyDataMethod_;			// 5. weather to copy ptr only or whole data 
 	unsigned int  length_; // for debug only 
 	SDBFieldType  type_;  // for debug only 
@@ -562,7 +583,7 @@ bool SDBIsValidQueryManagerId(unsigned int queryManagerId, unsigned int userId);
 void SDBFreeQueryManager(unsigned int userId,unsigned int queryManagerId);
 
 void SDBCheckAllQueryManagersAreFree(unsigned int userId);
-
+unsigned int  SDBgetNumberOfActiveQMIds(unsigned int userId);
 void SDBFreeQueryManagerBuffers(unsigned int queryManagerId);
 
 unsigned short SDBPrepareRowByTemplate(unsigned short userId, unsigned char * rowBuf, SDBRowTemplate &rowTemplate,unsigned short dbmsId,unsigned short groupType);
@@ -659,6 +680,7 @@ void SDBDebugPrintHexByteArray(char data[], int position, int size);
 void SDBDebugPrintPointer(void *ptr);
 void SDBDebugFlush();
 void SDBLogSqlStmt(unsigned int userId, char* pStatement, unsigned long long stmtId);
+void SDBLogAnalyticsSqlStmt(unsigned int userId, char* pStatement, unsigned long long stmtId);
 void SDBSetSqlCommand(unsigned int userId,unsigned short sdbCommandType) ;
 
 /*
@@ -697,6 +719,7 @@ char *SDBUtilDecodeCharsInStrings(char *before);
 char* SDBUtilFindDesignatorName(char* pTblFsName, char* pKeyName, int externalKeyNum, bool useExternalKeyNum, char *nameBuff, int nameBuffLength);
 void SDBUtilIntToMemoryLocation(unsigned long long number, unsigned char* destination, unsigned short bytesToCopy);
 unsigned long long SDBGetNumberFromField(char *fieldValue, unsigned short offset, unsigned short bytes);
+unsigned short SDBFetchTableIdByTableFsName(unsigned int userId, unsigned short dbId, char* pTableFsName);
 bool SDBUtilAreAllBytesZero(unsigned char*ptr, unsigned int length);
 void SDBUtilGetIpFromInet(unsigned int *inet, char *dest, unsigned int sizeOfBuffer);
 void SDBUtilReverseString(char *str);
@@ -864,7 +887,28 @@ void dummyEnterMethod(unsigned short uId);
 #define API_GET_TABLE_STATS_2				72
 #define API_END_SEQUENTIAL_SCAN				73
 #define API_END_INDEXED_QUERY				74
-
+#define API_KILL_QUERY						75
+#define API_CAN_TABLE_BE_TRUNCATED			76
+#define API_START_DDL						77
+#define API_CHECK_END_DDL					78
+#define API_CLOSE_TABLE_AND_CHILDREN		79
+#define API_CLOSE_TABLE_CASCADE				80
+#define API_CLOSE_TABLE						81
+#define API_CLOSE_PARENT_TABLES				82
+#define API_SESSION_LOCK					83
+#define API_GET_TABLE_NAME_ARRAY			84
+#define API_FREE_TABLE_NAME_ARRAY			85
+#define API_GET_TABLE_NAME					86
+#define API_GET_NEXT_TABLE					87
+#define API_RELEASE_SESSION_LOCKS			88
+#define API_RESET_ROW						89
+#define API_PREPARE_ROW_BY_TEMPLATE			90
+#define API_STREAMING_DELETE				91
+#define API_ROWS_IN_RANGE					92
+#define BUFFER_THREAD						93
+#define STREAMING_THREAD					94
+#define INDEXER_THREAD						95
+#define API_FLUSH_STREAM					96
 
 #endif //_SDB_STORAGE_API_H
 
